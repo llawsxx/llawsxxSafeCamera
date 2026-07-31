@@ -600,13 +600,27 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     }
                 }
                 if (config.hasVideo) {
+                    val exactEngineForced = config.dynamicRange != VideoDynamicRange.SDR ||
+                        config.fpsDenominator != 1 || config.customColorMetadata ||
+                        config.container == ContainerFormat.MPEG_TS
                     ToggleLine(
                         "MediaCodec 直录引擎",
-                        config.exactFrameRateMode,
-                        !recording && !config.highSpeedMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O,
+                        config.exactEngineRequested,
+                        !recording && !config.highSpeedMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                            !exactEngineForced,
                     ) { enabled -> config = config.copy(exactFrameRateMode = enabled) }
-                    Text(
-                        "Camera2 直接连接 MediaCodec，收到的每帧都按原始时间戳输出，不主动丢帧或补帧；帧率可动态变化。MP4 仅支持单段，MPEG-TS 由内置 native muxer 封装。",
+                    if (exactEngineForced && config.container == ContainerFormat.MPEG_TS) {
+                        Text(
+                            "MPEG-TS 封装由内置 muxer 处理，必须使用 MediaCodec 直录引擎；开关保持开启。",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    if (!(exactEngineForced && config.container == ContainerFormat.MPEG_TS)) Text(
+                        if (exactEngineForced) {
+                            "当前 HDR、非整数帧率或自定义颜色元数据要求使用 MediaCodec 直录引擎，开关保持开启。"
+                        } else {
+                            "Camera2 直接连接 MediaCodec，收到的每帧都按原始时间戳输出，不主动丢帧或补帧；帧率可动态变化。MP4 仅支持单段，MPEG-TS 由内置 native muxer 封装。"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                     )
                     selectedCamera?.let { camera ->
