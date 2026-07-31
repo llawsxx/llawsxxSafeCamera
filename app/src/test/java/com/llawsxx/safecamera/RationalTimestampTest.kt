@@ -9,6 +9,21 @@ import org.junit.Test
 
 class RationalTimestampTest {
     @Test
+    fun exactEngineCanBeRequestedForIntegerFrameRate() {
+        assertTrue(RecordingConfig(fpsNumerator = 30, exactFrameRateMode = true).exactEngineRequested)
+    }
+
+    @Test
+    fun rationalFrameRateAndColorMetadataStillRequestExactEngineAutomatically() {
+        assertTrue(RecordingConfig(fpsNumerator = 30_000, fpsDenominator = 1_001).exactEngineRequested)
+        assertTrue(
+            RecordingConfig(
+                colorStandard = com.llawsxx.safecamera.recording.VideoColorStandard.BT709,
+            ).exactEngineRequested,
+        )
+    }
+
+    @Test
     fun exposureCannotExceedTwoFrameIntervals() {
         assertEquals(66_666_666L, RecordingConfig(fpsNumerator = 30).maximumExposureNs)
         assertEquals(

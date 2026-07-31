@@ -17,11 +17,13 @@ import android.util.Log
 import android.view.Surface
 import android.view.SurfaceView
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.aspectRatio
@@ -74,6 +76,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
@@ -158,12 +161,19 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
     var previewResumeEpoch by remember { mutableStateOf(0) }
     var previewReadyEpoch by remember { mutableStateOf(-1) }
     var settingsOpen by remember { mutableStateOf(false) }
+    BackHandler(enabled = settingsOpen) { settingsOpen = false }
     var currentDisplayRotation by remember {
         mutableStateOf(displayRotationDegrees(view.display?.rotation ?: Surface.ROTATION_0))
     }
     val idlePreview = remember { IdlePreviewCamera(context.applicationContext) }
     val recording = state is RecorderState.Recording || state is RecorderState.Starting || state is RecorderState.Stopping
     val selectedCamera = cameras.firstOrNull { it.id == config.cameraId }
+
+    DisposableEffect(view, recording) {
+        view.keepScreenOn = recording
+        onDispose { view.keepScreenOn = false }
+    }
+
     // CameraPreviewView receives the camera stream with sensor orientation already represented
     // by its buffer geometry. Display rotation must use the same inverse correction for both
     // lens facings; mirroring is applied separately and must not reverse the rotation direction.
@@ -176,6 +186,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             config.previewRotationDegrees,
     )
     val onPreviewSurface: (Surface?) -> Unit = { surface ->
+        Log.d("PreviewDebug","surface is null = ${if (surface == null) "true" else "false"}")
         if (surface != null) {
             previewSurface = surface
         } else if (previewSurface?.isValid != true) {
@@ -273,18 +284,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
     }
     LaunchedEffect(config.orientation) { onOrientation(config.orientation) }
     LaunchedEffect(config) { ConfigPreferences.save(context, config) }
-    LaunchedEffect(config.fpsDenominator) {
-        if (config.fpsDenominator != 1) {
-            config = config.copy(
-                container = ContainerFormat.MP4,
-                segmentMinutes = 0,
-                streamEnabled = false,
-                highSpeedMode = false,
-            )
-        }
-    }
-    LaunchedEffect(config.customColorMetadata) {
-        if (config.customColorMetadata) {
+    LaunchedEffect(config.exactEngineRequested) {
+        if (config.exactEngineRequested && config.hasVideo) {
             config = config.copy(
                 container = ContainerFormat.MP4,
                 segmentMinutes = 0,
@@ -297,6 +298,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         if (config.highSpeedMode) {
             config = config.copy(
                 fpsDenominator = 1,
+                exactFrameRateMode = false,
                 container = ContainerFormat.MP4,
                 segmentMinutes = 0,
                 streamEnabled = false,
@@ -555,19 +557,28 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             selectedInput,
                             { it.label },
                             !recording && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ||
-                                (config.hasVideo && config.fpsDenominator != 1)),
+                                (config.hasVideo && config.exactEngineRequested)),
                         ) { config = config.copy(audioInputDeviceId = it.id) }
                     }
                     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P &&
-                        (!config.hasVideo || config.fpsDenominator == 1)
+                        (!config.hasVideo || !config.exactEngineRequested)
                     ) {
                         Text(
-                            "Android 9 以下的系统 MediaRecorder 不能指定物理麦克风；严格分数帧率模式仍可选择。",
+                            "Android 9 以下的系统 MediaRecorder 不能指定物理麦克风；精确帧率引擎仍可选择。",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
                 }
                 if (config.hasVideo) {
+                    ToggleLine(
+                        "精确帧率引擎",
+                        config.exactFrameRateMode,
+                        !recording && !config.highSpeedMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O,
+                    ) { enabled -> config = config.copy(exactFrameRateMode = enabled) }
+                    Text(
+                        "使用 Camera2、OpenGL 和 MediaCodec 生成严格时间轴；支持整数和分数帧率，仅支持 Android 8+、MP4、单段录制。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                     selectedCamera?.let { camera ->
                         ToggleLine(
                             "高速录像模式",
@@ -663,9 +674,9 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             },
                             style = MaterialTheme.typography.bodySmall,
                         )
-                        if (config.fpsDenominator != 1) {
+                        if (config.exactEngineRequested) {
                             Text(
-                                "精确 MediaCodec 模式：按真实传感器时间均匀丢帧/补帧，音频保持实时速度；仅支持 Android 8+、MP4、单段录制。",
+                                "精确 MediaCodec 模式：按真实传感器时间均匀丢帧/补帧，音频保持实时速度。",
                                 color = MaterialTheme.colorScheme.secondary,
                                 style = MaterialTheme.typography.bodySmall,
                             )
@@ -692,7 +703,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             it.lower <= config.encoderFps && it.upper >= config.encoderFps
                         }
                         Text(
-                            (if (config.fpsDenominator != 1) {
+                            (if (config.exactEngineRequested) {
                                 "Camera2 采集 ${config.encoderFps} fps；OpenGL 实时转换为严格 ${config.fpsNumerator}/${config.fpsDenominator}（${config.requestedFps.format3()} fps）"
                             } else {
                                 "Camera2 / MediaRecorder 提交 ${config.encoderFps} fps"
@@ -737,7 +748,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     val containers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         ContainerFormat.entries
                     } else listOf(ContainerFormat.MP4)
-                    ChoiceRow(containers, config.container, { it.label }, !recording && config.fpsDenominator == 1) {
+                    ChoiceRow(containers, config.container, { it.label }, !recording && !config.exactEngineRequested) {
                         config = config.copy(
                             container = it,
                             streamEnabled = config.streamEnabled && it == ContainerFormat.MPEG_TS,
@@ -749,7 +760,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                         config = config.copy(videoCodec = it)
                     }
                 }
-                NumberField("分段时长（分钟，0 为不分段）", config.segmentMinutes.toString(), !recording && config.fpsDenominator == 1) {
+                NumberField("分段时长（分钟，0 为不分段）", config.segmentMinutes.toString(), !recording && !config.exactEngineRequested) {
                     config = config.copy(segmentMinutes = it.toIntOrNull()?.coerceIn(0, 720) ?: 0)
                 }
                 if (config.container == ContainerFormat.MPEG_TS) {
@@ -807,7 +818,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 ToggleLine(
                     "录制同时 UDP 推流",
                     config.streamEnabled,
-                    !recording && config.container == ContainerFormat.MPEG_TS,
+                    !recording && !config.exactEngineRequested && config.container == ContainerFormat.MPEG_TS,
                 ) { config = config.copy(streamEnabled = it) }
                 if (config.streamEnabled) {
                     OutlinedTextField(
@@ -855,7 +866,7 @@ private fun MainRecorderScreen(
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .padding(vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Row(
@@ -1068,6 +1079,7 @@ private fun FullscreenRecorder(
     onBufferReady: (Int) -> Unit,
 ) {
     val previewBuffer = previewBufferSize(camera, config)
+    var controlsVisible by remember { mutableStateOf(true) }
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
         val selectedAspect = previewAspect(config, previewSourceRotation)
         val availableAspect = maxWidth.value / maxHeight.value.coerceAtLeast(0.001f)
@@ -1090,17 +1102,24 @@ private fun FullscreenRecorder(
             onBufferReady = onBufferReady,
             fillBounds = true,
         )
+        // Keep the TextureView responsible for rendering, but handle taps in a Compose
+        // overlay so the embedded Android view cannot consume the toggle gesture.
+        Box(
+            modifier = fullscreenPreviewModifier.clickable {
+                controlsVisible = !controlsVisible
+            },
+        )
         Row(
-            Modifier.fillMaxWidth().align(Alignment.TopCenter).background(Color(0x99000000)).padding(horizontal = 8.dp, vertical = 4.dp),
+            Modifier.fillMaxWidth().align(Alignment.TopCenter).background(Color(0x22000000)).padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             OutlinedButton(onClick = onExit, modifier = Modifier.height(36.dp)) { Text("返回") }
             CompactRecordingDashboard(state, lightText = true, modifier = Modifier.weight(1f))
         }
-        camera?.let {
+        if (controlsVisible) camera?.let {
             Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xB3000000)),
+                colors = CardDefaults.cardColors(containerColor = Color(0x22000000)),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .padding(top = 48.dp)
@@ -1116,8 +1135,10 @@ private fun FullscreenRecorder(
                 )
             }
         }
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color(0xB3000000)),
+        if (controlsVisible) Card(
+            colors = CardDefaults.cardColors(
+                containerColor = Color.Transparent  // 设置为透明
+            ),
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
         ) {
             RecordButton(
@@ -1145,10 +1166,17 @@ private fun PreviewPanel(
     modifier: Modifier,
     onSurface: (Surface?) -> Unit,
     onBufferReady: (Int) -> Unit,
+    onTap: (() -> Unit)? = null,
     fillBounds: Boolean = false,
 ) {
-    val panelModifier = if (fillBounds) modifier else modifier.aspectRatio(aspect)
-    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF111416)), modifier = panelModifier) {
+    val panelModifier = (if (fillBounds) modifier else modifier.aspectRatio(aspect)).let {
+        if (onTap != null) it.clickable(onClick = onTap) else it
+    }
+    Card(
+        modifier = panelModifier,
+        shape = RectangleShape,
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF111416)),
+    ) {
         Box(
             Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center,
@@ -1200,13 +1228,13 @@ private fun RecordButton(
         onClick = if (active) onStop else onStart,
         enabled = state !is RecorderState.Starting && state !is RecorderState.Stopping &&
             (!config.hasVideo || config.cameraId.isNotBlank()),
-        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-        modifier = modifier.height(44.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+        modifier = modifier
     ) {
         Text(
             when {
                 state is RecorderState.Stopping -> "正在保存"
-                active -> "停止并安全保存"
+                active -> "停止"
                 else -> "开始录制"
             }
         )

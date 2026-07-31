@@ -72,10 +72,8 @@ class RecordingService : Service() {
         val onStats: (RecordingStats) -> Unit = { stats -> RecorderController.update(RecorderState.Recording(stats)) }
         val onNotice: (String) -> Unit = { message -> updateNotification("录制继续 · $message") }
         val onError: (String) -> Unit = { message -> finishWithError(message) }
-        val newEngine: RecorderEngine = if (
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-            (config.fpsDenominator != 1 || config.customColorMetadata) && config.hasVideo && !config.highSpeedMode
-        ) {
+        val useExactEngine = config.exactEngineRequested && config.hasVideo && !config.highSpeedMode
+        val newEngine: RecorderEngine = if (useExactEngine && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             ExactFrameRateRecorderEngine(
                 context = this,
                 initialConfig = config,
@@ -85,7 +83,7 @@ class RecordingService : Service() {
                 onNotice = onNotice,
                 onError = onError,
             )
-        } else if ((config.fpsDenominator == 1 && !config.customColorMetadata) || !config.hasVideo || config.highSpeedMode) {
+        } else if (!useExactEngine) {
             CameraRecorderEngine(
                 context = this,
                 initialConfig = config,
@@ -96,7 +94,7 @@ class RecordingService : Service() {
                 onError = onError,
             )
         } else {
-            finishWithError("精确有理数帧率需要 Android 8.0 或更高版本")
+            finishWithError("精确帧率引擎需要 Android 8.0 或更高版本")
             return
         }
         engine = newEngine

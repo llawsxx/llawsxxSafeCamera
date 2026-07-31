@@ -83,7 +83,7 @@ class ExactFrameRateRecorderEngine(
         validateCameraMode(config.cameraId)
 
         val handle = outputStore.create(
-            "SAFE_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())}_001.mp4",
+            "REC_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())}_001.mp4",
             "video/mp4",
         )
         output = handle

@@ -75,6 +75,7 @@ data class RecordingConfig(
     val height: Int = 1080,
     val fpsNumerator: Int = 30,
     val fpsDenominator: Int = 1,
+    val exactFrameRateMode: Boolean = false,
     val videoBitrate: Int = 12_000_000,
     val audioBitrate: Int = 192_000,
     val audioInputDeviceId: Int? = null,
@@ -111,6 +112,7 @@ data class RecordingConfig(
     val requestedFps: Double get() = fpsNumerator.toDouble() / fpsDenominator.coerceAtLeast(1)
     val customColorMetadata: Boolean get() = colorRange != VideoColorRange.DEFAULT ||
         colorStandard != VideoColorStandard.DEFAULT || colorTransfer != VideoColorTransfer.DEFAULT
+    val exactEngineRequested: Boolean get() = exactFrameRateMode || fpsDenominator != 1 || customColorMetadata
     val encoderFps: Int get() = requestedFps.toInt().let { base ->
         if (requestedFps - base >= 0.5) base + 1 else base
     }.coerceAtLeast(1)

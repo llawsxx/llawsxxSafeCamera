@@ -117,6 +117,7 @@ internal class GlFrameRateConverter(
             onFirstFrame()
         }
         surfaceTexture.getTransformMatrix(textureMatrix)
+        removeTextureRotation(textureMatrix)
 
         GLES20.glViewport(0, 0, surfaceTexture.defaultWidthCompat(), surfaceTexture.defaultHeightCompat())
         GLES20.glUseProgram(program)
@@ -221,4 +222,36 @@ internal class GlFrameRateConverter(
                 put(values); position(0)
             }
     }
+}
+
+/**
+ * Camera producers may put a 90/270-degree transform in the SurfaceTexture matrix. Direct
+ * MediaCodec/MediaRecorder surfaces do not bake that transform into the encoded pixels; their
+ * orientation is supplied by the MP4 orientation hint. Preserve the producer crop and the GL
+ * vertical flip, but remove rotation so the exact-frame path has the same pixel orientation.
+ */
+internal fun removeTextureRotation(matrix: FloatArray) {
+    require(matrix.size >= 16)
+    var minX = Float.POSITIVE_INFINITY
+    var maxX = Float.NEGATIVE_INFINITY
+    var minY = Float.POSITIVE_INFINITY
+    var maxY = Float.NEGATIVE_INFINITY
+    for (u in 0..1) {
+        for (v in 0..1) {
+            val x = matrix[0] * u + matrix[4] * v + matrix[12]
+            val y = matrix[1] * u + matrix[5] * v + matrix[13]
+            minX = minOf(minX, x)
+            maxX = maxOf(maxX, x)
+            minY = minOf(minY, y)
+            maxY = maxOf(maxY, y)
+        }
+    }
+
+    java.util.Arrays.fill(matrix, 0f)
+    matrix[0] = maxX - minX
+    matrix[5] = -(maxY - minY)
+    matrix[10] = 1f
+    matrix[12] = minX
+    matrix[13] = maxY
+    matrix[15] = 1f
 }
