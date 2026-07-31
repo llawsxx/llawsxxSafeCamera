@@ -22,7 +22,9 @@ object ConfigPreferences {
             highSpeedMode = p.getBoolean("highSpeedMode", false),
             colorRange = enumValue(p.getString("colorRange", null), VideoColorRange.DEFAULT),
             colorStandard = enumValue(p.getString("colorStandard", null), VideoColorStandard.DEFAULT),
-            colorTransfer = enumValue(p.getString("colorTransfer", null), VideoColorTransfer.DEFAULT),
+            colorMatrix = enumValue(p.getString("colorMatrix", null), VideoColorMatrix.DEFAULT),
+            colorTransfer = videoColorTransfer(p.getString("colorTransfer", null)),
+            forceSpsVui = p.getBoolean("forceSpsVui", false),
             container = enumValue(p.getString("container", null), ContainerFormat.MP4),
             segmentMinutes = p.getInt("segmentMinutes", 10),
             orientation = enumValue(p.getString("orientation", null), OrientationMode.FOLLOW_SENSOR),
@@ -65,7 +67,9 @@ object ConfigPreferences {
             .putBoolean("highSpeedMode", c.highSpeedMode)
             .putString("colorRange", c.colorRange.name)
             .putString("colorStandard", c.colorStandard.name)
+            .putString("colorMatrix", c.colorMatrix.name)
             .putString("colorTransfer", c.colorTransfer.name)
+            .putBoolean("forceSpsVui", c.forceSpsVui)
             .putString("container", c.container.name)
             .putInt("segmentMinutes", c.segmentMinutes)
             .putString("orientation", c.orientation.name)
@@ -94,4 +98,9 @@ object ConfigPreferences {
 
     private inline fun <reified T : Enum<T>> enumValue(value: String?, fallback: T): T =
         value?.let { runCatching { enumValueOf<T>(it) }.getOrNull() } ?: fallback
+
+    private fun videoColorTransfer(value: String?): VideoColorTransfer = when (value) {
+        "SDR" -> VideoColorTransfer.BT601
+        else -> enumValue(value, VideoColorTransfer.DEFAULT)
+    }
 }

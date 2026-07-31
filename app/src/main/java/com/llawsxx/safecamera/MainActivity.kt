@@ -109,6 +109,7 @@ import com.llawsxx.safecamera.recording.RecorderState
 import com.llawsxx.safecamera.recording.RecordingConfig
 import com.llawsxx.safecamera.recording.RecordingMode
 import com.llawsxx.safecamera.recording.VideoCodec
+import com.llawsxx.safecamera.recording.VideoColorMatrix
 import com.llawsxx.safecamera.recording.VideoColorRange
 import com.llawsxx.safecamera.recording.VideoColorStandard
 import com.llawsxx.safecamera.recording.VideoColorTransfer
@@ -742,12 +743,35 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                     config = config.copy(colorStandard = it)
                                 }
                             }
-                            Labeled("Transfer") {
-                                ChoiceRow(VideoColorTransfer.entries, config.colorTransfer, { it.label }, !recording && !config.highSpeedMode) {
-                                    config = config.copy(colorTransfer = it)
+                            Labeled("Matrix coefficients") {
+                                ChoiceRow(VideoColorMatrix.entries, config.colorMatrix, { it.label }, !recording && !config.highSpeedMode) {
+                                    config = config.copy(
+                                        colorMatrix = it,
+                                        forceSpsVui = config.forceSpsVui || it != VideoColorMatrix.DEFAULT,
+                                    )
                                 }
                             }
-                            Text("选择非默认值时使用 MediaCodec 写入颜色元数据。编码器或播放器仍可能忽略不支持的组合；这不会改变相机传感器实际色彩处理。", style = MaterialTheme.typography.bodySmall)
+                            Labeled("Transfer") {
+                                ChoiceRow(VideoColorTransfer.entries, config.colorTransfer, { it.label }, !recording && !config.highSpeedMode) {
+                                    config = config.copy(
+                                        colorTransfer = it,
+                                        forceSpsVui = config.forceSpsVui || it != VideoColorTransfer.DEFAULT,
+                                    )
+                                }
+                            }
+                            ToggleLine(
+                                "强制写入 SPS/VUI",
+                                config.forceSpsVui,
+                                !recording && !config.highSpeedMode && config.customColorMetadata,
+                            ) { enabled -> config = config.copy(forceSpsVui = enabled) }
+                            Text(
+                                if (config.forceSpsVui) {
+                                    "除配置 MediaCodec 外，还会直接修改 H.264/H.265 SPS 中的 VUI 颜色字段；这不会改变实际像素。"
+                                } else {
+                                    "选择非默认值时使用 MediaCodec 写入颜色元数据。编码器或播放器仍可能忽略不支持的组合；这不会改变相机传感器实际色彩处理。"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
                         }
                     }
                 }

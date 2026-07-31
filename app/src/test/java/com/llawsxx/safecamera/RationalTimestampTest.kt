@@ -21,6 +21,11 @@ class RationalTimestampTest {
                 colorStandard = com.llawsxx.safecamera.recording.VideoColorStandard.BT709,
             ).exactEngineRequested,
         )
+        assertTrue(
+            RecordingConfig(
+                colorMatrix = com.llawsxx.safecamera.recording.VideoColorMatrix.BT2020,
+            ).exactEngineRequested,
+        )
     }
 
     @Test

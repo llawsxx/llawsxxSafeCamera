@@ -5,6 +5,8 @@ project(safecamera_mpegts C)
 add_library(
     safecamera_mpegts
     SHARED
+    h26x_vui_rewriter.c
+    h26x_vui_jni.c
     mpegts_muxer.c
     mpegts_jni.c
 )

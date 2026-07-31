@@ -20,26 +20,54 @@ enum class VideoCodec(val label: String, val mediaRecorderValue: Int) : Serializ
     H265("H.265 / HEVC", MediaRecorder.VideoEncoder.HEVC)
 }
 
-enum class VideoColorRange(val label: String, val mediaFormatValue: Int?) : Serializable {
-    DEFAULT("编码器默认", null),
-    LIMITED("Limited range", MediaFormat.COLOR_RANGE_LIMITED),
-    FULL("Full range", MediaFormat.COLOR_RANGE_FULL),
+enum class VideoColorRange(
+    val label: String,
+    val mediaFormatValue: Int?,
+    val vuiFullRange: Int,
+) : Serializable {
+    DEFAULT("编码器默认", null, -1),
+    LIMITED("Limited range", MediaFormat.COLOR_RANGE_LIMITED, 0),
+    FULL("Full range", MediaFormat.COLOR_RANGE_FULL, 1),
 }
 
-enum class VideoColorStandard(val label: String, val mediaFormatValue: Int?) : Serializable {
-    DEFAULT("编码器默认", null),
-    BT709("BT.709", MediaFormat.COLOR_STANDARD_BT709),
-    BT601_NTSC("BT.601 NTSC", MediaFormat.COLOR_STANDARD_BT601_NTSC),
-    BT601_PAL("BT.601 PAL", MediaFormat.COLOR_STANDARD_BT601_PAL),
-    BT2020("BT.2020", MediaFormat.COLOR_STANDARD_BT2020),
+enum class VideoColorStandard(
+    val label: String,
+    val mediaFormatValue: Int?,
+    val vuiPrimaries: Int,
+) : Serializable {
+    DEFAULT("编码器默认", null, -1),
+    BT709("BT.709", MediaFormat.COLOR_STANDARD_BT709, 1),
+    BT601_NTSC("BT.601 NTSC", MediaFormat.COLOR_STANDARD_BT601_NTSC, 6),
+    BT601_PAL("BT.601 PAL", MediaFormat.COLOR_STANDARD_BT601_PAL, 5),
+    BT2020("BT.2020", MediaFormat.COLOR_STANDARD_BT2020, 9),
 }
 
-enum class VideoColorTransfer(val label: String, val mediaFormatValue: Int?) : Serializable {
-    DEFAULT("编码器默认", null),
-    SDR("SDR video", MediaFormat.COLOR_TRANSFER_SDR_VIDEO),
-    LINEAR("Linear", MediaFormat.COLOR_TRANSFER_LINEAR),
-    HLG("HLG", MediaFormat.COLOR_TRANSFER_HLG),
-    ST2084("ST 2084 / PQ", MediaFormat.COLOR_TRANSFER_ST2084),
+enum class VideoColorMatrix(val label: String, val vuiValue: Int) : Serializable {
+    DEFAULT("编码器默认", -1),
+    BT709("BT.709", 1),
+    BT601("BT.601 / SMPTE 170M", 6),
+    SMPTE240M("SMPTE 240M", 7),
+    BT2020("BT.2020 non-constant", 9),
+    BT2020_CL("BT.2020 constant luminance", 10),
+}
+
+enum class VideoColorTransfer(
+    val label: String,
+    val mediaFormatValue: Int?,
+    val vuiValue: Int,
+) : Serializable {
+    DEFAULT("编码器默认", null, -1),
+    BT601("BT.601 / SMPTE 170M", MediaFormat.COLOR_TRANSFER_SDR_VIDEO, 6),
+    BT709("BT.709", MediaFormat.COLOR_TRANSFER_SDR_VIDEO, 1),
+    BT470M("BT.470 M / Gamma 2.2", MediaFormat.COLOR_TRANSFER_SDR_VIDEO, 4),
+    BT470BG("BT.470 B/G / Gamma 2.8", MediaFormat.COLOR_TRANSFER_SDR_VIDEO, 5),
+    SMPTE240M("SMPTE 240M", MediaFormat.COLOR_TRANSFER_SDR_VIDEO, 7),
+    SRGB("sRGB", MediaFormat.COLOR_TRANSFER_SDR_VIDEO, 13),
+    BT2020("BT.2020 10-bit", MediaFormat.COLOR_TRANSFER_SDR_VIDEO, 14),
+    BT2020_12("BT.2020 12-bit", MediaFormat.COLOR_TRANSFER_SDR_VIDEO, 15),
+    LINEAR("Linear", MediaFormat.COLOR_TRANSFER_LINEAR, 8),
+    HLG("HLG", MediaFormat.COLOR_TRANSFER_HLG, 18),
+    ST2084("ST 2084 / PQ", MediaFormat.COLOR_TRANSFER_ST2084, 16),
 }
 
 enum class OrientationMode(val label: String) : Serializable {
@@ -83,7 +111,9 @@ data class RecordingConfig(
     val highSpeedMode: Boolean = false,
     val colorRange: VideoColorRange = VideoColorRange.DEFAULT,
     val colorStandard: VideoColorStandard = VideoColorStandard.DEFAULT,
+    val colorMatrix: VideoColorMatrix = VideoColorMatrix.DEFAULT,
     val colorTransfer: VideoColorTransfer = VideoColorTransfer.DEFAULT,
+    val forceSpsVui: Boolean = false,
     val container: ContainerFormat = ContainerFormat.MP4,
     val segmentMinutes: Int = 10,
     val orientation: OrientationMode = OrientationMode.FOLLOW_SENSOR,
@@ -112,7 +142,8 @@ data class RecordingConfig(
     val hasAudio: Boolean get() = mode != RecordingMode.VIDEO
     val requestedFps: Double get() = fpsNumerator.toDouble() / fpsDenominator.coerceAtLeast(1)
     val customColorMetadata: Boolean get() = colorRange != VideoColorRange.DEFAULT ||
-        colorStandard != VideoColorStandard.DEFAULT || colorTransfer != VideoColorTransfer.DEFAULT
+        colorStandard != VideoColorStandard.DEFAULT || colorMatrix != VideoColorMatrix.DEFAULT ||
+        colorTransfer != VideoColorTransfer.DEFAULT
     val exactEngineRequested: Boolean get() = exactFrameRateMode || fpsDenominator != 1 || customColorMetadata
     val encoderFps: Int get() = requestedFps.toInt().let { base ->
         if (requestedFps - base >= 0.5) base + 1 else base

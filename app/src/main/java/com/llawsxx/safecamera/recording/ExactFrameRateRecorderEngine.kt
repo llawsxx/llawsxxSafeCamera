@@ -117,7 +117,20 @@ class ExactFrameRateRecorderEngine(
             mediaMuxer.setOrientationHint(recordingOrientationHint(context, config.cameraId, config.orientation))
             coordinator = MediaMuxCoordinator(mediaMuxer, config.hasAudio) { markMuxStarted() }
         }
-        mux = coordinator
+        mux = if (config.forceSpsVui && config.customColorMetadata) {
+            VuiRewritingMuxCoordinator(
+                coordinator,
+                H26xVuiRewriter(
+                    config.videoCodec,
+                    config.colorRange,
+                    config.colorStandard,
+                    config.colorMatrix,
+                    config.colorTransfer,
+                ),
+            )
+        } else {
+            coordinator
+        }
 
         val videoMime = if (config.videoCodec == VideoCodec.H265) MediaFormat.MIMETYPE_VIDEO_HEVC else MediaFormat.MIMETYPE_VIDEO_AVC
         val videoFormat = MediaFormat.createVideoFormat(videoMime, config.width, config.height).apply {
@@ -139,8 +152,8 @@ class ExactFrameRateRecorderEngine(
         running.set(true)
         video.start()
         audioCodec?.start()
-        startVideoDrain(video, coordinator)
-        if (config.hasAudio) startAudioLoop(coordinator)
+        startVideoDrain(video, checkNotNull(mux))
+        if (config.hasAudio) startAudioLoop(checkNotNull(mux))
         openCamera()
     }
 
