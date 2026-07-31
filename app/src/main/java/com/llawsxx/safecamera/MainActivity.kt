@@ -41,6 +41,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -1581,30 +1582,32 @@ private fun QuickCameraControls(
         Box(Modifier.fillMaxWidth().height(24.dp)) {
             when (selected) {
                 FullscreenControl.ISO -> camera.isoRange?.let { range ->
-                    Slider(
+                    CompactValueSlider(
                         value = displayedIso.coerceIn(range.lower, range.upper).toFloat(),
                         onValueChange = { onChange(config.copy(manualExposure = true, iso = it.toInt())) },
-                        valueRange = range.lower.toFloat()..range.upper.toFloat(), enabled = enabled && config.manualExposure,
-                        modifier = Modifier.fillMaxWidth().height(22.dp),
+                        valueRange = range.lower.toFloat()..range.upper.toFloat(),
+                        enabled = enabled && config.manualExposure,
+                        valueLabel = { "ISO ${it.toInt()}" },
                     )
                 }
                 FullscreenControl.SHUTTER -> camera.exposureRange?.let { range ->
                     val maximum = minOf(range.upper, config.maximumExposureNs).coerceAtLeast(range.lower)
-                    Slider(
+                    CompactValueSlider(
                         value = (displayedExposureNs / 1_000f).coerceIn(range.lower / 1_000f, maximum / 1_000f),
                         onValueChange = { onChange(config.copy(manualExposure = true, exposureNs = (it * 1_000).toLong())) },
-                        valueRange = range.lower / 1_000f..maximum / 1_000f, enabled = enabled && config.manualExposure,
-                        modifier = Modifier.fillMaxWidth().height(22.dp),
+                        valueRange = range.lower / 1_000f..maximum / 1_000f,
+                        enabled = enabled && config.manualExposure,
+                        valueLabel = { formatShutter((it * 1_000).toLong()) },
                     )
                 }
                 FullscreenControl.EV -> camera.exposureCompensationRange?.let { range ->
-                    Slider(
+                    CompactValueSlider(
                         value = config.exposureCompensation.coerceIn(range.lower, range.upper).toFloat(),
                         onValueChange = { onChange(config.copy(exposureCompensation = it.toInt())) },
                         valueRange = range.lower.toFloat()..range.upper.toFloat(),
                         steps = (range.upper - range.lower - 1).coerceAtLeast(0),
                         enabled = enabled && !config.manualExposure,
-                        modifier = Modifier.fillMaxWidth().height(22.dp),
+                        valueLabel = { exposureCompensationLabel(camera, it.toInt()) },
                     )
                 }
                 FullscreenControl.APERTURE, FullscreenControl.WB -> Unit
@@ -1653,15 +1656,64 @@ private fun FocusControls(
             "对焦 ${focusDistanceLabel(config.focusDistanceDiopters.coerceIn(0f, camera.minimumFocusDistance))}",
             color = textColor, style = MaterialTheme.typography.labelSmall,
         )
-        Slider(
-            value = config.focusDistanceDiopters.coerceIn(0f, camera.minimumFocusDistance),
-            onValueChange = { onChange(config.copy(focusDistanceDiopters = it)) },
-            valueRange = 0f..camera.minimumFocusDistance,
-            enabled = enabled,
-            modifier = if (compact) Modifier.fillMaxWidth().height(24.dp) else Modifier.fillMaxWidth(),
-        )
+        if (compact) {
+            CompactValueSlider(
+                value = config.focusDistanceDiopters.coerceIn(0f, camera.minimumFocusDistance),
+                onValueChange = { onChange(config.copy(focusDistanceDiopters = it)) },
+                valueRange = 0f..camera.minimumFocusDistance,
+                enabled = enabled,
+                valueLabel = { focusDistanceLabel(it) },
+            )
+        } else {
+            Slider(
+                value = config.focusDistanceDiopters.coerceIn(0f, camera.minimumFocusDistance),
+                onValueChange = { onChange(config.copy(focusDistanceDiopters = it)) },
+                valueRange = 0f..camera.minimumFocusDistance,
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     } else if (!supportsManual && !compact) {
         Text("当前镜头不支持手动对焦", color = textColor, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun CompactValueSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    valueRange: ClosedFloatingPointRange<Float>,
+    enabled: Boolean,
+    valueLabel: (Float) -> String,
+    steps: Int = 0,
+) {
+    var dragging by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth().height(24.dp), contentAlignment = Alignment.Center) {
+        Slider(
+            value = value,
+            onValueChange = {
+                dragging = true
+                onValueChange(it)
+            },
+            onValueChangeFinished = { dragging = false },
+            valueRange = valueRange,
+            steps = steps,
+            enabled = enabled,
+            modifier = Modifier.fillMaxWidth().height(24.dp),
+        )
+        if (dragging) {
+            Text(
+                text = valueLabel(value),
+                color = MaterialTheme.colorScheme.inverseOnSurface,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .offset(y = (-20).dp)
+                    .background(MaterialTheme.colorScheme.inverseSurface, MaterialTheme.shapes.extraSmall)
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                maxLines = 1,
+            )
+        }
     }
 }
 
