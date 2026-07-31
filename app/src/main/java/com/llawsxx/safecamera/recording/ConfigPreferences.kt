@@ -41,6 +41,12 @@ object ConfigPreferences {
             awbMode = p.getInt("awbMode", android.hardware.camera2.CameraCharacteristics.CONTROL_AWB_MODE_AUTO),
             focusMode = enumValue(p.getString("focusMode", null), FocusMode.CONTINUOUS),
             focusDistanceDiopters = p.getFloat("focusDistanceDiopters", 0f).coerceAtLeast(0f),
+            mfAssistMagnifications = p.getString("mfAssistMagnifications", null)
+                ?.split(',')?.mapNotNull { it.toIntOrNull() }?.filter { it >= 2 }?.distinct()
+                ?.sorted() ?: listOf(2, 4, 8),
+            mfAssistMagnification = p.getInt("mfAssistMagnification", 1),
+            mfAssistCenterX = p.getFloat("mfAssistCenterX", 0.5f),
+            mfAssistCenterY = p.getFloat("mfAssistCenterY", 0.5f),
             opticalStabilization = p.getBoolean("opticalStabilization", true),
             noiseReductionMode = p.getInt("noiseReductionMode", android.hardware.camera2.CameraCharacteristics.NOISE_REDUCTION_MODE_FAST),
             edgeMode = p.getInt("edgeMode", android.hardware.camera2.CameraCharacteristics.EDGE_MODE_FAST),
@@ -86,6 +92,10 @@ object ConfigPreferences {
             .putInt("awbMode", c.awbMode)
             .putString("focusMode", c.focusMode.name)
             .putFloat("focusDistanceDiopters", c.focusDistanceDiopters)
+            .putString("mfAssistMagnifications", c.mfAssistMagnifications.joinToString(","))
+            .putInt("mfAssistMagnification", c.mfAssistMagnification)
+            .putFloat("mfAssistCenterX", c.mfAssistCenterX)
+            .putFloat("mfAssistCenterY", c.mfAssistCenterY)
             .putBoolean("opticalStabilization", c.opticalStabilization)
             .putInt("noiseReductionMode", c.noiseReductionMode)
             .putInt("edgeMode", c.edgeMode)

@@ -16,6 +16,8 @@ import android.os.Bundle
 import android.util.Log
 import android.view.Surface
 import android.view.SurfaceView
+import android.os.StatFs
+import android.os.Environment
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -23,8 +25,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.aspectRatio
@@ -474,7 +476,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             permissionLauncher.launch(missing.toTypedArray())
         }
     }
-
     if (config.previewLayout == PreviewLayout.FULLSCREEN && config.hasVideo && selectedCamera != null) {
         FullscreenRecorder(
             state = state,
@@ -733,6 +734,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                         CameraProcessingControls(camera, config, state !is RecorderState.Starting && state !is RecorderState.Stopping) {
                             config = it
                         }
+                        MfassistSettings(config, recording) { config = it }
                         Section("视频颜色元数据") {
                             Labeled("Range") {
                                 ChoiceRow(VideoColorRange.entries, config.colorRange, { it.label }, !recording && !config.highSpeedMode) {
@@ -898,6 +900,7 @@ private fun MainRecorderScreen(
     onSurface: (Surface?) -> Unit,
     onBufferReady: (Int) -> Unit,
 ) {
+    val context = LocalContext.current
     val recording = state is RecorderState.Recording || state is RecorderState.Starting || state is RecorderState.Stopping
     Column(
         Modifier
@@ -954,12 +957,13 @@ private fun MainRecorderScreen(
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                     onSurface = onSurface,
                     onBufferReady = onBufferReady,
+                    onConfigChange = onConfigChange,
                 )
             }
         } else {
             Spacer(Modifier.weight(1f))
         }
-        CompactRecordingDashboard(state)
+        CompactRecordingDashboard(state, config)
         if (config.hasAudio) AudioLevelMeter((state as? RecorderState.Recording)?.stats?.audioLevelDb ?: -60f)
         permissionError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
     }
@@ -976,6 +980,7 @@ private fun RemainingSpacePreview(
     modifier: Modifier,
     onSurface: (Surface?) -> Unit,
     onBufferReady: (Int) -> Unit,
+    onConfigChange: (RecordingConfig) -> Unit,
 ) {
     val previewBuffer = previewBufferSize(camera, config)
     BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
@@ -999,7 +1004,48 @@ private fun RemainingSpacePreview(
             onSurface = onSurface,
             onBufferReady = onBufferReady,
             fillBounds = true,
+            zoom = config.mfAssistMagnification,
+            centerX = config.mfAssistCenterX,
+            centerY = config.mfAssistCenterY,
+            onPan = { dx, dy -> onConfigChange(config.copy(
+                mfAssistCenterX = boundedAssistCenter(config.mfAssistCenterX + dx / config.mfAssistMagnification.coerceAtLeast(1), config.mfAssistMagnification),
+                mfAssistCenterY = boundedAssistCenter(config.mfAssistCenterY + dy / config.mfAssistMagnification.coerceAtLeast(1), config.mfAssistMagnification),
+            )) },
         )
+        Row(
+            Modifier.align(Alignment.TopEnd).padding(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            OutlinedButton(
+                onClick = { onConfigChange(assistConfigAtMagnification(config, previousMagnification(config))) },
+                enabled = config.mfAssistMagnification > 1,
+                modifier = Modifier.size(36.dp),
+                contentPadding = PaddingValues(0.dp),
+            ) { Text("−") }
+            OutlinedButton(
+                onClick = { onConfigChange(assistConfigAtMagnification(config, nextMagnification(config))) },
+                modifier = Modifier.size(36.dp),
+                contentPadding = PaddingValues(0.dp),
+            ) { Text("+") }
+        }
+        if (config.mfAssistMagnification > 1) {
+            Box(
+                Modifier.align(Alignment.BottomEnd).padding(8.dp).size(74.dp)
+                    .background(Color(0xAA111416), RectangleShape)
+                    .border(1.dp, Color(0xFF8A8A8A), RectangleShape),
+            ) {
+                Box(
+                    Modifier.align(Alignment.Center)
+                        .offset(
+                            x = ((config.mfAssistCenterX - 0.5f) * 74f).dp,
+                            y = ((config.mfAssistCenterY - 0.5f) * 74f).dp,
+                        )
+                        .size(74.dp / config.mfAssistMagnification.toFloat())
+                        .background(Color.Transparent, RectangleShape)
+                        .border(1.dp, Color.White),
+                )
+            }
+        }
     }
 }
 
@@ -1115,6 +1161,7 @@ private fun FullscreenRecorder(
     onSurface: (Surface?) -> Unit,
     onBufferReady: (Int) -> Unit,
 ) {
+    val context = LocalContext.current
     val previewBuffer = previewBufferSize(camera, config)
     var controlsVisible by remember { mutableStateOf(true) }
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
@@ -1138,13 +1185,14 @@ private fun FullscreenRecorder(
             onSurface = onSurface,
             onBufferReady = onBufferReady,
             fillBounds = true,
-        )
-        // Keep the TextureView responsible for rendering, but handle taps in a Compose
-        // overlay so the embedded Android view cannot consume the toggle gesture.
-        Box(
-            modifier = fullscreenPreviewModifier.clickable(indication = null, interactionSource = remember { MutableInteractionSource() } ) {
-                controlsVisible = !controlsVisible
-            },
+            zoom = config.mfAssistMagnification,
+            centerX = config.mfAssistCenterX,
+            centerY = config.mfAssistCenterY,
+            onPan = { dx, dy -> onConfigChange(config.copy(
+                mfAssistCenterX = boundedAssistCenter(config.mfAssistCenterX + dx / config.mfAssistMagnification.coerceAtLeast(1), config.mfAssistMagnification),
+                mfAssistCenterY = boundedAssistCenter(config.mfAssistCenterY + dy / config.mfAssistMagnification.coerceAtLeast(1), config.mfAssistMagnification),
+            )) },
+            onTap = { controlsVisible = !controlsVisible },
         )
         Row(
             Modifier.fillMaxWidth().align(Alignment.TopCenter).background(Color(0x22000000)).padding(horizontal = 8.dp, vertical = 4.dp),
@@ -1152,7 +1200,7 @@ private fun FullscreenRecorder(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             OutlinedButton(onClick = onExit, modifier = Modifier.height(36.dp)) { Text("返回") }
-            CompactRecordingDashboard(state, lightText = true, modifier = Modifier.weight(1f))
+            CompactRecordingDashboard(state, config, lightText = true, modifier = Modifier.weight(1f))
         }
         if (controlsVisible) camera?.let {
             Card(
@@ -1161,7 +1209,7 @@ private fun FullscreenRecorder(
                     .align(Alignment.TopCenter)
                     .padding(top = 48.dp)
                     .fillMaxWidth()
-                    .heightIn(max = 86.dp),
+                    .heightIn(max = 122.dp),
             ) {
                 FullscreenCameraControls(
                     camera = it,
@@ -1169,6 +1217,23 @@ private fun FullscreenRecorder(
                     liveExposure = liveExposure,
                     enabled = state !is RecorderState.Starting && state !is RecorderState.Stopping && !config.highSpeedMode,
                     onChange = onConfigChange,
+                )
+            }
+        }
+        if (controlsVisible && config.mfAssistMagnification > 1) {
+            Box(
+                Modifier.align(Alignment.BottomEnd).padding(12.dp).size(74.dp)
+                    .background(Color(0xAA111416), RectangleShape)
+                    .border(1.dp, Color(0xFF8A8A8A), RectangleShape),
+            ) {
+                Box(
+                    Modifier.align(Alignment.Center)
+                        .offset(
+                            x = ((config.mfAssistCenterX - 0.5f) * 74f).dp,
+                            y = ((config.mfAssistCenterY - 0.5f) * 74f).dp,
+                        )
+                        .size(74.dp / config.mfAssistMagnification.toFloat())
+                        .border(1.dp, Color.White),
                 )
             }
         }
@@ -1205,6 +1270,10 @@ private fun PreviewPanel(
     onBufferReady: (Int) -> Unit,
     onTap: (() -> Unit)? = null,
     fillBounds: Boolean = false,
+    zoom: Int = 1,
+    centerX: Float = 0.5f,
+    centerY: Float = 0.5f,
+    onPan: ((Float, Float) -> Unit)? = null,
 ) {
     val panelModifier = (if (fillBounds) modifier else modifier.aspectRatio(aspect)).let {
         if (onTap != null) it.clickable(onClick = onTap) else it
@@ -1229,6 +1298,11 @@ private fun PreviewPanel(
                             mirror = mirror,
                             layoutToken = aspect,
                             resumeEpoch = resumeEpoch,
+                            zoom = zoom,
+                            centerX = centerX,
+                            centerY = centerY,
+                            onPan = onPan,
+                            onTap = onTap,
                             callback = { surface -> onSurface(if (visible) surface else null) },
                             onBufferReady = onBufferReady,
                         )
@@ -1317,9 +1391,19 @@ private fun RecordingDashboard(state: RecorderState) {
 @Composable
 private fun CompactRecordingDashboard(
     state: RecorderState,
+    config: RecordingConfig,
     lightText: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
+    var availableBytes by remember(config.outputTreeUri) { mutableStateOf<Long?>(null) }
+    LaunchedEffect(config.outputTreeUri) {
+        while (true) {
+            availableBytes = runCatching {
+                StatFs(Environment.getExternalStorageDirectory().absolutePath).availableBytes
+            }.getOrNull()
+            delay(5_000)
+        }
+    }
     val color = if (lightText) Color.White else Color.Unspecified
     val stats = (state as? RecorderState.Recording)?.stats
     val status = when (state) {
@@ -1338,7 +1422,15 @@ private fun CompactRecordingDashboard(
         Text(formatDuration(stats?.elapsedMs ?: 0L), color = color, style = MaterialTheme.typography.labelMedium)
         Text("FPS ${stats?.averageFps?.takeIf { it > 0 }?.format1() ?: "—"}", color = color, style = MaterialTheme.typography.labelMedium)
         Text("丢帧 ${stats?.droppedFrames ?: 0}", color = color, style = MaterialTheme.typography.labelMedium)
+        Text("剩余 ${availableBytes?.let(::formatStorageBytes) ?: "—"}", color = color, style = MaterialTheme.typography.labelMedium)
     }
+}
+
+private fun formatStorageBytes(bytes: Long): String = when {
+    bytes >= 1_000_000_000_000L -> "${(bytes / 1_000_000_000_000.0).format1()} TB"
+    bytes >= 1_000_000_000L -> "${(bytes / 1_000_000_000.0).format1()} GB"
+    bytes >= 1_000_000L -> "${(bytes / 1_000_000.0).format1()} MB"
+    else -> "${(bytes / 1_000.0).format1()} KB"
 }
 
 @Composable private fun Metric(label: String, value: String) {
@@ -1494,7 +1586,24 @@ private fun FullscreenCameraControls(
     enabled: Boolean,
     onChange: (RecordingConfig) -> Unit,
 ) {
-    QuickCameraControls(camera, config, liveExposure, enabled, onChange, lightText = true)
+    Column(Modifier.fillMaxWidth()) {
+        QuickCameraControls(camera, config, liveExposure, enabled, onChange, lightText = true)
+        Row(
+            Modifier.fillMaxWidth().padding(end = 6.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.End,
+        ) {
+            OutlinedButton(
+                onClick = { onChange(assistConfigAtMagnification(config, previousMagnification(config))) },
+                enabled = config.mfAssistMagnification > 1,
+                modifier = Modifier.size(32.dp), contentPadding = PaddingValues(0.dp),
+            ) { Text("−") }
+            OutlinedButton(
+                onClick = { onChange(assistConfigAtMagnification(config, nextMagnification(config))) },
+                modifier = Modifier.size(32.dp), contentPadding = PaddingValues(0.dp),
+            ) { Text("+") }
+        }
+    }
 }
 
 @Composable
@@ -1776,6 +1885,58 @@ private fun CameraProcessingControls(
             onChange(config.copy(edgeMode = it))
         }
     }
+}
+
+@Composable
+private fun MfassistSettings(config: RecordingConfig, recording: Boolean, onChange: (RecordingConfig) -> Unit) {
+    Section("MF 放大辅助") {
+        Text("仅放大屏幕预览，不影响录制输出。点击预览可自动对焦，拖动可移动放大区域。", style = MaterialTheme.typography.bodySmall)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(2, 4, 8).forEach { value ->
+                val enabled = value in config.mfAssistMagnifications
+                OutlinedButton(
+                    onClick = {
+                        val next = if (enabled) config.mfAssistMagnifications - value else config.mfAssistMagnifications + value
+                        onChange(config.copy(mfAssistMagnifications = next.distinct().sorted()))
+                    },
+                    enabled = !recording,
+                    modifier = Modifier.weight(1f),
+                ) { Text("${value}x", color = if (enabled) MaterialTheme.colorScheme.primary else Color.Unspecified) }
+            }
+        }
+        Text("当前预览倍率：${config.mfAssistMagnification}x", style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+private fun nextMagnification(config: RecordingConfig): Int {
+    val values = (listOf(1) + config.mfAssistMagnifications).distinct().sorted()
+    return values.firstOrNull { it > config.mfAssistMagnification } ?: 1
+}
+
+private fun previousMagnification(config: RecordingConfig): Int {
+    val values = (listOf(1) + config.mfAssistMagnifications).distinct().sorted()
+    return values.lastOrNull { it < config.mfAssistMagnification } ?: 1
+}
+
+private fun boundedAssistCenter(value: Float, magnification: Int): Float {
+    val halfWindow = 0.5f / magnification.coerceAtLeast(1)
+    return value.coerceIn(halfWindow, 1f - halfWindow)
+}
+
+private fun assistConfigAtMagnification(config: RecordingConfig, magnification: Int): RecordingConfig {
+    val value = magnification.coerceAtLeast(1)
+    if (value == 1) {
+        return config.copy(
+            mfAssistMagnification = 1,
+            mfAssistCenterX = 0.5f,
+            mfAssistCenterY = 0.5f,
+        )
+    }
+    return config.copy(
+        mfAssistMagnification = value,
+        mfAssistCenterX = boundedAssistCenter(config.mfAssistCenterX, value),
+        mfAssistCenterY = boundedAssistCenter(config.mfAssistCenterY, value),
+    )
 }
 
 private fun processingModeLabel(mode: Int): String = when (mode) {

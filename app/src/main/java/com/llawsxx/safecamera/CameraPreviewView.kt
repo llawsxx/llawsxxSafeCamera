@@ -1,6 +1,5 @@
 package com.llawsxx.safecamera
 
-import android.content.ContentValues.TAG
 import android.content.Context
 import android.graphics.SurfaceTexture
 import android.util.Log
@@ -8,6 +7,7 @@ import android.view.Surface
 import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
+import android.view.MotionEvent
 import android.widget.FrameLayout
 
 internal class CameraPreviewView(context: Context) : FrameLayout(context), TextureView.SurfaceTextureListener {
@@ -23,8 +23,13 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Textu
     private var layoutToken = 0f
     private var resumeEpoch = 0
     private var reportedReadyEpoch = Int.MIN_VALUE
-
-    private var test = 0
+    private var zoom = 1f
+    private var centerX = 0.5f
+    private var centerY = 0.5f
+    private var panCallback: ((Float, Float) -> Unit)? = null
+    private var tapCallback: (() -> Unit)? = null
+    private var downX = 0f
+    private var downY = 0f
 
     init {
         clipChildren = true
@@ -39,6 +44,11 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Textu
         mirror: Boolean,
         layoutToken: Float,
         resumeEpoch: Int,
+        zoom: Int = 1,
+        centerX: Float = 0.5f,
+        centerY: Float = 0.5f,
+        onPan: ((Float, Float) -> Unit)? = null,
+        onTap: (() -> Unit)? = null,
         callback: (Surface?) -> Unit,
         onBufferReady: (Int) -> Unit,
     ) {
@@ -51,6 +61,16 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Textu
         mirrorHorizontally = mirror
         this.layoutToken = layoutToken
         this.resumeEpoch = resumeEpoch
+        this.zoom = zoom.coerceAtLeast(1).toFloat()
+        if (this.zoom <= 1f) {
+            this.centerX = 0.5f
+            this.centerY = 0.5f
+        } else {
+            this.centerX = centerX.coerceIn(0f, 1f)
+            this.centerY = centerY.coerceIn(0f, 1f)
+        }
+        panCallback = onPan
+        tapCallback = onTap
         if (epochChanged) reportedReadyEpoch = Int.MIN_VALUE
         surfaceCallback = callback
         bufferReadyCallback = onBufferReady
@@ -62,6 +82,27 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Textu
             reportBufferReadyIfFocused()
         }
 
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        return handleTouch(event)
+    }
+
+    private fun handleTouch(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> { downX = event.x; downY = event.y; return true }
+            MotionEvent.ACTION_UP -> {
+                val dx = event.x - downX
+                val dy = event.y - downY
+                if (zoom > 1f && (kotlin.math.abs(dx) > 8f || kotlin.math.abs(dy) > 8f)) {
+                    panCallback?.invoke(-dx / width.coerceAtLeast(1), -dy / height.coerceAtLeast(1))
+                } else {
+                    tapCallback?.invoke()
+                }
+                return true
+            }
+        }
+        return true
     }
 
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
@@ -138,6 +179,15 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Textu
         transformLayer.pivotY = height / 2f
         transformLayer.scaleX = if (mirrorHorizontally) -1f else 1f
         transformLayer.scaleY = 1f
+        transformLayer.scaleX *= zoom
+        transformLayer.scaleY = zoom
+        if (zoom <= 1f) {
+            transformLayer.translationX = 0f
+            transformLayer.translationY = 0f
+        } else {
+            transformLayer.translationX = (0.5f - centerX) * width * zoom
+            transformLayer.translationY = (0.5f - centerY) * height * zoom
+        }
         transformLayer.requestLayout()
         transformLayer.invalidate()
     }
