@@ -5,6 +5,10 @@ import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.MediaRecorder
+import android.media.MediaCodecInfo
+import android.media.MediaCodecList
+import android.media.MediaFormat
+import android.os.Build
 import android.util.Size
 
 object CameraCapabilities {
@@ -47,6 +51,16 @@ object CameraCapabilities {
                         }
                     }.distinct().sortedWith(compareByDescending<HighSpeedVideoMode> { it.width.toLong() * it.height }.thenBy { it.maxFps })
                 } else emptyList()
+                val dynamicRanges = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    val supported = c.get(CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES)
+                        ?.supportedProfiles.orEmpty()
+                    VideoDynamicRange.entries.filter {
+                        it == VideoDynamicRange.SDR ||
+                            (it.cameraProfile in supported && supportsHevcDynamicRange(it))
+                    }
+                } else {
+                    listOf(VideoDynamicRange.SDR)
+                }
                 CameraInfo(
                     id = id,
                     displayName = "$facingName $id${if (focalLengths.isBlank()) "" else " · ${focalLengths}mm"}",
@@ -70,8 +84,25 @@ object CameraCapabilities {
                     minimumFocusDistance = c.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f,
                     sensorOrientation = c.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0,
                     highSpeedModes = highSpeedModes,
+                    dynamicRanges = dynamicRanges,
                 )
             }.getOrNull()
+        }
+    }
+
+    private fun supportsHevcDynamicRange(range: VideoDynamicRange): Boolean {
+        val acceptedProfiles = when (range) {
+            VideoDynamicRange.HLG10 -> setOf(MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10)
+            VideoDynamicRange.HDR10 -> setOf(MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10)
+            VideoDynamicRange.HDR10_PLUS -> setOf(MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10Plus)
+            VideoDynamicRange.SDR -> return true
+        }
+        return MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
+            info.isEncoder && info.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, true) } &&
+                runCatching {
+                    info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_HEVC).profileLevels
+                        .any { it.profile in acceptedProfiles }
+                }.getOrDefault(false)
         }
     }
 }

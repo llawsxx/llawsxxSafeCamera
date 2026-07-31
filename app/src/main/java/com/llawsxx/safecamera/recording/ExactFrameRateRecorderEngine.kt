@@ -8,10 +8,13 @@ import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.SessionConfiguration
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
+import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.media.MediaRecorder
@@ -25,6 +28,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.max
@@ -87,6 +91,7 @@ class ExactFrameRateRecorderEngine(
             "精确帧率 MP4 模式当前不支持分段，请将分段时长设为 0"
         }
         validateCameraMode(config.cameraId)
+        validateDynamicRange()
 
         val baseName = "REC_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())}"
         val coordinator: EncodedMuxCoordinator
@@ -142,8 +147,25 @@ class ExactFrameRateRecorderEngine(
             config.colorRange.mediaFormatValue?.let { setInteger(MediaFormat.KEY_COLOR_RANGE, it) }
             config.colorStandard.mediaFormatValue?.let { setInteger(MediaFormat.KEY_COLOR_STANDARD, it) }
             config.colorTransfer.mediaFormatValue?.let { setInteger(MediaFormat.KEY_COLOR_TRANSFER, it) }
+            if (config.dynamicRange.is10Bit) {
+                setInteger(MediaFormat.KEY_PROFILE, requiredHevcProfile(config.dynamicRange))
+                setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT2020)
+                setInteger(
+                    MediaFormat.KEY_COLOR_TRANSFER,
+                    if (config.dynamicRange == VideoDynamicRange.HLG10) {
+                        MediaFormat.COLOR_TRANSFER_HLG
+                    } else {
+                        MediaFormat.COLOR_TRANSFER_ST2084
+                    },
+                )
+                setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
+            }
         }
-        val video = MediaCodec.createEncoderByType(videoMime)
+        val encoderName = MediaCodecList(MediaCodecList.REGULAR_CODECS).findEncoderForFormat(videoFormat)
+        requireNotNull(encoderName) {
+            "没有编码器支持 ${config.width}×${config.height} ${config.dynamicRange.label} @ ${config.encoderFps} fps"
+        }
+        val video = MediaCodec.createByCodecName(encoderName)
         video.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         encoderSurface = video.createInputSurface()
         videoCodec = video
@@ -321,8 +343,7 @@ class ExactFrameRateRecorderEngine(
         val generation = ++sessionGeneration
         session?.close()
         val surfaces = mutableListOf(recordSurface).apply { preview?.let(::add) }
-        @Suppress("DEPRECATION")
-        device.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
+        val callback = object : CameraCaptureSession.StateCallback() {
             override fun onConfigured(newSession: CameraCaptureSession) {
                 if (!running.get() || generation != sessionGeneration || camera !== device) { newSession.close(); return }
                 session = newSession
@@ -343,7 +364,60 @@ class ExactFrameRateRecorderEngine(
                     onNotice("预览不兼容，MediaCodec 录制继续")
                 } else if (generation == sessionGeneration) fail("相机不支持当前编码 Surface")
             }
-        }, cameraHandler)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && config.dynamicRange != VideoDynamicRange.SDR) {
+            val outputs = mutableListOf(
+                OutputConfiguration(recordSurface).apply {
+                    dynamicRangeProfile = config.dynamicRange.cameraProfile
+                },
+            ).apply {
+                preview?.let { add(OutputConfiguration(it)) }
+            }
+            device.createCaptureSession(
+                SessionConfiguration(
+                    SessionConfiguration.SESSION_REGULAR,
+                    outputs,
+                    Executor { command -> cameraHandler.post(command) },
+                    callback,
+                ),
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            device.createCaptureSession(surfaces, callback, cameraHandler)
+        }
+    }
+
+    private fun validateDynamicRange() {
+        if (config.dynamicRange == VideoDynamicRange.SDR) return
+        require(Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            "HDR/10-bit 视频需要 Android 13 或更高版本"
+        }
+        require(config.videoCodec == VideoCodec.H265) { "HDR/10-bit 视频需要 H.265 / HEVC 编码" }
+        val supported = cameraManager.getCameraCharacteristics(config.cameraId)
+            .get(CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES)
+            ?.supportedProfiles.orEmpty()
+        require(config.dynamicRange.cameraProfile in supported) { "当前镜头不支持 ${config.dynamicRange.label}" }
+        val acceptedProfiles = when (config.dynamicRange) {
+            VideoDynamicRange.HLG10 -> setOf(MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10)
+            VideoDynamicRange.HDR10 -> setOf(MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10)
+            VideoDynamicRange.HDR10_PLUS -> setOf(MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10Plus)
+            VideoDynamicRange.SDR -> emptySet()
+        }
+        val encoder = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.firstOrNull { info ->
+            info.isEncoder && info.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, true) } &&
+                runCatching {
+                    info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_HEVC).profileLevels
+                        .any { it.profile in acceptedProfiles }
+                }.getOrDefault(false)
+        }
+        require(encoder != null) { "设备没有支持 ${config.dynamicRange.label} 的 HEVC 10-bit 编码器" }
+    }
+
+    private fun requiredHevcProfile(range: VideoDynamicRange): Int = when (range) {
+        VideoDynamicRange.HDR10 -> MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10
+        VideoDynamicRange.HDR10_PLUS -> MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10Plus
+        VideoDynamicRange.HLG10 -> MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
+        VideoDynamicRange.SDR -> MediaCodecInfo.CodecProfileLevel.HEVCProfileMain
     }
 
     private val captureCallback = object : CameraCaptureSession.CaptureCallback() {

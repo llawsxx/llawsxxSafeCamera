@@ -20,6 +20,17 @@ enum class VideoCodec(val label: String, val mediaRecorderValue: Int) : Serializ
     H265("H.265 / HEVC", MediaRecorder.VideoEncoder.HEVC)
 }
 
+enum class VideoDynamicRange(
+    val label: String,
+    val cameraProfile: Long,
+    val is10Bit: Boolean,
+) : Serializable {
+    SDR("SDR 8-bit", 1L, false),
+    HLG10("HLG HDR 10-bit", 2L, true),
+    HDR10("HDR10 10-bit", 4L, true),
+    HDR10_PLUS("HDR10+ 10-bit", 8L, true),
+}
+
 enum class VideoColorRange(
     val label: String,
     val mediaFormatValue: Int?,
@@ -108,6 +119,7 @@ data class RecordingConfig(
     val audioBitrate: Int = 192_000,
     val audioInputDeviceId: Int? = null,
     val videoCodec: VideoCodec = VideoCodec.H264,
+    val dynamicRange: VideoDynamicRange = VideoDynamicRange.SDR,
     val highSpeedMode: Boolean = false,
     val colorRange: VideoColorRange = VideoColorRange.DEFAULT,
     val colorStandard: VideoColorStandard = VideoColorStandard.DEFAULT,
@@ -148,7 +160,8 @@ data class RecordingConfig(
     val customColorMetadata: Boolean get() = colorRange != VideoColorRange.DEFAULT ||
         colorStandard != VideoColorStandard.DEFAULT || colorMatrix != VideoColorMatrix.DEFAULT ||
         colorTransfer != VideoColorTransfer.DEFAULT
-    val exactEngineRequested: Boolean get() = exactFrameRateMode || fpsDenominator != 1 || customColorMetadata
+    val exactEngineRequested: Boolean get() = exactFrameRateMode || fpsDenominator != 1 || customColorMetadata ||
+        dynamicRange != VideoDynamicRange.SDR
     val encoderFps: Int get() = requestedFps.toInt().let { base ->
         if (requestedFps - base >= 0.5) base + 1 else base
     }.coerceAtLeast(1)
@@ -187,6 +200,7 @@ data class CameraInfo(
     val minimumFocusDistance: Float,
     val sensorOrientation: Int,
     val highSpeedModes: List<HighSpeedVideoMode>,
+    val dynamicRanges: List<VideoDynamicRange>,
 )
 
 data class RecordingStats(

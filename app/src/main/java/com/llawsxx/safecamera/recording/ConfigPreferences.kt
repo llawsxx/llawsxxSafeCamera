@@ -19,6 +19,7 @@ object ConfigPreferences {
             audioBitrate = p.getInt("audioBitrate", 192_000),
             audioInputDeviceId = p.getInt("audioInputDeviceId", -1).takeIf { it >= 0 },
             videoCodec = enumValue(p.getString("videoCodec", null), VideoCodec.H264),
+            dynamicRange = enumValue(p.getString("dynamicRange", null), VideoDynamicRange.SDR),
             highSpeedMode = p.getBoolean("highSpeedMode", false),
             colorRange = enumValue(p.getString("colorRange", null), VideoColorRange.DEFAULT),
             colorStandard = enumValue(p.getString("colorStandard", null), VideoColorStandard.DEFAULT),
@@ -70,6 +71,7 @@ object ConfigPreferences {
             .putInt("audioBitrate", c.audioBitrate)
             .putInt("audioInputDeviceId", c.audioInputDeviceId ?: -1)
             .putString("videoCodec", c.videoCodec.name)
+            .putString("dynamicRange", c.dynamicRange.name)
             .putBoolean("highSpeedMode", c.highSpeedMode)
             .putString("colorRange", c.colorRange.name)
             .putString("colorStandard", c.colorStandard.name)

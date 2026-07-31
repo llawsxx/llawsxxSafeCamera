@@ -112,6 +112,7 @@ import com.llawsxx.safecamera.recording.RecorderState
 import com.llawsxx.safecamera.recording.RecordingConfig
 import com.llawsxx.safecamera.recording.RecordingMode
 import com.llawsxx.safecamera.recording.VideoCodec
+import com.llawsxx.safecamera.recording.VideoDynamicRange
 import com.llawsxx.safecamera.recording.VideoColorMatrix
 import com.llawsxx.safecamera.recording.VideoColorRange
 import com.llawsxx.safecamera.recording.VideoColorStandard
@@ -297,11 +298,12 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
     }
     LaunchedEffect(config.orientation) { onOrientation(config.orientation) }
     LaunchedEffect(config) { ConfigPreferences.save(context, config) }
-    LaunchedEffect(config.exactEngineRequested) {
+    LaunchedEffect(config.exactEngineRequested, config.dynamicRange) {
         if (config.exactEngineRequested && config.hasVideo) {
             val normalized = config.copy(
                 segmentMinutes = if (config.container == ContainerFormat.MP4) 0 else config.segmentMinutes,
                 highSpeedMode = false,
+                videoCodec = if (config.dynamicRange.is10Bit) VideoCodec.H265 else config.videoCodec,
             )
             if (normalized != config) config = normalized
         }
@@ -315,9 +317,24 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 segmentMinutes = 0,
                 streamEnabled = false,
                 manualExposure = false,
+                dynamicRange = VideoDynamicRange.SDR,
                 colorRange = VideoColorRange.DEFAULT,
                 colorStandard = VideoColorStandard.DEFAULT,
+                colorMatrix = VideoColorMatrix.DEFAULT,
                 colorTransfer = VideoColorTransfer.DEFAULT,
+            )
+        }
+    }
+    LaunchedEffect(config.cameraId, selectedCamera?.dynamicRanges) {
+        val camera = selectedCamera ?: return@LaunchedEffect
+        if (config.dynamicRange !in camera.dynamicRanges) {
+            config = config.copy(
+                dynamicRange = VideoDynamicRange.SDR,
+                colorRange = VideoColorRange.DEFAULT,
+                colorStandard = VideoColorStandard.DEFAULT,
+                colorMatrix = VideoColorMatrix.DEFAULT,
+                colorTransfer = VideoColorTransfer.DEFAULT,
+                forceSpsVui = false,
             )
         }
     }
@@ -625,6 +642,52 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             }
                             Text("高速模式使用 Camera2 受限高速会话；实时手动曝光、分段、推流和自定义颜色元数据不可用。", style = MaterialTheme.typography.bodySmall)
                         }
+                        Section("HDR / 10-bit 视频") {
+                            Labeled("动态范围") {
+                                ChoiceRow(
+                                    camera.dynamicRanges,
+                                    config.dynamicRange.takeIf { it in camera.dynamicRanges },
+                                    { it.label },
+                                    !recording && !config.highSpeedMode,
+                                ) { range ->
+                                    config = if (range == VideoDynamicRange.SDR) {
+                                        config.copy(
+                                            dynamicRange = range,
+                                            colorRange = VideoColorRange.DEFAULT,
+                                            colorStandard = VideoColorStandard.DEFAULT,
+                                            colorMatrix = VideoColorMatrix.DEFAULT,
+                                            colorTransfer = VideoColorTransfer.DEFAULT,
+                                            forceSpsVui = false,
+                                        )
+                                    } else {
+                                        config.copy(
+                                            dynamicRange = range,
+                                            videoCodec = VideoCodec.H265,
+                                            highSpeedMode = false,
+                                            colorRange = VideoColorRange.LIMITED,
+                                            colorStandard = VideoColorStandard.BT2020,
+                                            colorMatrix = VideoColorMatrix.BT2020,
+                                            colorTransfer = if (range == VideoDynamicRange.HLG10) {
+                                                VideoColorTransfer.HLG
+                                            } else {
+                                                VideoColorTransfer.ST2084
+                                            },
+                                            forceSpsVui = false,
+                                        )
+                                    }
+                                }
+                            }
+                            Text(
+                                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                                    "HDR/10-bit 采集需要 Android 13 或更高版本。"
+                                } else if (camera.dynamicRanges.size == 1) {
+                                    "当前镜头仅声明支持 SDR。"
+                                } else {
+                                    "HDR 模式使用 Camera2 动态范围 Profile 和 HEVC Main10 编码；实际选项来自当前镜头能力。"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                         Labeled("分辨率") {
                             ChoiceRow(
                                 camera.sizes,
@@ -737,17 +800,17 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                         MfassistSettings(config, recording) { config = it }
                         Section("视频颜色元数据") {
                             Labeled("Range") {
-                                ChoiceRow(VideoColorRange.entries, config.colorRange, { it.label }, !recording && !config.highSpeedMode) {
+                                ChoiceRow(VideoColorRange.entries, config.colorRange, { it.label }, !recording && !config.highSpeedMode && !config.dynamicRange.is10Bit) {
                                     config = config.copy(colorRange = it)
                                 }
                             }
                             Labeled("Color standard / primaries") {
-                                ChoiceRow(VideoColorStandard.entries, config.colorStandard, { it.label }, !recording && !config.highSpeedMode) {
+                                ChoiceRow(VideoColorStandard.entries, config.colorStandard, { it.label }, !recording && !config.highSpeedMode && !config.dynamicRange.is10Bit) {
                                     config = config.copy(colorStandard = it)
                                 }
                             }
                             Labeled("Matrix coefficients") {
-                                ChoiceRow(VideoColorMatrix.entries, config.colorMatrix, { it.label }, !recording && !config.highSpeedMode) {
+                                ChoiceRow(VideoColorMatrix.entries, config.colorMatrix, { it.label }, !recording && !config.highSpeedMode && !config.dynamicRange.is10Bit) {
                                     config = config.copy(
                                         colorMatrix = it,
                                         forceSpsVui = config.forceSpsVui || it != VideoColorMatrix.DEFAULT,
@@ -755,7 +818,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 }
                             }
                             Labeled("Transfer") {
-                                ChoiceRow(VideoColorTransfer.entries, config.colorTransfer, { it.label }, !recording && !config.highSpeedMode) {
+                                ChoiceRow(VideoColorTransfer.entries, config.colorTransfer, { it.label }, !recording && !config.highSpeedMode && !config.dynamicRange.is10Bit) {
                                     config = config.copy(
                                         colorTransfer = it,
                                         forceSpsVui = config.forceSpsVui || it != VideoColorTransfer.DEFAULT,
@@ -794,7 +857,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     }
                 }
                 Labeled("编码") {
-                    ChoiceRow(VideoCodec.entries, config.videoCodec, { it.label }, !recording && config.hasVideo) {
+                    val codecs = if (config.dynamicRange.is10Bit) listOf(VideoCodec.H265) else VideoCodec.entries
+                    ChoiceRow(codecs, config.videoCodec, { it.label }, !recording && config.hasVideo) {
                         config = config.copy(videoCodec = it)
                     }
                 }
