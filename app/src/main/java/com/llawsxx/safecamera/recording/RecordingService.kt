@@ -72,8 +72,20 @@ class RecordingService : Service() {
         val onStats: (RecordingStats) -> Unit = { stats -> RecorderController.update(RecorderState.Recording(stats)) }
         val onNotice: (String) -> Unit = { message -> updateNotification("录制继续 · $message") }
         val onError: (String) -> Unit = { message -> finishWithError(message) }
-        val useExactEngine = config.exactEngineRequested && config.hasVideo && !config.highSpeedMode
-        val newEngine: RecorderEngine = if (useExactEngine && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val useNativeAudioTs = config.container == ContainerFormat.MPEG_TS && !config.hasVideo
+        val useExactEngine = (config.exactEngineRequested || config.container == ContainerFormat.MPEG_TS) &&
+            config.hasVideo && !config.highSpeedMode
+        val newEngine: RecorderEngine = if (useNativeAudioTs && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            AudioMpegTsRecorderEngine(
+                context = this,
+                initialConfig = config,
+                outputStore = outputStore,
+                onStarted = onStarted,
+                onStats = onStats,
+                onNotice = onNotice,
+                onError = onError,
+            )
+        } else if (useExactEngine && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             ExactFrameRateRecorderEngine(
                 context = this,
                 initialConfig = config,
@@ -83,7 +95,7 @@ class RecordingService : Service() {
                 onNotice = onNotice,
                 onError = onError,
             )
-        } else if (!useExactEngine) {
+        } else if (!useExactEngine && !useNativeAudioTs) {
             CameraRecorderEngine(
                 context = this,
                 initialConfig = config,
@@ -94,7 +106,7 @@ class RecordingService : Service() {
                 onError = onError,
             )
         } else {
-            finishWithError("精确帧率引擎需要 Android 8.0 或更高版本")
+            finishWithError("native MPEG-TS 引擎需要 Android 8.0 或更高版本")
             return
         }
         engine = newEngine

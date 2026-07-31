@@ -48,12 +48,14 @@ class ExactFrameRateRecorderEngine(
     private var session: CameraCaptureSession? = null
     private var previewSurface: Surface? = null
     private var encoderSurface: Surface? = null
-    private var frameConverter: GlFrameRateConverter? = null
     private var videoCodec: MediaCodec? = null
     private var audioCodec: MediaCodec? = null
     private var audioRecord: AudioRecord? = null
     private var output: OutputHandle? = null
-    private var mux: ExactMuxCoordinator? = null
+    private var mux: EncodedMuxCoordinator? = null
+    private var tsOutput: NativeTsOutput? = null
+    private var segmentIndex = 1
+    private var outputPath: String? = null
     private var sessionGeneration = 0
     private var startedAtMs = 0L
     private var firstSensorNs = 0L
@@ -62,37 +64,58 @@ class ExactFrameRateRecorderEngine(
     private var droppedFrames = 0L
     @Volatile private var audioLevelDb = -60f
     private val videoSamples = AtomicLong(0L)
+    private var firstEncodedPtsUs = Long.MIN_VALUE
+    private var lastEncodedPtsUs = Long.MIN_VALUE
     private val running = AtomicBoolean(false)
     private val stopStarted = AtomicBoolean(false)
     private var videoDrainThread: Thread? = null
     private var audioThread: Thread? = null
     private val firstVideoFrame = CountDownLatch(1)
+    private var firstVideoPtsUs = Long.MIN_VALUE
 
     override fun start(preview: Surface?) {
         cameraHandler.post {
             previewSurface = preview?.takeIf { it.isValid && config.previewMode != PreviewMode.OFF }
-            runCatching { prepare() }.onFailure { fail("无法启动精确帧率录制: ${it.message}") }
+            runCatching { prepare() }.onFailure { fail("无法启动 MediaCodec 录制: ${it.message}") }
         }
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
     private fun prepare() {
-        require(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) { "精确帧率模式需要 Android 8.0 或更高版本" }
-        require(config.container == ContainerFormat.MP4) { "精确帧率模式当前仅支持 MP4" }
-        require(config.segmentMinutes == 0) { "精确帧率模式当前不支持分段，请将分段时长设为 0" }
+        require(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) { "MediaCodec 录制需要 Android 8.0 或更高版本" }
+        require(config.container != ContainerFormat.MP4 || config.segmentMinutes == 0) {
+            "精确帧率 MP4 模式当前不支持分段，请将分段时长设为 0"
+        }
         validateCameraMode(config.cameraId)
 
-        val handle = outputStore.create(
-            "REC_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())}_001.mp4",
-            "video/mp4",
-        )
-        output = handle
-        val mediaMuxer = MediaMuxer(handle.descriptor().fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-        mediaMuxer.setOrientationHint(recordingOrientationHint(context, config.cameraId, config.orientation))
-        val coordinator = ExactMuxCoordinator(mediaMuxer, config.hasAudio) {
-            startedAtMs = SystemClock.elapsedRealtime()
-            onStarted(handle.displayPath)
-            cameraHandler.post(statsTick)
+        val baseName = "REC_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())}"
+        val coordinator: EncodedMuxCoordinator
+        if (config.container == ContainerFormat.MPEG_TS) {
+            val streamOutput = NativeTsOutput(
+                outputStore = outputStore,
+                baseName = baseName,
+                hasVideo = true,
+                segmentMillis = config.segmentMinutes.coerceAtLeast(0) * 60_000L,
+                streamHost = config.streamHost.takeIf { config.streamEnabled },
+                streamPort = config.streamPort,
+            ) { index, path ->
+                segmentIndex = index
+                outputPath = path
+            }
+            outputPath = streamOutput.start()
+            tsOutput = streamOutput
+            coordinator = NativeTsMuxCoordinator(
+                NativeMpegTsMuxer(config.videoCodec, config.hasAudio),
+                streamOutput,
+                config.hasAudio,
+            ) { markMuxStarted() }
+        } else {
+            val handle = outputStore.create("${baseName}_001.mp4", "video/mp4")
+            output = handle
+            outputPath = handle.displayPath
+            val mediaMuxer = MediaMuxer(handle.descriptor().fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            mediaMuxer.setOrientationHint(recordingOrientationHint(context, config.cameraId, config.orientation))
+            coordinator = MediaMuxCoordinator(mediaMuxer, config.hasAudio) { markMuxStarted() }
         }
         mux = coordinator
 
@@ -110,14 +133,6 @@ class ExactFrameRateRecorderEngine(
         val video = MediaCodec.createEncoderByType(videoMime)
         video.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         encoderSurface = video.createInputSurface()
-        frameConverter = GlFrameRateConverter(
-            encoderSurface = checkNotNull(encoderSurface),
-            width = config.width,
-            height = config.height,
-            numerator = config.fpsNumerator,
-            denominator = config.fpsDenominator,
-            onFirstFrame = { firstVideoFrame.countDown() },
-        )
         videoCodec = video
 
         if (config.hasAudio) prepareAudio()
@@ -162,7 +177,13 @@ class ExactFrameRateRecorderEngine(
         }
     }
 
-    private fun startVideoDrain(codec: MediaCodec, coordinator: ExactMuxCoordinator) {
+    private fun markMuxStarted() {
+        startedAtMs = SystemClock.elapsedRealtime()
+        onStarted(checkNotNull(outputPath))
+        cameraHandler.post(statsTick)
+    }
+
+    private fun startVideoDrain(codec: MediaCodec, coordinator: EncodedMuxCoordinator) {
         videoDrainThread = Thread({
             val info = MediaCodec.BufferInfo()
             val stopDeadline = AtomicLong(Long.MAX_VALUE)
@@ -174,7 +195,16 @@ class ExactFrameRateRecorderEngine(
                         index >= 0 -> {
                             val eos = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                             if (info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
-                                codec.getOutputBuffer(index)?.let { coordinator.writeVideo(it, info) }
+                                if (firstVideoPtsUs == Long.MIN_VALUE) {
+                                    firstVideoPtsUs = info.presentationTimeUs
+                                    firstVideoFrame.countDown()
+                                }
+                                val rebasedInfo = MediaCodec.BufferInfo().apply {
+                                    set(info.offset, info.size, (info.presentationTimeUs - firstVideoPtsUs).coerceAtLeast(0L), info.flags)
+                                }
+                                codec.getOutputBuffer(index)?.let { coordinator.writeVideo(it, rebasedInfo) }
+                                if (firstEncodedPtsUs == Long.MIN_VALUE) firstEncodedPtsUs = rebasedInfo.presentationTimeUs
+                                lastEncodedPtsUs = rebasedInfo.presentationTimeUs
                                 videoSamples.incrementAndGet()
                             }
                             codec.releaseOutputBuffer(index, false)
@@ -193,7 +223,7 @@ class ExactFrameRateRecorderEngine(
     }
 
     @SuppressLint("MissingPermission")
-    private fun startAudioLoop(coordinator: ExactMuxCoordinator) {
+    private fun startAudioLoop(coordinator: EncodedMuxCoordinator) {
         val codec = audioCodec ?: return
         val record = audioRecord ?: return
         audioThread = Thread({
@@ -273,11 +303,11 @@ class ExactFrameRateRecorderEngine(
 
     private fun createSession() {
         val device = camera ?: return
-        val converterSurface = frameConverter?.inputSurface ?: return
+        val recordSurface = encoderSurface?.takeIf { it.isValid } ?: return
         val preview = previewSurface?.takeIf { it.isValid }
         val generation = ++sessionGeneration
         session?.close()
-        val surfaces = mutableListOf(converterSurface).apply { preview?.let(::add) }
+        val surfaces = mutableListOf(recordSurface).apply { preview?.let(::add) }
         @Suppress("DEPRECATION")
         device.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
             override fun onConfigured(newSession: CameraCaptureSession) {
@@ -285,18 +315,19 @@ class ExactFrameRateRecorderEngine(
                 session = newSession
                 runCatching {
                     val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                        addTarget(converterSurface)
+                        addTarget(recordSurface)
                         preview?.takeIf { it.isValid }?.let(::addTarget)
                         CameraRequestControls.apply(cameraManager, config.cameraId, config, this)
+                        dynamicFpsRange(config.cameraId)?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                     }.build()
                     newSession.setRepeatingRequest(request, captureCallback, cameraHandler)
-                }.onFailure { fail("无法开始精确帧率采集: ${it.message}") }
+                }.onFailure { fail("无法开始 MediaCodec 采集: ${it.message}") }
             }
             override fun onConfigureFailed(newSession: CameraCaptureSession) {
                 if (preview != null && running.get() && generation == sessionGeneration) {
                     previewSurface = null
                     createSession()
-                    onNotice("预览不兼容，精确帧率录制继续")
+                    onNotice("预览不兼容，MediaCodec 录制继续")
                 } else if (generation == sessionGeneration) fail("相机不支持当前编码 Surface")
             }
         }, cameraHandler)
@@ -314,12 +345,14 @@ class ExactFrameRateRecorderEngine(
                 exposureNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
                 aperture = result.get(CaptureResult.LENS_APERTURE),
             )
-            val timestamp = result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP) ?: return
+            val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
             if (firstSensorNs == 0L) firstSensorNs = timestamp
             if (lastSensorNs > 0L) {
                 val expected = 1_000_000_000.0 / config.encoderFps
                 val interval = timestamp - lastSensorNs
-                if (interval > expected * 1.5) droppedFrames += max(0L, (interval / expected).toLong() - 1L)
+                if (interval > expected * 1.5) {
+                    droppedFrames += max(0L, (interval / expected).toLong() - 1L)
+                }
             }
             lastSensorNs = timestamp
             capturedFrames++
@@ -365,12 +398,13 @@ class ExactFrameRateRecorderEngine(
             )
             val device = camera ?: return@post
             val activeSession = session ?: return@post
-            val converterSurface = frameConverter?.inputSurface ?: return@post
+            val recordSurface = encoderSurface?.takeIf { it.isValid } ?: return@post
             runCatching {
                 val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                    addTarget(converterSurface)
+                    addTarget(recordSurface)
                     previewSurface?.takeIf { it.isValid }?.let(::addTarget)
                     CameraRequestControls.apply(cameraManager, config.cameraId, config, this)
+                    dynamicFpsRange(config.cameraId)?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                 }.build()
                 activeSession.setRepeatingRequest(request, captureCallback, cameraHandler)
             }.onFailure { onNotice("实时参数更新失败: ${it.message}") }
@@ -388,10 +422,12 @@ class ExactFrameRateRecorderEngine(
                 runCatching { audioRecord?.stop() }
                 videoDrainThread?.join(5_000)
                 audioThread?.join(5_000)
-                releaseCameraAndConverterBlocking()
+                releaseCameraBlocking()
                 releaseCodecs()
                 mux?.finish()
                 mux = null
+                tsOutput?.close()
+                tsOutput = null
                 output?.closeAndPublish()
                 output = null
                 cameraThread.quitSafely()
@@ -403,10 +439,12 @@ class ExactFrameRateRecorderEngine(
     override fun forceRelease() {
         running.set(false)
         runCatching { audioRecord?.stop() }
-        releaseCameraAndConverterBlocking()
+        releaseCameraBlocking()
         releaseCodecs()
         runCatching { mux?.finish() }
         mux = null
+        runCatching { tsOutput?.close() }
+        tsOutput = null
         output?.closeAndPublish()
         output = null
         cameraThread.quitSafely()
@@ -419,12 +457,10 @@ class ExactFrameRateRecorderEngine(
         runCatching { encoderSurface?.release() }; encoderSurface = null
     }
 
-    private fun releaseCameraAndConverterBlocking() {
+    private fun releaseCameraBlocking() {
         val latch = CountDownLatch(1)
         cameraHandler.post {
             closeCamera()
-            runCatching { frameConverter?.release() }
-            frameConverter = null
             latch.countDown()
         }
         latch.await(3, TimeUnit.SECONDS)
@@ -434,14 +470,17 @@ class ExactFrameRateRecorderEngine(
         override fun run() {
             if (!running.get() || startedAtMs == 0L) return
             val elapsed = SystemClock.elapsedRealtime() - startedAtMs
-            val sensorSeconds = if (lastSensorNs > firstSensorNs) (lastSensorNs - firstSensorNs) / 1_000_000_000.0 else 0.0
+            val encodedSeconds = if (lastEncodedPtsUs > firstEncodedPtsUs) {
+                (lastEncodedPtsUs - firstEncodedPtsUs) / 1_000_000.0
+            } else 0.0
             onStats(
                 RecordingStats(
                     elapsedMs = elapsed,
-                    averageFps = if (sensorSeconds > 0) (capturedFrames - 1) / sensorSeconds else 0.0,
+                    averageFps = if (encodedSeconds > 0) (videoSamples.get() - 1) / encodedSeconds else 0.0,
                     droppedFrames = droppedFrames,
-                    segment = 1,
-                    outputPath = output?.displayPath,
+                    segment = segmentIndex,
+                    outputPath = outputPath,
+                    bytesStreamed = tsOutput?.bytesStreamed?.get() ?: 0L,
                     audioLevelDb = audioLevelDb,
                 )
             )
@@ -464,7 +503,7 @@ class ExactFrameRateRecorderEngine(
     private fun validateCameraMode(cameraId: String) {
         val c = cameraManager.getCameraCharacteristics(cameraId)
         val sizes = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            ?.getOutputSizes(android.graphics.SurfaceTexture::class.java).orEmpty()
+            ?.getOutputSizes(MediaCodec::class.java).orEmpty()
         require(sizes.any { it.width == config.width && it.height == config.height }) {
             "镜头不支持 ${config.width}x${config.height} MediaCodec 输入"
         }
@@ -473,6 +512,12 @@ class ExactFrameRateRecorderEngine(
             "镜头不支持 ${config.encoderFps} fps 采集"
         }
     }
+
+    private fun dynamicFpsRange(cameraId: String) = cameraManager.getCameraCharacteristics(cameraId)
+        .get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+        .orEmpty()
+        .filter { it.lower <= config.encoderFps && it.upper >= config.encoderFps }
+        .maxByOrNull { it.upper - it.lower }
 
     private fun closeCamera() {
         sessionGeneration++
@@ -485,11 +530,19 @@ class ExactFrameRateRecorderEngine(
     }
 }
 
-private class ExactMuxCoordinator(
+internal interface EncodedMuxCoordinator {
+    fun setVideoFormat(format: MediaFormat)
+    fun setAudioFormat(format: MediaFormat)
+    fun writeVideo(buffer: ByteBuffer, info: MediaCodec.BufferInfo)
+    fun writeAudio(buffer: ByteBuffer, info: MediaCodec.BufferInfo)
+    fun finish()
+}
+
+private class MediaMuxCoordinator(
     private val muxer: MediaMuxer,
     private val needsAudio: Boolean,
     private val onStarted: () -> Unit,
-) {
+) : EncodedMuxCoordinator {
     private val lock = Any()
     private var videoTrack = -1
     private var audioTrack = -1
@@ -497,18 +550,18 @@ private class ExactMuxCoordinator(
     private var finished = false
     private val pending = mutableListOf<PendingSample>()
 
-    fun setVideoFormat(format: MediaFormat) = synchronized(lock) {
+    override fun setVideoFormat(format: MediaFormat) = synchronized(lock) {
         if (videoTrack < 0) videoTrack = muxer.addTrack(format)
         startIfReady()
     }
 
-    fun setAudioFormat(format: MediaFormat) = synchronized(lock) {
+    override fun setAudioFormat(format: MediaFormat) = synchronized(lock) {
         if (audioTrack < 0) audioTrack = muxer.addTrack(format)
         startIfReady()
     }
 
-    fun writeVideo(buffer: ByteBuffer, info: MediaCodec.BufferInfo) = write(true, buffer, info)
-    fun writeAudio(buffer: ByteBuffer, info: MediaCodec.BufferInfo) = write(false, buffer, info)
+    override fun writeVideo(buffer: ByteBuffer, info: MediaCodec.BufferInfo) = write(true, buffer, info)
+    override fun writeAudio(buffer: ByteBuffer, info: MediaCodec.BufferInfo) = write(false, buffer, info)
 
     private fun write(video: Boolean, buffer: ByteBuffer, info: MediaCodec.BufferInfo) = synchronized(lock) {
         if (finished) return
@@ -532,7 +585,7 @@ private class ExactMuxCoordinator(
         muxer.writeSampleData(if (video) videoTrack else audioTrack, buffer, info)
     }
 
-    fun finish() {
+    override fun finish() {
         synchronized(lock) {
         if (finished) return@synchronized
         finished = true
@@ -540,6 +593,69 @@ private class ExactMuxCoordinator(
         if (started) runCatching { muxer.stop() }
         runCatching { muxer.release() }
         }
+    }
+}
+
+internal class NativeTsMuxCoordinator(
+    private val muxer: NativeMpegTsMuxer,
+    private val output: NativeTsOutput,
+    private val needsAudio: Boolean,
+    private val needsVideo: Boolean = true,
+    private val onStarted: () -> Unit,
+) : EncodedMuxCoordinator {
+    private val lock = Any()
+    private var videoReady = false
+    private var audioReady = false
+    private var started = false
+    private var finished = false
+    private val pending = mutableListOf<PendingSample>()
+
+    override fun setVideoFormat(format: MediaFormat) = synchronized(lock) {
+        if (!videoReady) {
+            muxer.setVideoFormat(format)
+            videoReady = true
+        }
+        startIfReady()
+    }
+
+    override fun setAudioFormat(format: MediaFormat) = synchronized(lock) {
+        audioReady = true
+        startIfReady()
+    }
+
+    override fun writeVideo(buffer: ByteBuffer, info: MediaCodec.BufferInfo) = write(true, buffer, info)
+    override fun writeAudio(buffer: ByteBuffer, info: MediaCodec.BufferInfo) = write(false, buffer, info)
+
+    private fun write(video: Boolean, buffer: ByteBuffer, info: MediaCodec.BufferInfo) = synchronized(lock) {
+        if (finished) return
+        val copy = ByteArray(info.size)
+        buffer.duplicate().apply { position(info.offset); limit(info.offset + info.size) }.get(copy)
+        val savedInfo = MediaCodec.BufferInfo().apply { set(0, info.size, info.presentationTimeUs, info.flags) }
+        if (!started) pending += PendingSample(video, copy, savedInfo)
+        else writeNow(video, ByteBuffer.wrap(copy), savedInfo)
+    }
+
+    private fun startIfReady() {
+        if (started || (needsVideo && !videoReady) || (needsAudio && !audioReady)) return
+        started = true
+        pending.sortedBy { it.info.presentationTimeUs }.forEach {
+            writeNow(it.video, ByteBuffer.wrap(it.data), it.info)
+        }
+        pending.clear()
+        onStarted()
+    }
+
+    private fun writeNow(video: Boolean, buffer: ByteBuffer, info: MediaCodec.BufferInfo) {
+        val keyFrame = video && info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
+        val packets = if (video) muxer.writeVideo(buffer, info) else muxer.writeAudio(buffer, info)
+        output.write(packets, info.presentationTimeUs, keyFrame)
+    }
+
+    override fun finish() = synchronized(lock) {
+        if (finished) return
+        finished = true
+        pending.clear()
+        muxer.close()
     }
 }
 

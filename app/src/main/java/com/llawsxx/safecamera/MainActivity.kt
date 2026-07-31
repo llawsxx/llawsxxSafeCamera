@@ -582,12 +582,12 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 }
                 if (config.hasVideo) {
                     ToggleLine(
-                        "精确帧率引擎",
+                        "MediaCodec 直录引擎",
                         config.exactFrameRateMode,
                         !recording && !config.highSpeedMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O,
                     ) { enabled -> config = config.copy(exactFrameRateMode = enabled) }
                     Text(
-                        "使用 Camera2、OpenGL 和 MediaCodec 生成严格时间轴；支持整数和分数帧率，仅支持 Android 8+、MP4、单段录制。",
+                        "Camera2 直接连接 MediaCodec，收到的每帧都按原始时间戳输出，不主动丢帧或补帧；帧率可动态变化。MP4 仅支持单段，MPEG-TS 由内置 native muxer 封装。",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     selectedCamera?.let { camera ->
@@ -663,7 +663,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 config = config.copy(fpsNumerator = it, fpsDenominator = 1)
                             }
                         }
-                        Labeled("常用精确帧率") {
+                        Labeled("常用帧率提示") {
                             ChoiceRow(
                                 listOf(
                                     60_000 to 1_001,
@@ -687,7 +687,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                         )
                         if (config.exactEngineRequested) {
                             Text(
-                                "精确 MediaCodec 模式：按真实传感器时间均匀丢帧/补帧，音频保持实时速度。",
+                                "MediaCodec 直录模式：Camera2 收到什么帧就编码什么帧，保留动态帧间隔；音频保持实时速度。",
                                 color = MaterialTheme.colorScheme.secondary,
                                 style = MaterialTheme.typography.bodySmall,
                             )
@@ -715,7 +715,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                         }
                         Text(
                             (if (config.exactEngineRequested) {
-                                "Camera2 采集 ${config.encoderFps} fps；OpenGL 实时转换为严格 ${config.fpsNumerator}/${config.fpsDenominator}（${config.requestedFps.format3()} fps）"
+                                "Camera2 采集目标约 ${config.encoderFps} fps；MediaCodec 直录实际收到的动态帧率"
                             } else {
                                 "Camera2 / MediaRecorder 提交 ${config.encoderFps} fps"
                             }) + if (fpsSupported) "" else "（当前镜头范围未声明支持）",
@@ -759,9 +759,10 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     val containers = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         ContainerFormat.entries
                     } else listOf(ContainerFormat.MP4)
-                    ChoiceRow(containers, config.container, { it.label }, !recording && !config.exactEngineRequested) {
+                    ChoiceRow(containers, config.container, { it.label }, !recording) {
                         config = config.copy(
                             container = it,
+                            segmentMinutes = if (it == ContainerFormat.MP4 && config.exactEngineRequested) 0 else config.segmentMinutes,
                             streamEnabled = config.streamEnabled && it == ContainerFormat.MPEG_TS,
                         )
                     }
@@ -771,11 +772,12 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                         config = config.copy(videoCodec = it)
                     }
                 }
-                NumberField("分段时长（分钟，0 为不分段）", config.segmentMinutes.toString(), !recording && !config.exactEngineRequested) {
+                NumberField("分段时长（分钟，0 为不分段）", config.segmentMinutes.toString(), !recording &&
+                    (!config.exactEngineRequested || config.container == ContainerFormat.MPEG_TS)) {
                     config = config.copy(segmentMinutes = it.toIntOrNull()?.coerceIn(0, 720) ?: 0)
                 }
                 if (config.container == ContainerFormat.MPEG_TS) {
-                    Text("TS 通过管道持续写入，切段不会重启相机；文件中断后通常仍可恢复到最后一个完整 TS 包。", style = MaterialTheme.typography.bodySmall)
+                    Text("普通视频和纯音频 TS 均由内置 NDK muxer 封装；视频在关键帧边界切段，音频在 PAT/PMT 与完整 AAC PES 边界切段。受限高速模式仍使用系统封装。", style = MaterialTheme.typography.bodySmall)
                 }
             }
 
@@ -829,7 +831,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 ToggleLine(
                     "录制同时 UDP 推流",
                     config.streamEnabled,
-                    !recording && !config.exactEngineRequested && config.container == ContainerFormat.MPEG_TS,
+                    !recording && config.container == ContainerFormat.MPEG_TS,
                 ) { config = config.copy(streamEnabled = it) }
                 if (config.streamEnabled) {
                     OutlinedTextField(
@@ -1704,7 +1706,10 @@ private fun CompactValueSlider(
             valueRange = valueRange,
             steps = steps,
             enabled = enabled,
-            modifier = Modifier.fillMaxWidth().height(24.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(24.dp)
+                .padding(horizontal = 16.dp),
         )
         if (dragging) {
             Text(

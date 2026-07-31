@@ -5,6 +5,7 @@ plugins {
 
 android {
     namespace = "com.llawsxx.safecamera"
+    ndkVersion = "30.0.15729638"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -19,6 +20,11 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        externalNativeBuild {
+            cmake {
+                arguments += "-DANDROID_STL=none"
+            }
+        }
     }
 
     buildTypes {
@@ -36,6 +42,12 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "4.1.2"
+        }
     }
 }
 
