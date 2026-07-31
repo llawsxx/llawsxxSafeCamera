@@ -24,6 +24,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.aspectRatio
@@ -1141,7 +1142,7 @@ private fun FullscreenRecorder(
         // Keep the TextureView responsible for rendering, but handle taps in a Compose
         // overlay so the embedded Android view cannot consume the toggle gesture.
         Box(
-            modifier = fullscreenPreviewModifier.clickable {
+            modifier = fullscreenPreviewModifier.clickable(indication = null, interactionSource = remember { MutableInteractionSource() } ) {
                 controlsVisible = !controlsVisible
             },
         )
@@ -1557,8 +1558,20 @@ private fun QuickCameraControls(
                                 FullscreenControl.WB -> { selected = control; whiteBalanceExpanded = true }
                                 FullscreenControl.APERTURE -> { selected = control; apertureExpanded = true }
                                 FullscreenControl.FOCUS -> if (supportsManualFocus) {
-                                    selected = control
-                                    onChange(config.copy(focusMode = if (config.focusMode == FocusMode.MANUAL) FocusMode.CONTINUOUS else FocusMode.MANUAL))
+                                    if (config.focusMode == FocusMode.MANUAL && selected != control) {
+                                        selected = control
+                                    } else {
+                                        selected = control
+                                        onChange(
+                                            config.copy(
+                                                focusMode = if (config.focusMode == FocusMode.MANUAL) {
+                                                    FocusMode.CONTINUOUS
+                                                } else {
+                                                    FocusMode.MANUAL
+                                                },
+                                            ),
+                                        )
+                                    }
                                 }
                                 else -> selected = control
                             }
@@ -1717,36 +1730,29 @@ private fun CompactValueSlider(
     valueLabel: (Float) -> String,
     steps: Int = 0,
 ) {
-    var dragging by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxWidth().height(24.dp), contentAlignment = Alignment.Center) {
         Slider(
             value = value,
-            onValueChange = {
-                dragging = true
-                onValueChange(it)
-            },
-            onValueChangeFinished = { dragging = false },
+            onValueChange = onValueChange,
             valueRange = valueRange,
             steps = steps,
             enabled = enabled,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(24.dp)
-                .padding(horizontal = 16.dp),
+                .padding(start = 88.dp, end = 16.dp),
         )
-        if (dragging) {
-            Text(
-                text = valueLabel(value),
-                color = MaterialTheme.colorScheme.inverseOnSurface,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .offset(y = (-20).dp)
-                    .background(MaterialTheme.colorScheme.inverseSurface, MaterialTheme.shapes.extraSmall)
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
-                maxLines = 1,
-            )
-        }
+        Text(
+            text = valueLabel(value),
+            color = MaterialTheme.colorScheme.inverseOnSurface,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(start = 4.dp)
+                .background(MaterialTheme.colorScheme.inverseSurface, MaterialTheme.shapes.extraSmall)
+                .padding(horizontal = 8.dp, vertical = 2.dp),
+            maxLines = 1,
+        )
     }
 }
 
