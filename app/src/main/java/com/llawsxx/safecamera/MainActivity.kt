@@ -295,12 +295,11 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
     LaunchedEffect(config) { ConfigPreferences.save(context, config) }
     LaunchedEffect(config.exactEngineRequested) {
         if (config.exactEngineRequested && config.hasVideo) {
-            config = config.copy(
-                container = ContainerFormat.MP4,
-                segmentMinutes = 0,
-                streamEnabled = false,
+            val normalized = config.copy(
+                segmentMinutes = if (config.container == ContainerFormat.MP4) 0 else config.segmentMinutes,
                 highSpeedMode = false,
             )
+            if (normalized != config) config = normalized
         }
     }
     LaunchedEffect(config.highSpeedMode) {
