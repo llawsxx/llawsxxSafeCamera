@@ -239,6 +239,7 @@ class CameraRecorderEngine(
             iso = updated.iso,
             exposureNs = updated.exposureNs,
             aperture = updated.aperture,
+            exposureCompensation = updated.exposureCompensation,
             awbMode = updated.awbMode,
             focusMode = updated.focusMode,
             focusDistanceDiopters = updated.focusDistanceDiopters,

@@ -66,6 +66,12 @@ object CameraRequestControls {
                 ?.let { builder.set(CaptureRequest.LENS_APERTURE, it) }
         } else {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+            characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)?.let { range ->
+                builder.set(
+                    CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION,
+                    config.exposureCompensation.coerceIn(range.lower, range.upper),
+                )
+            }
         }
 
         val awbModes = characteristics.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES) ?: intArrayOf()

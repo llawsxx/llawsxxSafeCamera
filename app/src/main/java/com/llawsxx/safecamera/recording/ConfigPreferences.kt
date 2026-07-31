@@ -35,6 +35,7 @@ object ConfigPreferences {
             iso = p.getInt("iso", 400),
             exposureNs = p.getLong("exposureNs", 10_000_000L),
             aperture = p.getString("aperture", null)?.toFloatOrNull(),
+            exposureCompensation = p.getInt("exposureCompensation", 0),
             awbMode = p.getInt("awbMode", android.hardware.camera2.CameraCharacteristics.CONTROL_AWB_MODE_AUTO),
             focusMode = enumValue(p.getString("focusMode", null), FocusMode.CONTINUOUS),
             focusDistanceDiopters = p.getFloat("focusDistanceDiopters", 0f).coerceAtLeast(0f),
@@ -77,6 +78,7 @@ object ConfigPreferences {
             .putInt("iso", c.iso)
             .putLong("exposureNs", c.exposureNs)
             .putString("aperture", c.aperture?.toString())
+            .putInt("exposureCompensation", c.exposureCompensation)
             .putInt("awbMode", c.awbMode)
             .putString("focusMode", c.focusMode.name)
             .putFloat("focusDistanceDiopters", c.focusDistanceDiopters)

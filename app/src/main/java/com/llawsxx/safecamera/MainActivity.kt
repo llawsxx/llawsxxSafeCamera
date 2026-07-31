@@ -254,6 +254,9 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 iso = camera.isoRange?.let { config.iso.coerceIn(it.lower, it.upper) } ?: config.iso,
                 exposureNs = camera.exposureRange?.let { config.exposureNs.coerceIn(it.lower, it.upper) } ?: config.exposureNs,
                 aperture = config.aperture?.takeIf(camera.apertures::contains) ?: camera.apertures.firstOrNull(),
+                exposureCompensation = camera.exposureCompensationRange?.let {
+                    config.exposureCompensation.coerceIn(it.lower, it.upper)
+                } ?: 0,
                 opticalStabilization = config.opticalStabilization && camera.oisAvailable,
                 highSpeedMode = config.highSpeedMode && camera.highSpeedModes.any {
                     it.width == size.first && it.height == size.second && config.encoderFps in it.minFps..it.maxFps
@@ -322,6 +325,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.iso,
         config.exposureNs,
         config.aperture,
+        config.exposureCompensation,
         config.awbMode,
         config.focusMode,
         config.focusDistanceDiopters,
@@ -366,6 +370,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.iso,
         config.exposureNs,
         config.aperture,
+        config.exposureCompensation,
         config.awbMode,
         config.focusMode,
         config.focusDistanceDiopters,
@@ -1424,6 +1429,21 @@ private fun CompactExposureControls(
                 }
             }
         }
+        camera.exposureCompensationRange?.let { range ->
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "曝光补偿 ${exposureCompensationLabel(camera, config.exposureCompensation)}",
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                Slider(
+                    value = config.exposureCompensation.coerceIn(range.lower, range.upper).toFloat(),
+                    onValueChange = { onChange(config.copy(exposureCompensation = it.toInt())) },
+                    valueRange = range.lower.toFloat()..range.upper.toFloat(),
+                    steps = (range.upper - range.lower - 1).coerceAtLeast(0),
+                    enabled = enabled && !config.manualExposure,
+                )
+            }
+        }
         Column(Modifier.weight(1f)) {
             Text("白平衡", style = MaterialTheme.typography.labelMedium)
             ChoiceRow(camera.awbModes, config.awbMode, ::awbLabel, enabled) {
@@ -1515,6 +1535,7 @@ private fun QuickCameraControls(
                         enabled = enabled && when (control) {
                             FullscreenControl.FOCUS -> supportsManualFocus
                             FullscreenControl.APERTURE -> config.manualExposure && camera.apertures.isNotEmpty()
+                            FullscreenControl.EV -> !config.manualExposure && camera.exposureCompensationRange != null
                             else -> true
                         },
                         modifier = Modifier.fillMaxWidth().height(28.dp),
@@ -1525,6 +1546,7 @@ private fun QuickCameraControls(
                                 FullscreenControl.ISO -> "ISO $displayedIso"
                                 FullscreenControl.SHUTTER -> formatShutter(displayedExposureNs)
                                 FullscreenControl.APERTURE -> displayedAperture?.let { "f/${it.format1()}" } ?: "光圈"
+                                FullscreenControl.EV -> exposureCompensationLabel(camera, config.exposureCompensation)
                                 FullscreenControl.WB -> awbLabel(config.awbMode)
                                 FullscreenControl.FOCUS -> if (config.focusMode == FocusMode.MANUAL) "MF" else "AF"
                             },
@@ -1575,6 +1597,16 @@ private fun QuickCameraControls(
                         modifier = Modifier.fillMaxWidth().height(22.dp),
                     )
                 }
+                FullscreenControl.EV -> camera.exposureCompensationRange?.let { range ->
+                    Slider(
+                        value = config.exposureCompensation.coerceIn(range.lower, range.upper).toFloat(),
+                        onValueChange = { onChange(config.copy(exposureCompensation = it.toInt())) },
+                        valueRange = range.lower.toFloat()..range.upper.toFloat(),
+                        steps = (range.upper - range.lower - 1).coerceAtLeast(0),
+                        enabled = enabled && !config.manualExposure,
+                        modifier = Modifier.fillMaxWidth().height(22.dp),
+                    )
+                }
                 FullscreenControl.APERTURE, FullscreenControl.WB -> Unit
                 FullscreenControl.FOCUS -> FocusControls(camera, config, enabled, onChange, compact = true, lightText = lightText)
             }
@@ -1582,7 +1614,7 @@ private fun QuickCameraControls(
     }
 }
 
-private enum class FullscreenControl { ISO, SHUTTER, APERTURE, WB, FOCUS }
+private enum class FullscreenControl { ISO, SHUTTER, APERTURE, EV, WB, FOCUS }
 
 @Composable
 private fun FocusControls(
@@ -1723,6 +1755,11 @@ private data class MicrophoneChoice(val id: Int?, val label: String)
 private fun Float.format1(): String = String.format(Locale.US, "%.1f", this)
 private fun Double.format1(): String = String.format(Locale.US, "%.1f", this)
 private fun Double.format3(): String = String.format(Locale.US, "%.3f", this)
+private fun exposureCompensationLabel(camera: CameraInfo, index: Int): String {
+    val step = camera.exposureCompensationStep?.toFloat() ?: 0f
+    val ev = index * step
+    return "EV ${if (ev > 0f) "+" else ""}${ev.format1()}"
+}
 private fun formatShutter(exposureNs: Long): String {
     val seconds = exposureNs.coerceAtLeast(1L) / 1_000_000_000.0
     return if (seconds < 1.0) {
