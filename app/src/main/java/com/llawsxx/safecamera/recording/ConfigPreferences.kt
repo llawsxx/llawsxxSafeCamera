@@ -12,6 +12,9 @@ object ConfigPreferences {
             cameraId = p.getString("cameraId", "").orEmpty(),
             width = p.getInt("width", 1920),
             height = p.getInt("height", 1080),
+            cropEnabled = p.getBoolean("cropEnabled", false),
+            cropWidth = p.getInt("cropWidth", 1920),
+            cropHeight = p.getInt("cropHeight", 1080),
             fpsNumerator = p.getInt("fpsNumerator", p.getInt("fps", 30)),
             fpsDenominator = p.getInt("fpsDenominator", 1).coerceAtLeast(1),
             exactFrameRateMode = p.getBoolean("exactFrameRateMode", false),
@@ -30,7 +33,6 @@ object ConfigPreferences {
             segmentMinutes = p.getInt("segmentMinutes", 10),
             orientation = enumValue(p.getString("orientation", null), OrientationMode.FOLLOW_SENSOR),
             previewMode = enumValue(p.getString("previewMode", null), PreviewMode.FULL),
-            previewAspect = enumValue(p.getString("previewAspect", null), PreviewAspect.SOURCE),
             previewLayout = enumValue(p.getString("previewLayout", null), PreviewLayout.STACKED),
             previewRotationDegrees = p.getInt("previewRotationDegrees", 0).let { ((it % 360) + 360) % 360 },
             previewMirror = p.getBoolean("previewMirror", false),
@@ -64,6 +66,9 @@ object ConfigPreferences {
             .putString("cameraId", c.cameraId)
             .putInt("width", c.width)
             .putInt("height", c.height)
+            .putBoolean("cropEnabled", c.cropEnabled)
+            .putInt("cropWidth", c.cropWidth)
+            .putInt("cropHeight", c.cropHeight)
             .putInt("fpsNumerator", c.fpsNumerator)
             .putInt("fpsDenominator", c.fpsDenominator)
             .putBoolean("exactFrameRateMode", c.exactFrameRateMode)
@@ -82,7 +87,6 @@ object ConfigPreferences {
             .putInt("segmentMinutes", c.segmentMinutes)
             .putString("orientation", c.orientation.name)
             .putString("previewMode", c.previewMode.name)
-            .putString("previewAspect", c.previewAspect.name)
             .putString("previewLayout", c.previewLayout.name)
             .putInt("previewRotationDegrees", c.previewRotationDegrees)
             .putBoolean("previewMirror", c.previewMirror)

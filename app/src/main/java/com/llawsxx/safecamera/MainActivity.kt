@@ -3,7 +3,6 @@ package com.llawsxx.safecamera
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
-import android.content.res.Configuration
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraCharacteristics
@@ -15,7 +14,6 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.Surface
-import android.view.SurfaceView
 import android.os.StatFs
 import android.os.Environment
 import androidx.activity.ComponentActivity
@@ -29,9 +27,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
@@ -79,12 +75,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -104,7 +102,6 @@ import com.llawsxx.safecamera.recording.ConfigPreferences
 import com.llawsxx.safecamera.recording.IdlePreviewCamera
 import com.llawsxx.safecamera.recording.FocusMode
 import com.llawsxx.safecamera.recording.OrientationMode
-import com.llawsxx.safecamera.recording.PreviewAspect
 import com.llawsxx.safecamera.recording.PreviewLayout
 import com.llawsxx.safecamera.recording.PreviewMode
 import com.llawsxx.safecamera.recording.RecorderController
@@ -155,7 +152,6 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
     val context = LocalContext.current
-    val configuration = LocalConfiguration.current
     val view = LocalView.current
     val state by RecorderController.state.collectAsState()
     val liveExposure by RecorderController.exposure.collectAsState()
@@ -185,17 +181,10 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         onDispose { view.keepScreenOn = false }
     }
 
-    // CameraPreviewView receives the camera stream with sensor orientation already represented
-    // by its buffer geometry. Display rotation must use the same inverse correction for both
-    // lens facings; mirroring is applied separately and must not reverse the rotation direction.
-    val displayCorrection = -currentDisplayRotation
-    val previewRotation = normalizedRotation(config.previewRotationDegrees + displayCorrection)
-    // Camera2/SurfaceTexture already presents the sensor-oriented image. The preview frame's
-    // aspect therefore follows the current window orientation, plus only the user's rotation.
-    val previewSourceRotation = normalizedRotation(
-        (if (configuration.orientation == Configuration.ORIENTATION_PORTRAIT) 90 else 0) +
-            config.previewRotationDegrees,
-    )
+    val userRotation = config.previewRotationDegrees
+    val sensorRotation = selectedCamera?.sensorOrientation ?: 0
+    val displayRotation = currentDisplayRotation
+
     val onPreviewSurface: (Surface?) -> Unit = { surface ->
         Log.d("PreviewDebug","surface is null = ${if (surface == null) "true" else "false"}")
         if (surface != null) {
@@ -253,7 +242,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
     LaunchedEffect(Unit) {
         val queriedCameras = CameraCapabilities.query(context)
         (queriedCameras.firstOrNull { it.id == config.cameraId } ?: queriedCameras.firstOrNull())?.let { camera ->
-            val savedSizeSupported = camera.sizes.any { it.width == config.width && it.height == config.height }
+            val savedSizes = if (config.cropEnabled) camera.previewSizes else camera.sizes
+            val savedSizeSupported = savedSizes.any { it.width == config.width && it.height == config.height }
             val size = if (savedSizeSupported) config.width to config.height else preferredSize(camera)
             val savedFpsSupported = camera.fpsRanges.any { it.lower <= config.encoderFps && it.upper >= config.encoderFps }
             config = config.copy(
@@ -390,6 +380,9 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.cameraId,
         config.width,
         config.height,
+        config.cropEnabled,
+        config.cropWidth,
+        config.cropHeight,
         config.fpsNumerator,
         config.fpsDenominator,
         config.manualExposure,
@@ -499,8 +492,9 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             config = config,
             camera = selectedCamera,
             liveExposure = liveExposure?.takeIf { it.cameraId == config.cameraId },
-            previewRotation = previewRotation,
-            previewSourceRotation = previewSourceRotation,
+            sensorRotation = sensorRotation,
+            displayRotation = displayRotation,
+            userRotation = userRotation,
             previewMirror = config.previewMirror,
             previewResumeEpoch = previewResumeEpoch,
             visible = config.previewMode == PreviewMode.FULL,
@@ -521,8 +515,9 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             cameras = cameras,
             camera = selectedCamera,
             liveExposure = liveExposure?.takeIf { it.cameraId == config.cameraId },
-            previewRotation = previewRotation,
-            previewSourceRotation = previewSourceRotation,
+            sensorRotation = sensorRotation,
+            displayRotation = displayRotation,
+            userRotation = userRotation,
             previewResumeEpoch = previewResumeEpoch,
             permissionError = permissionError,
             onConfigChange = { config = it },
@@ -602,7 +597,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 if (config.hasVideo) {
                     val exactEngineForced = config.dynamicRange != VideoDynamicRange.SDR ||
                         config.fpsDenominator != 1 || config.customColorMetadata ||
-                        config.container == ContainerFormat.MPEG_TS
+                        config.container == ContainerFormat.MPEG_TS || config.cropEnabled
                     ToggleLine(
                         "MediaCodec 直录引擎",
                         config.exactEngineRequested,
@@ -617,7 +612,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     }
                     if (!(exactEngineForced && config.container == ContainerFormat.MPEG_TS)) Text(
                         if (exactEngineForced) {
-                            "当前 HDR、非整数帧率或自定义颜色元数据要求使用 MediaCodec 直录引擎，开关保持开启。"
+                            "当前 HDR、非整数帧率、自定义颜色元数据或中心裁切要求使用 MediaCodec 直录引擎，开关保持开启。"
                         } else {
                             "Camera2 直接连接 MediaCodec，收到的每帧都按原始时间戳输出，不主动丢帧或补帧；帧率可动态变化。MP4 仅支持单段，MPEG-TS 由内置 native muxer 封装。"
                         },
@@ -627,7 +622,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                         ToggleLine(
                             "高速录像模式",
                             config.highSpeedMode,
-                            !recording && camera.highSpeedModes.isNotEmpty(),
+                            !recording && !config.cropEnabled && camera.highSpeedModes.isNotEmpty(),
                         ) { enabled ->
                             val mode = camera.highSpeedModes.firstOrNull()
                             config = if (enabled && mode != null) config.copy(
@@ -662,7 +657,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                     camera.dynamicRanges,
                                     config.dynamicRange.takeIf { it in camera.dynamicRanges },
                                     { it.label },
-                                    !recording && !config.highSpeedMode,
+                                    !recording && !config.highSpeedMode && !config.cropEnabled,
                                 ) { range ->
                                     config = if (range == VideoDynamicRange.SDR) {
                                         config.copy(
@@ -702,10 +697,11 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
-                        Labeled("分辨率") {
+                        Labeled(if (config.cropEnabled) "采集分辨率" else "分辨率") {
+                            val captureSizes = if (config.cropEnabled) camera.previewSizes else camera.sizes
                             ChoiceRow(
-                                camera.sizes,
-                                camera.sizes.firstOrNull { it.width == config.width && it.height == config.height },
+                                captureSizes,
+                                captureSizes.firstOrNull { it.width == config.width && it.height == config.height },
                                 { "${it.width}×${it.height}" },
                                 !recording && !config.highSpeedMode,
                             ) { config = config.copy(width = it.width, height = it.height) }
@@ -728,9 +724,50 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 modifier = Modifier.weight(1f),
                             )
                         }
-                        val sizeSupported = camera.sizes.any { it.width == config.width && it.height == config.height }
+                        val declaredSizes = if (config.cropEnabled) camera.previewSizes else camera.sizes
+                        val sizeSupported = declaredSizes.any { it.width == config.width && it.height == config.height }
                         if (!sizeSupported) {
                             Text("当前镜头未声明支持该尺寸，不能开始录制", color = MaterialTheme.colorScheme.error)
+                        }
+                        ToggleLine(
+                            "中心裁切录制",
+                            config.cropEnabled,
+                            !recording && !config.highSpeedMode &&
+                                config.dynamicRange == VideoDynamicRange.SDR &&
+                                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O,
+                        ) { enabled ->
+                            config = config.copy(
+                                cropEnabled = enabled,
+                                cropWidth = config.cropWidth.coerceAtMost(config.width).coerceAtLeast(16) / 2 * 2,
+                                cropHeight = config.cropHeight.coerceAtMost(config.height).coerceAtLeast(16) / 2 * 2,
+                            )
+                        }
+                        if (config.cropEnabled) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                DeferredIntField(
+                                    value = config.cropWidth,
+                                    onCommit = { config = config.copy(cropWidth = it) },
+                                    label = { Text("输出宽") },
+                                    enabled = !recording,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                DeferredIntField(
+                                    value = config.cropHeight,
+                                    onCommit = { config = config.copy(cropHeight = it) },
+                                    label = { Text("输出高") },
+                                    enabled = !recording,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            Text(
+                                if (config.cropSizeValid) {
+                                    "从 ${config.width}×${config.height} 采集画面的正中心输出 ${config.cropWidth}×${config.cropHeight}，不缩放。"
+                                } else {
+                                    "裁切宽高必须为偶数，且不能超过 ${config.width}×${config.height}。"
+                                },
+                                color = if (config.cropSizeValid) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
                         }
                         Labeled("帧率") {
                             val fpsValues = camera.fpsRanges
@@ -965,8 +1002,9 @@ private fun MainRecorderScreen(
     cameras: List<CameraInfo>,
     camera: CameraInfo?,
     liveExposure: CameraExposureState?,
-    previewRotation: Int,
-    previewSourceRotation: Int,
+    sensorRotation: Int,
+    displayRotation: Int,
+    userRotation: Int,
     previewResumeEpoch: Int,
     permissionError: String?,
     onConfigChange: (RecordingConfig) -> Unit,
@@ -1029,8 +1067,9 @@ private fun MainRecorderScreen(
                 RemainingSpacePreview(
                     config = config,
                     camera = camera,
-                    previewRotation = previewRotation,
-                    previewSourceRotation = previewSourceRotation,
+                    sensorRotation = sensorRotation,
+                    displayRotation = displayRotation,
+                    userRotation = userRotation,
                     previewResumeEpoch = previewResumeEpoch,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                     onSurface = onSurface,
@@ -1052,8 +1091,9 @@ private fun MainRecorderScreen(
 private fun RemainingSpacePreview(
     config: RecordingConfig,
     camera: CameraInfo,
-    previewRotation: Int,
-    previewSourceRotation: Int,
+    sensorRotation: Int,
+    displayRotation: Int,
+    userRotation: Int,
     previewResumeEpoch: Int,
     modifier: Modifier,
     onSurface: (Surface?) -> Unit,
@@ -1061,33 +1101,29 @@ private fun RemainingSpacePreview(
     onConfigChange: (RecordingConfig) -> Unit,
 ) {
     val previewBuffer = previewBufferSize(camera, config)
-    BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
-        val selectedAspect = previewAspect(config, previewSourceRotation)
-        val availableAspect = maxWidth.value / maxHeight.value.coerceAtLeast(0.001f)
-        val previewModifier = if (selectedAspect >= availableAspect) {
-            Modifier.width(maxWidth).height(maxWidth / selectedAspect)
-        } else {
-            Modifier.width(maxHeight * selectedAspect).height(maxHeight)
-        }
+    Box(modifier, contentAlignment = Alignment.Center) {
+        val previewModifier = Modifier.fillMaxSize()
         PreviewPanel(
             visible = config.previewMode == PreviewMode.FULL,
             hasVideo = true,
-            aspect = selectedAspect,
             bufferWidth = previewBuffer.first,
             bufferHeight = previewBuffer.second,
-            rotation = previewRotation,
+            sensorRotation = sensorRotation,
+            displayRotation = displayRotation,
+            userRotation = userRotation,
             mirror = config.previewMirror,
             resumeEpoch = previewResumeEpoch,
             modifier = previewModifier,
             onSurface = onSurface,
             onBufferReady = onBufferReady,
-            fillBounds = true,
-            zoom = config.mfAssistMagnification,
+            assistZoom = config.mfAssistMagnification,
+            cropFrameWidthFraction = cropFrameFractions(config).first,
+            cropFrameHeightFraction = cropFrameFractions(config).second,
             centerX = config.mfAssistCenterX,
             centerY = config.mfAssistCenterY,
             onPan = { dx, dy -> onConfigChange(config.copy(
-                mfAssistCenterX = boundedAssistCenter(config.mfAssistCenterX + dx / config.mfAssistMagnification.coerceAtLeast(1), config.mfAssistMagnification),
-                mfAssistCenterY = boundedAssistCenter(config.mfAssistCenterY + dy / config.mfAssistMagnification.coerceAtLeast(1), config.mfAssistMagnification),
+                mfAssistCenterX = boundedAssistCenter(config.mfAssistCenterX + dx, config.mfAssistMagnification),
+                mfAssistCenterY = boundedAssistCenter(config.mfAssistCenterY + dy, config.mfAssistMagnification),
             )) },
         )
         Row(
@@ -1107,6 +1143,12 @@ private fun RemainingSpacePreview(
             ) { Text("+") }
         }
         if (config.mfAssistMagnification > 1) {
+            val overviewCenter = sourcePointToDisplay(
+                x = config.mfAssistCenterX,
+                y = config.mfAssistCenterY,
+                rotationDegrees = sensorRotation - displayRotation + userRotation,
+                mirrored = config.previewMirror,
+            )
             Box(
                 Modifier.align(Alignment.BottomEnd).padding(8.dp).size(74.dp)
                     .background(Color(0xAA111416), RectangleShape)
@@ -1115,8 +1157,8 @@ private fun RemainingSpacePreview(
                 Box(
                     Modifier.align(Alignment.Center)
                         .offset(
-                            x = ((config.mfAssistCenterX - 0.5f) * 74f).dp,
-                            y = ((config.mfAssistCenterY - 0.5f) * 74f).dp,
+                            x = ((overviewCenter.first - 0.5f) * 74f).dp,
+                            y = ((overviewCenter.second - 0.5f) * 74f).dp,
                         )
                         .size(74.dp / config.mfAssistMagnification.toFloat())
                         .background(Color.Transparent, RectangleShape)
@@ -1144,9 +1186,6 @@ private fun PreviewToolbar(
         CompactChoice("镜头", cameras, selectedCamera, { it.displayName }, true, Modifier.width(116.dp), onCameraSelect)
         CompactChoice("布局", PreviewLayout.entries, config.previewLayout, { it.label }, true, Modifier.width(100.dp)) {
             onConfigChange(config.copy(previewLayout = it))
-        }
-        CompactChoice("比例", PreviewAspect.entries, config.previewAspect, { it.label }, true, Modifier.width(105.dp)) {
-            onConfigChange(config.copy(previewAspect = it))
         }
         CompactToggle(
             title = "预览",
@@ -1227,8 +1266,9 @@ private fun FullscreenRecorder(
     config: RecordingConfig,
     camera: CameraInfo?,
     liveExposure: CameraExposureState?,
-    previewRotation: Int,
-    previewSourceRotation: Int,
+    sensorRotation: Int,
+    displayRotation: Int,
+    userRotation: Int,
     previewMirror: Boolean,
     previewResumeEpoch: Int,
     visible: Boolean,
@@ -1242,33 +1282,29 @@ private fun FullscreenRecorder(
     val context = LocalContext.current
     val previewBuffer = previewBufferSize(camera, config)
     var controlsVisible by remember { mutableStateOf(true) }
-    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
-        val selectedAspect = previewAspect(config, previewSourceRotation)
-        val availableAspect = maxWidth.value / maxHeight.value.coerceAtLeast(0.001f)
-        val fullscreenPreviewModifier = if (selectedAspect >= availableAspect) {
-            Modifier.width(maxWidth).height(maxWidth / selectedAspect)
-        } else {
-            Modifier.width(maxHeight * selectedAspect).height(maxHeight)
-        }
+    Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+        val fullscreenPreviewModifier = Modifier.fillMaxSize()
         PreviewPanel(
             visible = visible,
             hasVideo = true,
-            aspect = selectedAspect,
             bufferWidth = previewBuffer.first,
             bufferHeight = previewBuffer.second,
-            rotation = previewRotation,
+            sensorRotation = sensorRotation,
+            displayRotation = displayRotation,
+            userRotation = userRotation,
             mirror = previewMirror,
             resumeEpoch = previewResumeEpoch,
             modifier = fullscreenPreviewModifier,
             onSurface = onSurface,
             onBufferReady = onBufferReady,
-            fillBounds = true,
-            zoom = config.mfAssistMagnification,
+            assistZoom = config.mfAssistMagnification,
+            cropFrameWidthFraction = cropFrameFractions(config).first,
+            cropFrameHeightFraction = cropFrameFractions(config).second,
             centerX = config.mfAssistCenterX,
             centerY = config.mfAssistCenterY,
             onPan = { dx, dy -> onConfigChange(config.copy(
-                mfAssistCenterX = boundedAssistCenter(config.mfAssistCenterX + dx / config.mfAssistMagnification.coerceAtLeast(1), config.mfAssistMagnification),
-                mfAssistCenterY = boundedAssistCenter(config.mfAssistCenterY + dy / config.mfAssistMagnification.coerceAtLeast(1), config.mfAssistMagnification),
+                mfAssistCenterX = boundedAssistCenter(config.mfAssistCenterX + dx, config.mfAssistMagnification),
+                mfAssistCenterY = boundedAssistCenter(config.mfAssistCenterY + dy, config.mfAssistMagnification),
             )) },
             onTap = { controlsVisible = !controlsVisible },
         )
@@ -1299,6 +1335,12 @@ private fun FullscreenRecorder(
             }
         }
         if (controlsVisible && config.mfAssistMagnification > 1) {
+            val overviewCenter = sourcePointToDisplay(
+                x = config.mfAssistCenterX,
+                y = config.mfAssistCenterY,
+                rotationDegrees = sensorRotation - displayRotation + userRotation,
+                mirrored = previewMirror,
+            )
             Box(
                 Modifier.align(Alignment.BottomEnd).padding(12.dp).size(74.dp)
                     .background(Color(0xAA111416), RectangleShape)
@@ -1307,8 +1349,8 @@ private fun FullscreenRecorder(
                 Box(
                     Modifier.align(Alignment.Center)
                         .offset(
-                            x = ((config.mfAssistCenterX - 0.5f) * 74f).dp,
-                            y = ((config.mfAssistCenterY - 0.5f) * 74f).dp,
+                            x = ((overviewCenter.first - 0.5f) * 74f).dp,
+                            y = ((overviewCenter.second - 0.5f) * 74f).dp,
                         )
                         .size(74.dp / config.mfAssistMagnification.toFloat())
                         .border(1.dp, Color.White),
@@ -1337,23 +1379,25 @@ private fun FullscreenRecorder(
 private fun PreviewPanel(
     visible: Boolean,
     hasVideo: Boolean,
-    aspect: Float,
     bufferWidth: Int,
     bufferHeight: Int,
-    rotation: Int,
+    sensorRotation: Int,
+    displayRotation: Int,
+    userRotation: Int,
     mirror: Boolean,
     resumeEpoch: Int,
     modifier: Modifier,
     onSurface: (Surface?) -> Unit,
     onBufferReady: (Int) -> Unit,
     onTap: (() -> Unit)? = null,
-    fillBounds: Boolean = false,
-    zoom: Int = 1,
+    assistZoom: Int = 1,
+    cropFrameWidthFraction: Float? = null,
+    cropFrameHeightFraction: Float? = null,
     centerX: Float = 0.5f,
     centerY: Float = 0.5f,
     onPan: ((Float, Float) -> Unit)? = null,
 ) {
-    val panelModifier = (if (fillBounds) modifier else modifier.aspectRatio(aspect)).let {
+    val panelModifier = modifier.let {
         if (onTap != null) it.clickable(onClick = onTap) else it
     }
     Card(
@@ -1372,11 +1416,14 @@ private fun PreviewPanel(
                         view.configure(
                             width = bufferWidth,
                             height = bufferHeight,
-                            rotation = rotation,
+                            sensorRotation = sensorRotation,
+                            displayRotation = displayRotation,
+                            userRotation = userRotation,
                             mirror = mirror,
-                            layoutToken = aspect,
                             resumeEpoch = resumeEpoch,
-                            zoom = zoom,
+                            assistZoom = assistZoom,
+                            cropFrameWidthFraction = cropFrameWidthFraction,
+                            cropFrameHeightFraction = cropFrameHeightFraction,
                             centerX = centerX,
                             centerY = centerY,
                             onPan = onPan,
@@ -1416,7 +1463,7 @@ private fun RecordButton(
     Button(
         onClick = if (active) onStop else onStart,
         enabled = state !is RecorderState.Starting && state !is RecorderState.Stopping &&
-            (!config.hasVideo || config.cameraId.isNotBlank()),
+            (!config.hasVideo || (config.cameraId.isNotBlank() && config.cropSizeValid)),
         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
         modifier = modifier
     ) {
@@ -2062,22 +2109,44 @@ private fun displayRotationDegrees(rotation: Int): Int = when (rotation) {
     else -> 0
 }
 
-private fun normalizedRotation(degrees: Int): Int = ((degrees % 360) + 360) % 360
-
-private fun previewAspect(config: RecordingConfig, rotation: Int): Float = when (config.previewAspect) {
-    PreviewAspect.SOURCE -> sourcePreviewAspect(config, rotation)
-    PreviewAspect.WIDE -> 16f / 9f
-    PreviewAspect.CLASSIC -> 4f / 3f
-    PreviewAspect.PORTRAIT_WIDE -> 9f / 16f
-    PreviewAspect.PORTRAIT_CLASSIC -> 3f / 4f
-    PreviewAspect.SQUARE -> 1f
-    PreviewAspect.ULTRAWIDE -> 2f
+private fun cropFrameFractions(config: RecordingConfig): Pair<Float?, Float?> {
+    if (!config.cropEnabled || !config.cropSizeValid) return null to null
+    return config.cropWidth.toFloat() / config.width to config.cropHeight.toFloat() / config.height
 }
 
-private fun sourcePreviewAspect(config: RecordingConfig, rotation: Int): Float {
-    val width = config.width.coerceAtLeast(1).toFloat()
-    val height = config.height.coerceAtLeast(1).toFloat()
-    return if (rotation == 90 || rotation == 270) height / width else width / height
+@Composable
+private fun DeferredIntField(
+    value: Int,
+    onCommit: (Int) -> Unit,
+    label: @Composable (() -> Unit),
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    minimum: Int = 16,
+    maximum: Int = 16384,
+) {
+    var text by remember { mutableStateOf(value.toString()) }
+    var focused by remember { mutableStateOf(false) }
+    LaunchedEffect(value, focused) {
+        if (!focused) text = value.toString()
+    }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { updated ->
+            if (updated.all(Char::isDigit)) text = updated
+        },
+        label = label,
+        singleLine = true,
+        enabled = enabled,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        modifier = modifier.onFocusChanged { state ->
+            if (focused && !state.isFocused) {
+                val committed = (text.toIntOrNull() ?: minimum).coerceIn(minimum, maximum) / 2 * 2
+                text = committed.toString()
+                onCommit(committed)
+            }
+            focused = state.isFocused
+        },
+    )
 }
 
 private data class MicrophoneChoice(val id: Int?, val label: String)

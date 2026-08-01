@@ -16,18 +16,17 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-internal class GlFrameRateConverter(
+internal class GlCenterCropRenderer(
     encoderSurface: Surface,
-    private val width: Int,
-    private val height: Int,
-    numerator: Int,
-    denominator: Int,
+    private val inputWidth: Int,
+    private val inputHeight: Int,
+    private val outputWidth: Int,
+    private val outputHeight: Int,
     private val onFirstFrame: () -> Unit,
 ) {
-    private val renderThread = HandlerThread("exact-frame-render").apply { start() }
+    private val renderThread = HandlerThread("center-crop-render").apply { start() }
     private val renderHandler = Handler(renderThread.looper)
     private val released = AtomicBoolean(false)
-    private val selector = RationalFrameSelector(numerator, denominator)
     private val display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
     private val context: android.opengl.EGLContext
     private val eglSurface: android.opengl.EGLSurface
@@ -97,7 +96,7 @@ internal class GlFrameRateConverter(
         matrixLocation = GLES20.glGetUniformLocation(program, "uTexMatrix")
 
         surfaceTexture = SurfaceTexture(textureId).apply {
-            setDefaultBufferSize(width, height)
+            setDefaultBufferSize(inputWidth, inputHeight)
             setOnFrameAvailableListener({ renderFrame() }, renderHandler)
         }
         inputSurface = Surface(surfaceTexture)
@@ -110,16 +109,15 @@ internal class GlFrameRateConverter(
         if (released.get()) return
         makeCurrent()
         runCatching { surfaceTexture.updateTexImage() }.getOrElse { return }
-        val selectedFrames = selector.selectDue(surfaceTexture.timestamp)
-        if (selectedFrames.isEmpty()) return
         if (!firstFrameDelivered) {
             firstFrameDelivered = true
             onFirstFrame()
         }
         surfaceTexture.getTransformMatrix(textureMatrix)
         removeTextureRotation(textureMatrix)
+        applyCenteredPixelCrop(textureMatrix, inputWidth, inputHeight, outputWidth, outputHeight)
 
-        GLES20.glViewport(0, 0, surfaceTexture.defaultWidthCompat(), surfaceTexture.defaultHeightCompat())
+        GLES20.glViewport(0, 0, outputWidth, outputHeight)
         GLES20.glUseProgram(program)
         vertices.position(0)
         GLES20.glEnableVertexAttribArray(positionLocation)
@@ -130,11 +128,9 @@ internal class GlFrameRateConverter(
         GLES20.glUniformMatrix4fv(matrixLocation, 1, false, textureMatrix, 0)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
-        selectedFrames.forEach { selected ->
-            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-            EGLExt.eglPresentationTimeANDROID(display, eglSurface, selected.presentationTimeNs)
-            check(EGL14.eglSwapBuffers(display, eglSurface)) { "编码帧交换失败" }
-        }
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        EGLExt.eglPresentationTimeANDROID(display, eglSurface, surfaceTexture.timestamp)
+        check(EGL14.eglSwapBuffers(display, eglSurface)) { "编码帧交换失败" }
     }
 
     fun release() {
@@ -195,9 +191,6 @@ internal class GlFrameRateConverter(
         return shader
     }
 
-    private fun SurfaceTexture.defaultWidthCompat(): Int = width
-    private fun SurfaceTexture.defaultHeightCompat(): Int = height
-
     companion object {
         private const val EGL_RECORDABLE_ANDROID = 0x3142
         private const val VERTEX_SHADER = """
@@ -254,4 +247,27 @@ internal fun removeTextureRotation(matrix: FloatArray) {
     matrix[12] = minX
     matrix[13] = maxY
     matrix[15] = 1f
+}
+
+internal fun applyCenteredPixelCrop(
+    matrix: FloatArray,
+    inputWidth: Int,
+    inputHeight: Int,
+    cropWidth: Int,
+    cropHeight: Int,
+) {
+    require(matrix.size >= 16)
+    require(inputWidth > 0 && inputHeight > 0)
+    require(cropWidth in 1..inputWidth && cropHeight in 1..inputHeight)
+    val scaleX = cropWidth.toFloat() / inputWidth
+    val scaleY = cropHeight.toFloat() / inputHeight
+    val offsetX = (1f - scaleX) / 2f
+    val offsetY = (1f - scaleY) / 2f
+    val column0 = FloatArray(4) { matrix[it] }
+    val column1 = FloatArray(4) { matrix[4 + it] }
+    for (row in 0..3) {
+        matrix[row] = column0[row] * scaleX
+        matrix[4 + row] = column1[row] * scaleY
+        matrix[12 + row] += column0[row] * offsetX + column1[row] * offsetY
+    }
 }

@@ -1,7 +1,6 @@
 package com.llawsxx.safecamera
 
 import com.llawsxx.safecamera.recording.multiplyDivide
-import com.llawsxx.safecamera.recording.RationalFrameSelector
 import com.llawsxx.safecamera.recording.RecordingConfig
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -11,6 +10,22 @@ class RationalTimestampTest {
     @Test
     fun exactEngineCanBeRequestedForIntegerFrameRate() {
         assertTrue(RecordingConfig(fpsNumerator = 30, exactFrameRateMode = true).exactEngineRequested)
+    }
+
+    @Test
+    fun centerCropRequestsExactEngineAndUsesCropAsOutputSize() {
+        val config = RecordingConfig(
+            width = 4000,
+            height = 3000,
+            cropEnabled = true,
+            cropWidth = 1920,
+            cropHeight = 1080,
+        )
+
+        assertTrue(config.exactEngineRequested)
+        assertTrue(config.cropSizeValid)
+        assertEquals(1920, config.outputWidth)
+        assertEquals(1080, config.outputHeight)
     }
 
     @Test
@@ -64,72 +79,4 @@ class RationalTimestampTest {
         assertTrue(pts > 35_000_000_000L)
     }
 
-    @Test
-    fun convertsRealTimeSixtyFpsTo5994WithoutSlowingTime() {
-        assertRealtimeConversion(60_000, 60, 60_000)
-    }
-
-    @Test
-    fun convertsRealTimeThirtyFpsTo2997WithoutSlowingTime() {
-        assertRealtimeConversion(30_000, 30, 30_000)
-    }
-
-    @Test
-    fun convertsRealTimeTwentyFourFpsTo23976WithoutSlowingTime() {
-        assertRealtimeConversion(24_000, 24, 24_000)
-    }
-
-    private fun assertRealtimeConversion(numerator: Int, inputFps: Int, expectedFrames: Int) {
-        val selector = RationalFrameSelector(numerator, 1_001)
-        val selected = ArrayList<Long>()
-        repeat(inputFps * 1_001) { inputIndex ->
-            selected += selector.selectDue(inputIndex * 1_000_000_000L / inputFps).map { it.presentationTimeNs }
-        }
-
-        assertEquals(expectedFrames, selected.size)
-        assertEquals(0L, selected.first())
-        assertEquals(RationalFrameSelector.ptsNs((expectedFrames - 1).toLong(), numerator, 1_001), selected.last())
-        assertTrue(selected.zipWithNext().all { (a, b) -> b > a })
-    }
-
-    @Test
-    fun acceptsFramesAtSixTenthsOfATargetInterval() {
-        val selector = RationalFrameSelector(60_000, 1_001)
-        val first = 10_000_000_000L
-        assertEquals(1, selector.selectDue(first).size)
-
-        val target = RationalFrameSelector.ptsNs(1, 60_000, 1_001)
-        val radius = multiplyDivide(3L, 1_000_000_000L * 1_001L, 5L * 60_000L)
-        assertTrue(selector.selectDue(first + target - radius - 1L).isEmpty())
-        assertEquals(listOf(target), selector.selectDue(first + target - radius).map { it.presentationTimeNs })
-    }
-
-    @Test
-    fun overlappingAcceptanceWindowsNeverEmitATargetTwice() {
-        val selector = RationalFrameSelector(30_000, 1_001)
-        val first = 20_000_000_000L
-        val firstSelection = selector.selectDue(first)
-        val overlapSelection = selector.selectDue(first + 20_000_000L)
-        val thirdSelection = selector.selectDue(first + 40_000_000L)
-        val fourthSelection = selector.selectDue(first + 47_000_000L)
-        val emitted = firstSelection + overlapSelection + thirdSelection + fourthSelection
-        assertEquals(1, firstSelection.size)
-        assertEquals(1, overlapSelection.size)
-        assertTrue(thirdSelection.isEmpty())
-        assertEquals(1, fourthSelection.size)
-        assertEquals(listOf(0L, 1L, 2L), emitted.map { it.index })
-        assertEquals(emitted.map { it.index }.distinct(), emitted.map { it.index })
-        assertTrue(emitted.zipWithNext().all { (a, b) -> b.presentationTimeNs > a.presentationTimeNs })
-    }
-
-    @Test
-    fun repeatsOnlyTargetsThatArePastTheAcceptanceWindow() {
-        val selector = RationalFrameSelector(60_000, 1_001)
-        val first = 30_000_000_000L
-        assertEquals(1, selector.selectDue(first).size)
-
-        val afterSeveralMissingFrames = selector.selectDue(first + 80_000_000L)
-        assertTrue(afterSeveralMissingFrames.size > 1)
-        assertEquals(afterSeveralMissingFrames.map { it.index }.distinct(), afterSeveralMissingFrames.map { it.index })
-    }
 }

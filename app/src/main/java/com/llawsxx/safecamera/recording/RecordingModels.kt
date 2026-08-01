@@ -97,21 +97,14 @@ enum class FocusMode(val label: String) : Serializable {
     CONTINUOUS("连续自动"), MANUAL("手动")
 }
 
-enum class PreviewAspect(val label: String) : Serializable {
-    SOURCE("跟随录制比例"),
-    WIDE("16:9"),
-    CLASSIC("4:3"),
-    PORTRAIT_WIDE("9:16"),
-    PORTRAIT_CLASSIC("3:4"),
-    SQUARE("1:1"),
-    ULTRAWIDE("全宽 2:1")
-}
-
 data class RecordingConfig(
     val mode: RecordingMode = RecordingMode.AUDIO_VIDEO,
     val cameraId: String = "",
     val width: Int = 1920,
     val height: Int = 1080,
+    val cropEnabled: Boolean = false,
+    val cropWidth: Int = 1920,
+    val cropHeight: Int = 1080,
     val fpsNumerator: Int = 30,
     val fpsDenominator: Int = 1,
     val exactFrameRateMode: Boolean = false,
@@ -130,7 +123,6 @@ data class RecordingConfig(
     val segmentMinutes: Int = 10,
     val orientation: OrientationMode = OrientationMode.FOLLOW_SENSOR,
     val previewMode: PreviewMode = PreviewMode.FULL,
-    val previewAspect: PreviewAspect = PreviewAspect.SOURCE,
     val previewLayout: PreviewLayout = PreviewLayout.STACKED,
     val previewRotationDegrees: Int = 0,
     val previewMirror: Boolean = false,
@@ -160,8 +152,13 @@ data class RecordingConfig(
     val customColorMetadata: Boolean get() = colorRange != VideoColorRange.DEFAULT ||
         colorStandard != VideoColorStandard.DEFAULT || colorMatrix != VideoColorMatrix.DEFAULT ||
         colorTransfer != VideoColorTransfer.DEFAULT
-    val exactEngineRequested: Boolean get() = exactFrameRateMode || fpsDenominator != 1 || customColorMetadata ||
+    val exactEngineRequested: Boolean get() = exactFrameRateMode || fpsDenominator != 1 || customColorMetadata || cropEnabled ||
         dynamicRange != VideoDynamicRange.SDR
+    val outputWidth: Int get() = if (cropEnabled) cropWidth else width
+    val outputHeight: Int get() = if (cropEnabled) cropHeight else height
+    val cropSizeValid: Boolean get() = !cropEnabled || (
+        cropWidth in 16..width && cropHeight in 16..height && cropWidth % 2 == 0 && cropHeight % 2 == 0
+    )
     val encoderFps: Int get() = requestedFps.toInt().let { base ->
         if (requestedFps - base >= 0.5) base + 1 else base
     }.coerceAtLeast(1)

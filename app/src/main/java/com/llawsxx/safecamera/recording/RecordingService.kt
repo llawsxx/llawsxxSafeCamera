@@ -61,6 +61,10 @@ class RecordingService : Service() {
         currentConfig = config
         startAsForeground("正在准备录制", config)
         acquireWakeLock()
+        if (config.cropEnabled && Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            finishWithError("中心裁切录制需要 Android 8.0 或更高版本")
+            return
+        }
         val outputStore = RecordingOutputStore(this, config.outputTreeUri)
         val onStarted: (String) -> Unit = { path ->
                 notificationStartedAtElapsedMs = android.os.SystemClock.elapsedRealtime()
