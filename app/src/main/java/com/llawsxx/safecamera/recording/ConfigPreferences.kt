@@ -1,12 +1,16 @@
 package com.llawsxx.safecamera.recording
 
 import android.content.Context
+import android.content.SharedPreferences
 
 object ConfigPreferences {
     private const val NAME = "recording_config"
 
-    fun load(context: Context): RecordingConfig {
-        val p = context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
+    fun load(context: Context): RecordingConfig = load(
+        context.getSharedPreferences(NAME, Context.MODE_PRIVATE),
+    )
+
+    internal fun load(p: SharedPreferences): RecordingConfig {
         return RecordingConfig(
             mode = enumValue(p.getString("mode", null), RecordingMode.AUDIO_VIDEO),
             cameraId = p.getString("cameraId", "").orEmpty(),
@@ -98,8 +102,13 @@ object ConfigPreferences {
         )
     }
 
-    fun save(context: Context, c: RecordingConfig) {
-        context.getSharedPreferences(NAME, Context.MODE_PRIVATE).edit()
+    fun save(context: Context, c: RecordingConfig) = save(
+        context.getSharedPreferences(NAME, Context.MODE_PRIVATE),
+        c,
+    )
+
+    internal fun save(p: SharedPreferences, c: RecordingConfig) {
+        p.edit()
             .putString("mode", c.mode.name)
             .putString("cameraId", c.cameraId)
             .putInt("width", c.width)

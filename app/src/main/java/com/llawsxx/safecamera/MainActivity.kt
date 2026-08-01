@@ -98,6 +98,8 @@ import com.llawsxx.safecamera.recording.CameraInfo
 import com.llawsxx.safecamera.recording.AudioInputDevices
 import com.llawsxx.safecamera.recording.AudioInputInfo
 import com.llawsxx.safecamera.recording.ContainerFormat
+import com.llawsxx.safecamera.recording.ConfigPreset
+import com.llawsxx.safecamera.recording.ConfigPresetPreferences
 import com.llawsxx.safecamera.recording.ConfigPreferences
 import com.llawsxx.safecamera.recording.IdlePreviewCamera
 import com.llawsxx.safecamera.recording.FocusMode
@@ -170,6 +172,10 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
     var previewResumeEpoch by remember { mutableStateOf(0) }
     var previewReadyEpoch by remember { mutableStateOf(-1) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var presets by remember { mutableStateOf(ConfigPresetPreferences.load(context)) }
+    var selectedPresetId by remember { mutableStateOf(presets.firstOrNull()?.id) }
+    var presetName by remember { mutableStateOf(presets.firstOrNull()?.name.orEmpty()) }
+    var presetMessage by remember { mutableStateOf<String?>(null) }
     BackHandler(enabled = settingsOpen) { settingsOpen = false }
     var currentDisplayRotation by remember {
         mutableStateOf(displayRotationDegrees(view.display?.rotation ?: Surface.ROTATION_0))
@@ -597,6 +603,100 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 Text("录制设置", style = MaterialTheme.typography.titleMedium)
             }
             permissionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+
+            Section("设置预设") {
+                val selectedPreset = presets.firstOrNull { it.id == selectedPresetId }
+                OutlinedTextField(
+                    value = presetName,
+                    onValueChange = {
+                        presetName = it
+                        presetMessage = null
+                    },
+                    label = { Text("预设名称") },
+                    placeholder = { Text("例如：4K 电影、1080P 推流") },
+                    singleLine = true,
+                    enabled = !recording,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedButton(
+                    onClick = {
+                        val name = presetName.trim()
+                        when {
+                            name.isBlank() -> presetMessage = "请输入预设名称"
+                            presets.any { it.name.equals(name, ignoreCase = true) } ->
+                                presetMessage = "同名预设已存在，请选择后覆盖，或换一个名称"
+                            else -> {
+                                val created = ConfigPresetPreferences.create(context, name, config)
+                                presets = ConfigPresetPreferences.load(context)
+                                selectedPresetId = created.id
+                                presetName = created.name
+                                presetMessage = "已保存预设“${created.name}”"
+                            }
+                        }
+                    },
+                    enabled = !recording,
+                ) { Text("保存当前整页设置") }
+
+                Labeled("已有预设") {
+                    ChoiceRow(
+                        values = presets,
+                        selected = selectedPreset,
+                        label = ConfigPreset::name,
+                        enabled = !recording,
+                    ) { preset ->
+                        selectedPresetId = preset.id
+                        presetName = preset.name
+                        presetMessage = null
+                    }
+                }
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(
+                        onClick = {
+                            selectedPreset?.let {
+                                config = it.config
+                                presetMessage = "已应用预设“${it.name}”"
+                            }
+                        },
+                        enabled = !recording && selectedPreset != null,
+                    ) { Text("应用") }
+                    OutlinedButton(
+                        onClick = {
+                            selectedPreset?.let {
+                                val updated = ConfigPresetPreferences.update(context, it, config)
+                                presets = ConfigPresetPreferences.load(context)
+                                selectedPresetId = updated.id
+                                presetMessage = "已用当前整页设置覆盖“${it.name}”"
+                            }
+                        },
+                        enabled = !recording && selectedPreset != null,
+                    ) { Text("覆盖") }
+                    OutlinedButton(
+                        onClick = {
+                            selectedPreset?.let {
+                                ConfigPresetPreferences.delete(context, it)
+                                presets = ConfigPresetPreferences.load(context)
+                                val next = presets.firstOrNull()
+                                selectedPresetId = next?.id
+                                presetName = next?.name.orEmpty()
+                                presetMessage = "已删除预设“${it.name}”"
+                            }
+                        },
+                        enabled = !recording && selectedPreset != null,
+                    ) { Text("删除") }
+                }
+                Text(
+                    presetMessage ?: "预设会保存本页全部选项，包括相机、画面、编码、音频、方向、保存目录和推流设置。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (presetMessage?.contains("请输入") == true || presetMessage?.contains("已存在") == true) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.secondary
+                    },
+                )
+            }
 
             Section("常用设置") {
                 Labeled("模式") {
