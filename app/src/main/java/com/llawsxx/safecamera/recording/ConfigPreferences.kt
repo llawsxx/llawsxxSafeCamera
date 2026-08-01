@@ -28,6 +28,28 @@ object ConfigPreferences {
             colorStandard = enumValue(p.getString("colorStandard", null), VideoColorStandard.DEFAULT),
             colorMatrix = enumValue(p.getString("colorMatrix", null), VideoColorMatrix.DEFAULT),
             colorTransfer = videoColorTransfer(p.getString("colorTransfer", null)),
+            rewriteColorRange = enumValue(
+                p.getString("rewriteColorRange", null),
+                if (p.getBoolean("forceSpsVui", false)) {
+                    enumValue(p.getString("colorRange", null), VideoColorRange.DEFAULT)
+                } else VideoColorRange.DEFAULT,
+            ),
+            rewriteColorStandard = enumValue(
+                p.getString("rewriteColorStandard", null),
+                if (p.getBoolean("forceSpsVui", false)) {
+                    enumValue(p.getString("colorStandard", null), VideoColorStandard.DEFAULT)
+                } else VideoColorStandard.DEFAULT,
+            ),
+            rewriteColorMatrix = enumValue(
+                p.getString("rewriteColorMatrix", null),
+                if (p.getBoolean("forceSpsVui", false)) {
+                    enumValue(p.getString("colorMatrix", null), VideoColorMatrix.DEFAULT)
+                } else VideoColorMatrix.DEFAULT,
+            ),
+            rewriteColorTransfer = videoColorTransfer(
+                p.getString("rewriteColorTransfer", null)
+                    ?: p.getString("colorTransfer", null).takeIf { p.getBoolean("forceSpsVui", false) },
+            ),
             forceSpsVui = p.getBoolean("forceSpsVui", false),
             container = enumValue(p.getString("container", null), ContainerFormat.MP4),
             segmentMinutes = p.getInt("segmentMinutes", 10),
@@ -91,6 +113,10 @@ object ConfigPreferences {
             .putString("colorStandard", c.colorStandard.name)
             .putString("colorMatrix", c.colorMatrix.name)
             .putString("colorTransfer", c.colorTransfer.name)
+            .putString("rewriteColorRange", c.rewriteColorRange.name)
+            .putString("rewriteColorStandard", c.rewriteColorStandard.name)
+            .putString("rewriteColorMatrix", c.rewriteColorMatrix.name)
+            .putString("rewriteColorTransfer", c.rewriteColorTransfer.name)
             .putBoolean("forceSpsVui", c.forceSpsVui)
             .putString("container", c.container.name)
             .putInt("segmentMinutes", c.segmentMinutes)

@@ -129,15 +129,15 @@ class ExactFrameRateRecorderEngine(
             mediaMuxer.setOrientationHint(recordingOrientationHint(context, config.cameraId, config.orientation))
             coordinator = MediaMuxCoordinator(mediaMuxer, config.hasAudio) { markMuxStarted() }
         }
-        mux = if (config.forceSpsVui && config.customColorMetadata) {
+        mux = if (config.forceSpsVui && config.customRewriteColorMetadata) {
             VuiRewritingMuxCoordinator(
                 coordinator,
                 H26xVuiRewriter(
                     config.videoCodec,
-                    config.colorRange,
-                    config.colorStandard,
-                    config.colorMatrix,
-                    config.colorTransfer,
+                    config.rewriteColorRange,
+                    config.rewriteColorStandard,
+                    config.rewriteColorMatrix,
+                    config.rewriteColorTransfer,
                 ),
             )
         } else {

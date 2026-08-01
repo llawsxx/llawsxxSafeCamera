@@ -289,6 +289,11 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
     }
     LaunchedEffect(config.orientation) { onOrientation(config.orientation) }
     LaunchedEffect(config) { ConfigPreferences.save(context, config) }
+    LaunchedEffect(config.customRewriteColorMetadata) {
+        if (!config.customRewriteColorMetadata && config.forceSpsVui) {
+            config = config.copy(forceSpsVui = false)
+        }
+    }
     LaunchedEffect(config.exactEngineRequested, config.dynamicRange) {
         if (config.exactEngineRequested && config.hasVideo) {
             val normalized = config.copy(
@@ -313,6 +318,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 colorStandard = VideoColorStandard.DEFAULT,
                 colorMatrix = VideoColorMatrix.DEFAULT,
                 colorTransfer = VideoColorTransfer.DEFAULT,
+                forceSpsVui = false,
             )
         }
     }
@@ -325,7 +331,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 colorStandard = VideoColorStandard.DEFAULT,
                 colorMatrix = VideoColorMatrix.DEFAULT,
                 colorTransfer = VideoColorTransfer.DEFAULT,
-                forceSpsVui = false,
             )
         }
     }
@@ -619,7 +624,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 if (config.hasVideo) {
                     val exactEngineForced = config.dynamicRange != VideoDynamicRange.SDR ||
                         config.fpsDenominator != 1 || config.customColorMetadata ||
-                        config.container == ContainerFormat.MPEG_TS || config.cropEnabled
+                        config.container == ContainerFormat.MPEG_TS || config.cropEnabled ||
+                        config.forceSpsVui && config.customRewriteColorMetadata
                     ToggleLine(
                         "MediaCodec 直录引擎",
                         config.exactEngineRequested,
@@ -634,7 +640,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     }
                     if (!(exactEngineForced && config.container == ContainerFormat.MPEG_TS)) Text(
                         if (exactEngineForced) {
-                            "当前 HDR、非整数帧率、自定义颜色元数据或中心裁切要求使用 MediaCodec 直录引擎，开关保持开启。"
+                            "当前 HDR、非整数帧率、自定义颜色元数据、SPS/VUI 重写或中心裁切要求使用 MediaCodec 直录引擎，开关保持开启。"
                         } else {
                             "Camera2 直接连接 MediaCodec，收到的每帧都按原始时间戳输出，不主动丢帧或补帧；帧率可动态变化。MP4 仅支持单段，MPEG-TS 由内置 native muxer 封装。"
                         },
@@ -688,7 +694,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                             colorStandard = VideoColorStandard.DEFAULT,
                                             colorMatrix = VideoColorMatrix.DEFAULT,
                                             colorTransfer = VideoColorTransfer.DEFAULT,
-                                            forceSpsVui = false,
                                         )
                                     } else {
                                         config.copy(
@@ -703,7 +708,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                             } else {
                                                 VideoColorTransfer.ST2084
                                             },
-                                            forceSpsVui = false,
                                         )
                                     }
                                 }
@@ -871,7 +875,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             config = it
                         }
                         MfassistSettings(config, recording) { config = it }
-                        Section("视频颜色元数据") {
+                        Section("编码器颜色元数据") {
                             Labeled("Range") {
                                 ChoiceRow(VideoColorRange.entries, config.colorRange, { it.label }, !recording && !config.highSpeedMode && !config.dynamicRange.is10Bit) {
                                     config = config.copy(colorRange = it)
@@ -884,30 +888,55 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             }
                             Labeled("Matrix coefficients") {
                                 ChoiceRow(VideoColorMatrix.entries, config.colorMatrix, { it.label }, !recording && !config.highSpeedMode && !config.dynamicRange.is10Bit) {
-                                    config = config.copy(
-                                        colorMatrix = it,
-                                        forceSpsVui = config.forceSpsVui || it != VideoColorMatrix.DEFAULT,
-                                    )
+                                    config = config.copy(colorMatrix = it)
                                 }
                             }
                             Labeled("Transfer") {
                                 ChoiceRow(VideoColorTransfer.entries, config.colorTransfer, { it.label }, !recording && !config.highSpeedMode && !config.dynamicRange.is10Bit) {
-                                    config = config.copy(
-                                        colorTransfer = it,
-                                        forceSpsVui = config.forceSpsVui || it != VideoColorTransfer.DEFAULT,
-                                    )
+                                    config = config.copy(colorTransfer = it)
+                                }
+                            }
+                            Text(
+                                if (config.dynamicRange.is10Bit) {
+                                    "HDR 模式由动态范围固定使用 Limited、BT.2020 和对应的 HLG/PQ transfer。"
+                                } else {
+                                    "这些值提交给 MediaCodec；编码器可能忽略设备不支持的组合。"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        Section("SPS/VUI 强制重写") {
+                            Labeled("Range") {
+                                ChoiceRow(VideoColorRange.entries, config.rewriteColorRange, { it.label }, !recording && !config.highSpeedMode) {
+                                    config = config.copy(rewriteColorRange = it)
+                                }
+                            }
+                            Labeled("Color standard / primaries") {
+                                ChoiceRow(VideoColorStandard.entries, config.rewriteColorStandard, { it.label }, !recording && !config.highSpeedMode) {
+                                    config = config.copy(rewriteColorStandard = it)
+                                }
+                            }
+                            Labeled("Matrix coefficients") {
+                                ChoiceRow(VideoColorMatrix.entries, config.rewriteColorMatrix, { it.label }, !recording && !config.highSpeedMode) {
+                                    config = config.copy(rewriteColorMatrix = it)
+                                }
+                            }
+                            Labeled("Transfer") {
+                                ChoiceRow(VideoColorTransfer.entries, config.rewriteColorTransfer, { it.label }, !recording && !config.highSpeedMode) {
+                                    config = config.copy(rewriteColorTransfer = it)
                                 }
                             }
                             ToggleLine(
                                 "强制写入 SPS/VUI",
                                 config.forceSpsVui,
-                                !recording && !config.highSpeedMode && config.customColorMetadata,
+                                !recording && !config.highSpeedMode &&
+                                    (config.customRewriteColorMetadata || config.forceSpsVui),
                             ) { enabled -> config = config.copy(forceSpsVui = enabled) }
                             Text(
                                 if (config.forceSpsVui) {
-                                    "除配置 MediaCodec 外，还会直接修改 H.264/H.265 SPS 中的 VUI 颜色字段；这不会改变实际像素。"
+                                    "将按上面的独立设置直接修改 H.264/H.265 SPS 中的 VUI；HDR 模式下也可重写为 SDR 标记。这不会改变实际像素。"
                                 } else {
-                                    "选择非默认值时使用 MediaCodec 写入颜色元数据。编码器或播放器仍可能忽略不支持的组合；这不会改变相机传感器实际色彩处理。"
+                                    "这里的值只用于 SPS/VUI 重写，不会提交给编码器；至少选择一个非默认值后可开启。"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                             )

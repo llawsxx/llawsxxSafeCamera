@@ -118,6 +118,10 @@ data class RecordingConfig(
     val colorStandard: VideoColorStandard = VideoColorStandard.DEFAULT,
     val colorMatrix: VideoColorMatrix = VideoColorMatrix.DEFAULT,
     val colorTransfer: VideoColorTransfer = VideoColorTransfer.DEFAULT,
+    val rewriteColorRange: VideoColorRange = VideoColorRange.DEFAULT,
+    val rewriteColorStandard: VideoColorStandard = VideoColorStandard.DEFAULT,
+    val rewriteColorMatrix: VideoColorMatrix = VideoColorMatrix.DEFAULT,
+    val rewriteColorTransfer: VideoColorTransfer = VideoColorTransfer.DEFAULT,
     val forceSpsVui: Boolean = false,
     val container: ContainerFormat = ContainerFormat.MP4,
     val segmentMinutes: Int = 10,
@@ -161,8 +165,11 @@ data class RecordingConfig(
     val customColorMetadata: Boolean get() = colorRange != VideoColorRange.DEFAULT ||
         colorStandard != VideoColorStandard.DEFAULT || colorMatrix != VideoColorMatrix.DEFAULT ||
         colorTransfer != VideoColorTransfer.DEFAULT
+    val customRewriteColorMetadata: Boolean get() = rewriteColorRange != VideoColorRange.DEFAULT ||
+        rewriteColorStandard != VideoColorStandard.DEFAULT || rewriteColorMatrix != VideoColorMatrix.DEFAULT ||
+        rewriteColorTransfer != VideoColorTransfer.DEFAULT
     val exactEngineRequested: Boolean get() = exactFrameRateMode || fpsDenominator != 1 || customColorMetadata || cropEnabled ||
-        dynamicRange != VideoDynamicRange.SDR
+        dynamicRange != VideoDynamicRange.SDR || (forceSpsVui && customRewriteColorMetadata)
     val outputWidth: Int get() = if (cropEnabled) cropWidth else width
     val outputHeight: Int get() = if (cropEnabled) cropHeight else height
     val cropSizeValid: Boolean get() = !cropEnabled || (

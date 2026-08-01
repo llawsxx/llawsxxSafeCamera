@@ -2,6 +2,11 @@ package com.llawsxx.safecamera
 
 import com.llawsxx.safecamera.recording.multiplyDivide
 import com.llawsxx.safecamera.recording.RecordingConfig
+import com.llawsxx.safecamera.recording.VideoColorMatrix
+import com.llawsxx.safecamera.recording.VideoColorRange
+import com.llawsxx.safecamera.recording.VideoColorStandard
+import com.llawsxx.safecamera.recording.VideoColorTransfer
+import com.llawsxx.safecamera.recording.VideoDynamicRange
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -41,6 +46,33 @@ class RationalTimestampTest {
                 colorMatrix = com.llawsxx.safecamera.recording.VideoColorMatrix.BT2020,
             ).exactEngineRequested,
         )
+    }
+
+    @Test
+    fun encoderAndSpsVuiRewriteColorMetadataAreIndependentInHdr() {
+        val config = RecordingConfig(
+            dynamicRange = VideoDynamicRange.HDR10,
+            colorRange = VideoColorRange.LIMITED,
+            rewriteColorRange = VideoColorRange.FULL,
+            rewriteColorStandard = VideoColorStandard.BT709,
+            rewriteColorMatrix = VideoColorMatrix.BT709,
+            rewriteColorTransfer = VideoColorTransfer.BT709,
+            forceSpsVui = true,
+        )
+
+        assertEquals(VideoColorRange.LIMITED, config.colorRange)
+        assertEquals(VideoColorRange.FULL, config.rewriteColorRange)
+        assertTrue(config.customRewriteColorMetadata)
+        assertTrue(config.exactEngineRequested)
+    }
+
+    @Test
+    fun rewriteSettingsDoNotAffectEncoderMetadataUntilEnabled() {
+        val config = RecordingConfig(rewriteColorRange = VideoColorRange.FULL)
+
+        assertEquals(VideoColorRange.DEFAULT, config.colorRange)
+        assertTrue(config.customRewriteColorMetadata)
+        assertTrue(!config.exactEngineRequested)
     }
 
     @Test
