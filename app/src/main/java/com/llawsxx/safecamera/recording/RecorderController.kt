@@ -68,11 +68,23 @@ object RecorderController {
         mutableState.value = state
     }
 
-    internal fun updateExposure(cameraId: String, iso: Int?, exposureNs: Long?, aperture: Float?) {
+    internal fun updateExposure(
+        cameraId: String,
+        iso: Int?,
+        exposureNs: Long?,
+        aperture: Float?,
+        focusDistanceDiopters: Float?,
+    ) {
         val now = SystemClock.elapsedRealtime()
         val previous = mutableExposure.value
         if (previous?.cameraId == cameraId && now - lastExposureUpdateMs < 100L) return
         lastExposureUpdateMs = now
-        mutableExposure.value = CameraExposureState(cameraId, iso, exposureNs, aperture)
+        mutableExposure.value = CameraExposureState(
+            cameraId,
+            iso,
+            exposureNs,
+            aperture,
+            focusDistanceDiopters,
+        )
     }
 }

@@ -451,6 +451,7 @@ class CameraRecorderEngine(
                 iso = result.get(CaptureResult.SENSOR_SENSITIVITY),
                 exposureNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
                 aperture = result.get(CaptureResult.LENS_APERTURE),
+                focusDistanceDiopters = result.get(CaptureResult.LENS_FOCUS_DISTANCE),
             )
             val timestamp = result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP) ?: return
             if (firstFrameNs == 0L) firstFrameNs = timestamp

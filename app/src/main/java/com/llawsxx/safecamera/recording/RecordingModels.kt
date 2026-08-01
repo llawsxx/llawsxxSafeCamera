@@ -225,6 +225,7 @@ data class CameraExposureState(
     val iso: Int?,
     val exposureNs: Long?,
     val aperture: Float?,
+    val focusDistanceDiopters: Float?,
 )
 
 sealed interface RecorderState {

@@ -1947,13 +1947,15 @@ private fun QuickCameraControls(
                                         selected = control
                                     } else {
                                         selected = control
+                                        val nextManual = config.focusMode != FocusMode.MANUAL
                                         onChange(
                                             config.copy(
-                                                focusMode = if (config.focusMode == FocusMode.MANUAL) {
-                                                    FocusMode.CONTINUOUS
-                                                } else {
-                                                    FocusMode.MANUAL
-                                                },
+                                                focusMode = if (nextManual) FocusMode.MANUAL else FocusMode.CONTINUOUS,
+                                                focusDistanceDiopters = if (nextManual) {
+                                                    liveExposure?.focusDistanceDiopters
+                                                        ?.coerceIn(0f, camera.minimumFocusDistance)
+                                                        ?: config.focusDistanceDiopters
+                                                } else config.focusDistanceDiopters,
                                             ),
                                         )
                                     }
@@ -2076,7 +2078,15 @@ private fun QuickCameraControls(
                     CompactManualWhiteBalanceControls(config, enabled, onChange)
                 }
                 FullscreenControl.APERTURE -> Unit
-                FullscreenControl.FOCUS -> FocusControls(camera, config, enabled, onChange, compact = true, lightText = lightText)
+                FullscreenControl.FOCUS -> FocusControls(
+                    camera,
+                    config,
+                    enabled,
+                    onChange,
+                    compact = true,
+                    lightText = lightText,
+                    liveFocusDistanceDiopters = liveExposure?.focusDistanceDiopters,
+                )
             }
         }
     }
@@ -2205,6 +2215,7 @@ private fun FocusControls(
     onChange: (RecordingConfig) -> Unit,
     compact: Boolean = false,
     lightText: Boolean = false,
+    liveFocusDistanceDiopters: Float? = null,
 ) {
     val supportsManual = camera.minimumFocusDistance > 0f &&
         camera.afModes.contains(CameraCharacteristics.CONTROL_AF_MODE_OFF)
@@ -2212,13 +2223,15 @@ private fun FocusControls(
     if (!compact) {
         OutlinedButton(
             onClick = {
+                val nextManual = config.focusMode != FocusMode.MANUAL
                 onChange(
                     config.copy(
-                        focusMode = if (config.focusMode == FocusMode.MANUAL) {
-                            FocusMode.CONTINUOUS
-                        } else {
-                            FocusMode.MANUAL
-                        }
+                        focusMode = if (nextManual) FocusMode.MANUAL else FocusMode.CONTINUOUS,
+                        focusDistanceDiopters = if (nextManual) {
+                            liveFocusDistanceDiopters
+                                ?.coerceIn(0f, camera.minimumFocusDistance)
+                                ?: config.focusDistanceDiopters
+                        } else config.focusDistanceDiopters,
                     )
                 )
             },

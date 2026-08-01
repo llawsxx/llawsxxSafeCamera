@@ -144,6 +144,7 @@ class IdlePreviewCamera(context: Context) {
                 iso = result.get(CaptureResult.SENSOR_SENSITIVITY),
                 exposureNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
                 aperture = result.get(CaptureResult.LENS_APERTURE),
+                focusDistanceDiopters = result.get(CaptureResult.LENS_FOCUS_DISTANCE),
             )
         }
     }
