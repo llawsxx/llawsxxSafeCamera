@@ -97,6 +97,12 @@ enum class FocusMode(val label: String) : Serializable {
     CONTINUOUS("连续自动"), MANUAL("手动")
 }
 
+enum class VideoScalingAlgorithm(val label: String) : Serializable {
+    NEAREST("最近邻（最快）"),
+    BILINEAR("双线性（推荐）"),
+    BICUBIC("双三次（更锐利）"),
+}
+
 data class RecordingConfig(
     val mode: RecordingMode = RecordingMode.AUDIO_VIDEO,
     val cameraId: String = "",
@@ -105,6 +111,10 @@ data class RecordingConfig(
     val cropEnabled: Boolean = false,
     val cropWidth: Int = 1920,
     val cropHeight: Int = 1080,
+    val resizeEnabled: Boolean = false,
+    val recordWidth: Int = 1920,
+    val recordHeight: Int = 1080,
+    val scalingAlgorithm: VideoScalingAlgorithm = VideoScalingAlgorithm.BILINEAR,
     val fpsNumerator: Int = 30,
     val fpsDenominator: Int = 1,
     val exactFrameRateMode: Boolean = false,
@@ -168,12 +178,20 @@ data class RecordingConfig(
     val customRewriteColorMetadata: Boolean get() = rewriteColorRange != VideoColorRange.DEFAULT ||
         rewriteColorStandard != VideoColorStandard.DEFAULT || rewriteColorMatrix != VideoColorMatrix.DEFAULT ||
         rewriteColorTransfer != VideoColorTransfer.DEFAULT
-    val exactEngineRequested: Boolean get() = exactFrameRateMode || fpsDenominator != 1 || customColorMetadata || cropEnabled ||
+    val videoTransformEnabled: Boolean get() = cropEnabled || resizeEnabled
+    val exactEngineRequested: Boolean get() = exactFrameRateMode || fpsDenominator != 1 || customColorMetadata || videoTransformEnabled ||
         dynamicRange != VideoDynamicRange.SDR || (forceSpsVui && customRewriteColorMetadata)
-    val outputWidth: Int get() = if (cropEnabled) cropWidth else width
-    val outputHeight: Int get() = if (cropEnabled) cropHeight else height
+    val transformWidth: Int get() = if (cropEnabled) cropWidth else width
+    val transformHeight: Int get() = if (cropEnabled) cropHeight else height
+    val outputWidth: Int get() = if (resizeEnabled) recordWidth else transformWidth
+    val outputHeight: Int get() = if (resizeEnabled) recordHeight else transformHeight
     val cropSizeValid: Boolean get() = !cropEnabled || (
         cropWidth in 16..width && cropHeight in 16..height && cropWidth % 2 == 0 && cropHeight % 2 == 0
+    )
+    val resizeSizeValid: Boolean get() = !resizeEnabled || (
+        recordWidth in 16..transformWidth && recordHeight in 16..transformHeight &&
+            recordWidth % 2 == 0 && recordHeight % 2 == 0 &&
+            recordWidth.toLong() * transformHeight == recordHeight.toLong() * transformWidth
     )
     val encoderFps: Int get() = requestedFps.toInt().let { base ->
         if (requestedFps - base >= 0.5) base + 1 else base

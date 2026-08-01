@@ -15,6 +15,13 @@ object ConfigPreferences {
             cropEnabled = p.getBoolean("cropEnabled", false),
             cropWidth = p.getInt("cropWidth", 1920),
             cropHeight = p.getInt("cropHeight", 1080),
+            resizeEnabled = p.getBoolean("resizeEnabled", false),
+            recordWidth = p.getInt("recordWidth", 1920),
+            recordHeight = p.getInt("recordHeight", 1080),
+            scalingAlgorithm = enumValue(
+                p.getString("scalingAlgorithm", null),
+                VideoScalingAlgorithm.BILINEAR,
+            ),
             fpsNumerator = p.getInt("fpsNumerator", p.getInt("fps", 30)),
             fpsDenominator = p.getInt("fpsDenominator", 1).coerceAtLeast(1),
             exactFrameRateMode = p.getBoolean("exactFrameRateMode", false),
@@ -100,6 +107,10 @@ object ConfigPreferences {
             .putBoolean("cropEnabled", c.cropEnabled)
             .putInt("cropWidth", c.cropWidth)
             .putInt("cropHeight", c.cropHeight)
+            .putBoolean("resizeEnabled", c.resizeEnabled)
+            .putInt("recordWidth", c.recordWidth)
+            .putInt("recordHeight", c.recordHeight)
+            .putString("scalingAlgorithm", c.scalingAlgorithm.name)
             .putInt("fpsNumerator", c.fpsNumerator)
             .putInt("fpsDenominator", c.fpsDenominator)
             .putBoolean("exactFrameRateMode", c.exactFrameRateMode)

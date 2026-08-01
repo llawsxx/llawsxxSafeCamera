@@ -114,6 +114,7 @@ import com.llawsxx.safecamera.recording.VideoColorMatrix
 import com.llawsxx.safecamera.recording.VideoColorRange
 import com.llawsxx.safecamera.recording.VideoColorStandard
 import com.llawsxx.safecamera.recording.VideoColorTransfer
+import com.llawsxx.safecamera.recording.VideoScalingAlgorithm
 import com.llawsxx.safecamera.recording.awbLabel
 import com.llawsxx.safecamera.recording.manualWhiteBalanceGains
 import com.llawsxx.safecamera.ui.theme.LlawsxxSafeCameraTheme
@@ -243,7 +244,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
     LaunchedEffect(Unit) {
         val queriedCameras = CameraCapabilities.query(context)
         (queriedCameras.firstOrNull { it.id == config.cameraId } ?: queriedCameras.firstOrNull())?.let { camera ->
-            val savedSizes = if (config.cropEnabled) camera.previewSizes else camera.sizes
+            val savedSizes = if (config.videoTransformEnabled) camera.previewSizes else camera.sizes
             val savedSizeSupported = savedSizes.any { it.width == config.width && it.height == config.height }
             val size = if (savedSizeSupported) config.width to config.height else preferredSize(camera)
             val savedFpsSupported = camera.fpsRanges.any { it.lower <= config.encoderFps && it.upper >= config.encoderFps }
@@ -401,6 +402,10 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.cropEnabled,
         config.cropWidth,
         config.cropHeight,
+        config.resizeEnabled,
+        config.recordWidth,
+        config.recordHeight,
+        config.scalingAlgorithm,
         config.fpsNumerator,
         config.fpsDenominator,
         config.manualExposure,
@@ -624,7 +629,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 if (config.hasVideo) {
                     val exactEngineForced = config.dynamicRange != VideoDynamicRange.SDR ||
                         config.fpsDenominator != 1 || config.customColorMetadata ||
-                        config.container == ContainerFormat.MPEG_TS || config.cropEnabled ||
+                        config.container == ContainerFormat.MPEG_TS || config.videoTransformEnabled ||
                         config.forceSpsVui && config.customRewriteColorMetadata
                     ToggleLine(
                         "MediaCodec 直录引擎",
@@ -640,7 +645,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     }
                     if (!(exactEngineForced && config.container == ContainerFormat.MPEG_TS)) Text(
                         if (exactEngineForced) {
-                            "当前 HDR、非整数帧率、自定义颜色元数据、SPS/VUI 重写或中心裁切要求使用 MediaCodec 直录引擎，开关保持开启。"
+                            "当前 HDR、非整数帧率、自定义颜色元数据、SPS/VUI 重写、中心裁切或分辨率缩放要求使用 MediaCodec 直录引擎，开关保持开启。"
                         } else {
                             "Camera2 直接连接 MediaCodec，收到的每帧都按原始时间戳输出，不主动丢帧或补帧；帧率可动态变化。MP4 仅支持单段，MPEG-TS 由内置 native muxer 封装。"
                         },
@@ -650,7 +655,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                         ToggleLine(
                             "高速录像模式",
                             config.highSpeedMode,
-                            !recording && !config.cropEnabled && camera.highSpeedModes.isNotEmpty(),
+                            !recording && !config.videoTransformEnabled && camera.highSpeedModes.isNotEmpty(),
                         ) { enabled ->
                             val mode = camera.highSpeedModes.firstOrNull()
                             config = if (enabled && mode != null) config.copy(
@@ -685,7 +690,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                     camera.dynamicRanges,
                                     config.dynamicRange.takeIf { it in camera.dynamicRanges },
                                     { it.label },
-                                    !recording && !config.highSpeedMode && !config.cropEnabled,
+                                    !recording && !config.highSpeedMode && !config.videoTransformEnabled,
                                 ) { range ->
                                     config = if (range == VideoDynamicRange.SDR) {
                                         config.copy(
@@ -723,8 +728,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
-                        Labeled(if (config.cropEnabled) "采集分辨率" else "分辨率") {
-                            val captureSizes = if (config.cropEnabled) camera.previewSizes else camera.sizes
+                        Labeled(if (config.videoTransformEnabled) "采集分辨率" else "分辨率") {
+                            val captureSizes = if (config.videoTransformEnabled) camera.previewSizes else camera.sizes
                             ChoiceRow(
                                 captureSizes,
                                 captureSizes.firstOrNull { it.width == config.width && it.height == config.height },
@@ -750,7 +755,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 modifier = Modifier.weight(1f),
                             )
                         }
-                        val declaredSizes = if (config.cropEnabled) camera.previewSizes else camera.sizes
+                        val declaredSizes = if (config.videoTransformEnabled) camera.previewSizes else camera.sizes
                         val sizeSupported = declaredSizes.any { it.width == config.width && it.height == config.height }
                         if (!sizeSupported) {
                             Text("当前镜头未声明支持该尺寸，不能开始录制", color = MaterialTheme.colorScheme.error)
@@ -773,25 +778,107 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 DeferredIntField(
                                     value = config.cropWidth,
                                     onCommit = { config = config.copy(cropWidth = it) },
-                                    label = { Text("输出宽") },
+                                    label = { Text("裁切宽") },
                                     enabled = !recording,
                                     modifier = Modifier.weight(1f),
                                 )
                                 DeferredIntField(
                                     value = config.cropHeight,
                                     onCommit = { config = config.copy(cropHeight = it) },
-                                    label = { Text("输出高") },
+                                    label = { Text("裁切高") },
                                     enabled = !recording,
                                     modifier = Modifier.weight(1f),
                                 )
                             }
                             Text(
                                 if (config.cropSizeValid) {
-                                    "从 ${config.width}×${config.height} 采集画面的正中心输出 ${config.cropWidth}×${config.cropHeight}，不缩放。"
+                                    "从 ${config.width}×${config.height} 采集画面的正中心截取 ${config.cropWidth}×${config.cropHeight} 处理区域。"
                                 } else {
                                     "裁切宽高必须为偶数，且不能超过 ${config.width}×${config.height}。"
                                 },
                                 color = if (config.cropSizeValid) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        ToggleLine(
+                            "缩放录制分辨率",
+                            config.resizeEnabled,
+                            !recording && !config.highSpeedMode &&
+                                config.dynamicRange == VideoDynamicRange.SDR &&
+                                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O,
+                        ) { enabled ->
+                            val sourceWidth = if (config.cropEnabled) config.cropWidth else config.width
+                            val sourceHeight = if (config.cropEnabled) config.cropHeight else config.height
+                            val currentSizeValid = isValidResizeSize(
+                                sourceWidth,
+                                sourceHeight,
+                                config.recordWidth,
+                                config.recordHeight,
+                            )
+                            val suggestedSize = suggestedResizeSize(sourceWidth, sourceHeight, config.recordWidth)
+                            config = config.copy(
+                                resizeEnabled = enabled,
+                                recordWidth = if (currentSizeValid) config.recordWidth else suggestedSize.first,
+                                recordHeight = if (currentSizeValid) config.recordHeight else suggestedSize.second,
+                            )
+                        }
+                        if (config.resizeEnabled) {
+                            val commonRecordSizes = listOf(
+                                config.transformWidth to config.transformHeight,
+                                3840 to 2160,
+                                2560 to 1440,
+                                1920 to 1080,
+                                1280 to 720,
+                                854 to 480,
+                                720 to 480,
+                                640 to 480,
+                            ).filter { (width, height) ->
+                                width <= config.transformWidth && height <= config.transformHeight &&
+                                    width % 2 == 0 && height % 2 == 0 &&
+                                    width.toLong() * config.transformHeight ==
+                                    height.toLong() * config.transformWidth
+                            }.distinct()
+                            Labeled("常用录制分辨率") {
+                                ChoiceRow(
+                                    commonRecordSizes,
+                                    (config.recordWidth to config.recordHeight).takeIf { it in commonRecordSizes },
+                                    { (width, height) -> "${width}×${height}" },
+                                    !recording,
+                                ) { (width, height) ->
+                                    config = config.copy(recordWidth = width, recordHeight = height)
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                DeferredIntField(
+                                    value = config.recordWidth,
+                                    onCommit = { config = config.copy(recordWidth = it) },
+                                    label = { Text("录制宽") },
+                                    enabled = !recording,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                DeferredIntField(
+                                    value = config.recordHeight,
+                                    onCommit = { config = config.copy(recordHeight = it) },
+                                    label = { Text("录制高") },
+                                    enabled = !recording,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            Labeled("缩放算法") {
+                                ChoiceRow(
+                                    VideoScalingAlgorithm.entries,
+                                    config.scalingAlgorithm,
+                                    { it.label },
+                                    !recording,
+                                ) { config = config.copy(scalingAlgorithm = it) }
+                            }
+                            Text(
+                                if (config.resizeSizeValid) {
+                                    "${config.transformWidth}×${config.transformHeight} 处理区域缩小为 ${config.outputWidth}×${config.outputHeight}；不允许放大或改变宽高比。"
+                                } else {
+                                    "录制宽高必须为偶数、不超过处理区域 ${config.transformWidth}×${config.transformHeight}，并保持相同宽高比。"
+                                },
+                                color = if (config.resizeSizeValid) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error,
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
@@ -1514,7 +1601,7 @@ private fun RecordButton(
     Button(
         onClick = if (active) onStop else onStart,
         enabled = state !is RecorderState.Starting && state !is RecorderState.Stopping &&
-            (!config.hasVideo || (config.cameraId.isNotBlank() && config.cropSizeValid)),
+            (!config.hasVideo || (config.cameraId.isNotBlank() && config.cropSizeValid && config.resizeSizeValid)),
         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
         modifier = modifier
     ) {
@@ -2455,6 +2542,30 @@ private fun displayRotationDegrees(rotation: Int): Int = when (rotation) {
 private fun cropFrameFractions(config: RecordingConfig): Pair<Float?, Float?> {
     if (!config.cropEnabled || !config.cropSizeValid) return null to null
     return config.cropWidth.toFloat() / config.width to config.cropHeight.toFloat() / config.height
+}
+
+private fun isValidResizeSize(sourceWidth: Int, sourceHeight: Int, width: Int, height: Int): Boolean =
+    width in 16..sourceWidth && height in 16..sourceHeight && width % 2 == 0 && height % 2 == 0 &&
+        width.toLong() * sourceHeight == height.toLong() * sourceWidth
+
+private fun suggestedResizeSize(sourceWidth: Int, sourceHeight: Int, preferredWidth: Int): Pair<Int, Int> {
+    fun gcd(a: Int, b: Int): Int {
+        var x = a
+        var y = b
+        while (y != 0) {
+            val remainder = x % y
+            x = y
+            y = remainder
+        }
+        return x.coerceAtLeast(1)
+    }
+    val divisor = gcd(sourceWidth, sourceHeight)
+    val ratioWidth = sourceWidth / divisor
+    val ratioHeight = sourceHeight / divisor
+    var multiplier = minOf(divisor, preferredWidth.coerceAtLeast(16) / ratioWidth)
+    if ((ratioWidth % 2 != 0 || ratioHeight % 2 != 0) && multiplier % 2 != 0) multiplier--
+    if (multiplier <= 0) multiplier = if (ratioWidth % 2 == 0 && ratioHeight % 2 == 0) 1 else 2
+    return ratioWidth * multiplier to ratioHeight * multiplier
 }
 
 @Composable

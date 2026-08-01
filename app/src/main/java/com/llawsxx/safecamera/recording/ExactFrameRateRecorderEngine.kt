@@ -53,7 +53,7 @@ class ExactFrameRateRecorderEngine(
     private var session: CameraCaptureSession? = null
     private var previewSurface: Surface? = null
     private var encoderSurface: Surface? = null
-    private var cropRenderer: GlCenterCropRenderer? = null
+    private var transformRenderer: GlVideoTransformRenderer? = null
     private var videoCodec: MediaCodec? = null
     private var audioCodec: MediaCodec? = null
     private var audioRecord: AudioRecord? = null
@@ -96,8 +96,11 @@ class ExactFrameRateRecorderEngine(
         require(config.cropSizeValid) {
             "中心裁切尺寸必须为偶数，且不能超过采集尺寸 ${config.width}×${config.height}"
         }
-        require(!config.cropEnabled || config.dynamicRange == VideoDynamicRange.SDR) {
-            "中心裁切暂不支持 HDR/10-bit 录制"
+        require(config.resizeSizeValid) {
+            "录制分辨率必须为偶数、不超过处理区域 ${config.transformWidth}×${config.transformHeight}，且宽高比一致"
+        }
+        require(!config.videoTransformEnabled || config.dynamicRange == VideoDynamicRange.SDR) {
+            "中心裁切和分辨率缩放暂不支持 HDR/10-bit 录制"
         }
 
         val baseName = "REC_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())}"
@@ -175,13 +178,16 @@ class ExactFrameRateRecorderEngine(
         val video = MediaCodec.createByCodecName(encoderName)
         video.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         encoderSurface = video.createInputSurface()
-        if (config.cropEnabled) {
-            cropRenderer = GlCenterCropRenderer(
+        if (config.videoTransformEnabled) {
+            transformRenderer = GlVideoTransformRenderer(
                 encoderSurface = checkNotNull(encoderSurface),
                 inputWidth = config.width,
                 inputHeight = config.height,
-                outputWidth = config.cropWidth,
-                outputHeight = config.cropHeight,
+                cropWidth = config.transformWidth,
+                cropHeight = config.transformHeight,
+                outputWidth = config.outputWidth,
+                outputHeight = config.outputHeight,
+                scalingAlgorithm = config.scalingAlgorithm,
                 onFirstFrame = {},
             )
         }
@@ -533,8 +539,8 @@ class ExactFrameRateRecorderEngine(
             runCatching { session?.stopRepeating() }
             runCatching { session?.close() }
             session = null
-            runCatching { cropRenderer?.release() }
-            cropRenderer = null
+            runCatching { transformRenderer?.release() }
+            transformRenderer = null
             runCatching { videoCodec?.signalEndOfInputStream() }
             Thread({
                 runCatching { audioRecord?.stop() }
@@ -569,7 +575,7 @@ class ExactFrameRateRecorderEngine(
     }
 
     private fun releaseCodecs() {
-        runCatching { cropRenderer?.release() }; cropRenderer = null
+        runCatching { transformRenderer?.release() }; transformRenderer = null
         runCatching { videoCodec?.stop() }; runCatching { videoCodec?.release() }; videoCodec = null
         runCatching { audioCodec?.stop() }; runCatching { audioCodec?.release() }; audioCodec = null
         runCatching { audioRecord?.release() }; audioRecord = null
@@ -577,7 +583,7 @@ class ExactFrameRateRecorderEngine(
     }
 
     private fun cameraInputSurface(): Surface? =
-        (cropRenderer?.inputSurface ?: encoderSurface)?.takeIf { it.isValid }
+        (transformRenderer?.inputSurface ?: encoderSurface)?.takeIf { it.isValid }
 
     private fun releaseCameraBlocking() {
         val latch = CountDownLatch(1)
@@ -625,9 +631,9 @@ class ExactFrameRateRecorderEngine(
     private fun validateCameraMode(cameraId: String) {
         val c = cameraManager.getCameraCharacteristics(cameraId)
         val sizes = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            ?.getOutputSizes(if (config.cropEnabled) SurfaceTexture::class.java else MediaCodec::class.java).orEmpty()
+            ?.getOutputSizes(if (config.videoTransformEnabled) SurfaceTexture::class.java else MediaCodec::class.java).orEmpty()
         require(sizes.any { it.width == config.width && it.height == config.height }) {
-            "镜头不支持 ${config.width}x${config.height} ${if (config.cropEnabled) "裁切采集" else "MediaCodec 输入"}"
+            "镜头不支持 ${config.width}x${config.height} ${if (config.videoTransformEnabled) "OpenGL 处理输入" else "MediaCodec 输入"}"
         }
         val ranges = c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
         require(ranges.any { it.lower <= config.encoderFps && it.upper >= config.encoderFps }) {

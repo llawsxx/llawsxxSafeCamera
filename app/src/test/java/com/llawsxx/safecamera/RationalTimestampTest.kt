@@ -18,19 +18,54 @@ class RationalTimestampTest {
     }
 
     @Test
-    fun centerCropRequestsExactEngineAndUsesCropAsOutputSize() {
+    fun centerCropAndResizeRequestExactEngineAndUseFinalRecordingSize() {
         val config = RecordingConfig(
             width = 4000,
             height = 3000,
             cropEnabled = true,
-            cropWidth = 1920,
-            cropHeight = 1080,
+            cropWidth = 4000,
+            cropHeight = 2250,
+            resizeEnabled = true,
+            recordWidth = 1920,
+            recordHeight = 1080,
         )
 
         assertTrue(config.exactEngineRequested)
         assertTrue(config.cropSizeValid)
+        assertTrue(config.resizeSizeValid)
         assertEquals(1920, config.outputWidth)
         assertEquals(1080, config.outputHeight)
+    }
+
+    @Test
+    fun resizeRejectsUpscalingAndAspectRatioChanges() {
+        assertTrue(
+            RecordingConfig(
+                width = 3840,
+                height = 2160,
+                resizeEnabled = true,
+                recordWidth = 1920,
+                recordHeight = 1080,
+            ).resizeSizeValid,
+        )
+        assertTrue(
+            !RecordingConfig(
+                width = 1920,
+                height = 1080,
+                resizeEnabled = true,
+                recordWidth = 3840,
+                recordHeight = 2160,
+            ).resizeSizeValid,
+        )
+        assertTrue(
+            !RecordingConfig(
+                width = 4000,
+                height = 3000,
+                resizeEnabled = true,
+                recordWidth = 1920,
+                recordHeight = 1080,
+            ).resizeSizeValid,
+        )
     }
 
     @Test

@@ -16,15 +16,18 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-internal class GlCenterCropRenderer(
+internal class GlVideoTransformRenderer(
     encoderSurface: Surface,
     private val inputWidth: Int,
     private val inputHeight: Int,
+    private val cropWidth: Int,
+    private val cropHeight: Int,
     private val outputWidth: Int,
     private val outputHeight: Int,
+    private val scalingAlgorithm: VideoScalingAlgorithm,
     private val onFirstFrame: () -> Unit,
 ) {
-    private val renderThread = HandlerThread("center-crop-render").apply { start() }
+    private val renderThread = HandlerThread("video-transform-render").apply { start() }
     private val renderHandler = Handler(renderThread.looper)
     private val released = AtomicBoolean(false)
     private val display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
@@ -35,6 +38,7 @@ internal class GlCenterCropRenderer(
     private val positionLocation: Int
     private val texCoordLocation: Int
     private val matrixLocation: Int
+    private val cropSizeLocation: Int
     private val vertices = floatBuffer(
         -1f, -1f, 0f, 0f,
          1f, -1f, 1f, 0f,
@@ -85,15 +89,24 @@ internal class GlCenterCropRenderer(
 
         textureId = IntArray(1).also { GLES20.glGenTextures(1, it, 0) }[0]
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        val textureFilter = if (scalingAlgorithm == VideoScalingAlgorithm.NEAREST) {
+            GLES20.GL_NEAREST
+        } else {
+            GLES20.GL_LINEAR
+        }
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, textureFilter)
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, textureFilter)
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
 
-        program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
+        program = createProgram(
+            if (scalingAlgorithm == VideoScalingAlgorithm.BICUBIC) BICUBIC_VERTEX_SHADER else VERTEX_SHADER,
+            if (scalingAlgorithm == VideoScalingAlgorithm.BICUBIC) BICUBIC_FRAGMENT_SHADER else FRAGMENT_SHADER,
+        )
         positionLocation = GLES20.glGetAttribLocation(program, "aPosition")
         texCoordLocation = GLES20.glGetAttribLocation(program, "aTexCoord")
         matrixLocation = GLES20.glGetUniformLocation(program, "uTexMatrix")
+        cropSizeLocation = GLES20.glGetUniformLocation(program, "uCropSize")
 
         surfaceTexture = SurfaceTexture(textureId).apply {
             setDefaultBufferSize(inputWidth, inputHeight)
@@ -115,7 +128,7 @@ internal class GlCenterCropRenderer(
         }
         surfaceTexture.getTransformMatrix(textureMatrix)
         removeTextureRotation(textureMatrix)
-        applyCenteredPixelCrop(textureMatrix, inputWidth, inputHeight, outputWidth, outputHeight)
+        applyCenteredPixelCrop(textureMatrix, inputWidth, inputHeight, cropWidth, cropHeight)
 
         GLES20.glViewport(0, 0, outputWidth, outputHeight)
         GLES20.glUseProgram(program)
@@ -126,6 +139,9 @@ internal class GlCenterCropRenderer(
         GLES20.glEnableVertexAttribArray(texCoordLocation)
         GLES20.glVertexAttribPointer(texCoordLocation, 2, GLES20.GL_FLOAT, false, 16, vertices)
         GLES20.glUniformMatrix4fv(matrixLocation, 1, false, textureMatrix, 0)
+        if (cropSizeLocation >= 0) {
+            GLES20.glUniform2f(cropSizeLocation, cropWidth.toFloat(), cropHeight.toFloat())
+        }
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
@@ -209,6 +225,53 @@ internal class GlCenterCropRenderer(
             varying vec2 vTexCoord;
             uniform samplerExternalOES sTexture;
             void main() { gl_FragColor = texture2D(sTexture, vTexCoord); }
+        """
+        private const val BICUBIC_VERTEX_SHADER = """
+            attribute vec4 aPosition;
+            attribute vec2 aTexCoord;
+            varying vec2 vCropCoord;
+            void main() {
+                gl_Position = aPosition;
+                vCropCoord = aTexCoord;
+            }
+        """
+        private const val BICUBIC_FRAGMENT_SHADER = """
+            #extension GL_OES_EGL_image_external : require
+            precision highp float;
+            varying vec2 vCropCoord;
+            uniform samplerExternalOES sTexture;
+            uniform mat4 uTexMatrix;
+            uniform vec2 uCropSize;
+
+            float cubicWeight(float value) {
+                float x = abs(value);
+                if (x <= 1.0) return 1.5 * x * x * x - 2.5 * x * x + 1.0;
+                if (x < 2.0) return -0.5 * x * x * x + 2.5 * x * x - 4.0 * x + 2.0;
+                return 0.0;
+            }
+
+            void main() {
+                vec2 pixel = vCropCoord * uCropSize - vec2(0.5);
+                vec2 base = floor(pixel);
+                vec2 fraction = pixel - base;
+                vec4 color = vec4(0.0);
+                float totalWeight = 0.0;
+                for (int y = -1; y <= 2; y++) {
+                    for (int x = -1; x <= 2; x++) {
+                        float weight = cubicWeight(float(x) - fraction.x) *
+                            cubicWeight(float(y) - fraction.y);
+                        vec2 cropUv = clamp(
+                            (base + vec2(float(x), float(y)) + vec2(0.5)) / uCropSize,
+                            vec2(0.5) / uCropSize,
+                            vec2(1.0) - vec2(0.5) / uCropSize
+                        );
+                        vec2 sourceUv = (uTexMatrix * vec4(cropUv, 0.0, 1.0)).xy;
+                        color += texture2D(sTexture, sourceUv) * weight;
+                        totalWeight += weight;
+                    }
+                }
+                gl_FragColor = clamp(color / totalWeight, 0.0, 1.0);
+            }
         """
         private fun floatBuffer(vararg values: Float): FloatBuffer =
             ByteBuffer.allocateDirect(values.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
