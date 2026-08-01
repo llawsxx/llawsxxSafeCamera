@@ -42,6 +42,15 @@ object ConfigPreferences {
             aperture = p.getString("aperture", null)?.toFloatOrNull(),
             exposureCompensation = p.getInt("exposureCompensation", 0),
             awbMode = p.getInt("awbMode", android.hardware.camera2.CameraCharacteristics.CONTROL_AWB_MODE_AUTO),
+            manualWhiteBalance = p.getBoolean("manualWhiteBalance", false),
+            whiteBalanceTemperature = p.getInt("whiteBalanceTemperature", 5_500).coerceIn(2_000, 10_000),
+            whiteBalanceTint = p.getInt("whiteBalanceTint", 0).coerceIn(-100, 100),
+            advancedWhiteBalance = p.getBoolean("advancedWhiteBalance", false),
+            splitWhiteBalanceGreen = p.getBoolean("splitWhiteBalanceGreen", false),
+            whiteBalanceRedGain = p.getFloat("whiteBalanceRedGain", 1f).coerceIn(1f, 8f),
+            whiteBalanceGreenEvenGain = p.getFloat("whiteBalanceGreenEvenGain", 1f).coerceIn(1f, 8f),
+            whiteBalanceGreenOddGain = p.getFloat("whiteBalanceGreenOddGain", 1f).coerceIn(1f, 8f),
+            whiteBalanceBlueGain = p.getFloat("whiteBalanceBlueGain", 1f).coerceIn(1f, 8f),
             focusMode = enumValue(p.getString("focusMode", null), FocusMode.CONTINUOUS),
             focusDistanceDiopters = p.getFloat("focusDistanceDiopters", 0f).coerceAtLeast(0f),
             mfAssistMagnifications = p.getString("mfAssistMagnifications", null)
@@ -96,6 +105,15 @@ object ConfigPreferences {
             .putString("aperture", c.aperture?.toString())
             .putInt("exposureCompensation", c.exposureCompensation)
             .putInt("awbMode", c.awbMode)
+            .putBoolean("manualWhiteBalance", c.manualWhiteBalance)
+            .putInt("whiteBalanceTemperature", c.whiteBalanceTemperature)
+            .putInt("whiteBalanceTint", c.whiteBalanceTint)
+            .putBoolean("advancedWhiteBalance", c.advancedWhiteBalance)
+            .putBoolean("splitWhiteBalanceGreen", c.splitWhiteBalanceGreen)
+            .putFloat("whiteBalanceRedGain", c.whiteBalanceRedGain)
+            .putFloat("whiteBalanceGreenEvenGain", c.whiteBalanceGreenEvenGain)
+            .putFloat("whiteBalanceGreenOddGain", c.whiteBalanceGreenOddGain)
+            .putFloat("whiteBalanceBlueGain", c.whiteBalanceBlueGain)
             .putString("focusMode", c.focusMode.name)
             .putFloat("focusDistanceDiopters", c.focusDistanceDiopters)
             .putString("mfAssistMagnifications", c.mfAssistMagnifications.joinToString(","))

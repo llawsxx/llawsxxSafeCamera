@@ -115,6 +115,7 @@ import com.llawsxx.safecamera.recording.VideoColorRange
 import com.llawsxx.safecamera.recording.VideoColorStandard
 import com.llawsxx.safecamera.recording.VideoColorTransfer
 import com.llawsxx.safecamera.recording.awbLabel
+import com.llawsxx.safecamera.recording.manualWhiteBalanceGains
 import com.llawsxx.safecamera.ui.theme.LlawsxxSafeCameraTheme
 import java.util.Locale
 import kotlinx.coroutines.delay
@@ -334,6 +335,9 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             val exposure = config.exposureNs.coerceIn(range.lower, maximum)
             if (exposure != config.exposureNs) config = config.copy(exposureNs = exposure)
         }
+        if (config.manualWhiteBalance && selectedCamera?.supportsManualWhiteBalance == false) {
+            config = config.copy(manualWhiteBalance = false)
+        }
     }
     LaunchedEffect(
         state is RecorderState.Recording,
@@ -343,6 +347,15 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.aperture,
         config.exposureCompensation,
         config.awbMode,
+        config.manualWhiteBalance,
+        config.whiteBalanceTemperature,
+        config.whiteBalanceTint,
+        config.advancedWhiteBalance,
+        config.splitWhiteBalanceGreen,
+        config.whiteBalanceRedGain,
+        config.whiteBalanceGreenEvenGain,
+        config.whiteBalanceGreenOddGain,
+        config.whiteBalanceBlueGain,
         config.focusMode,
         config.focusDistanceDiopters,
         config.opticalStabilization,
@@ -391,6 +404,15 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.aperture,
         config.exposureCompensation,
         config.awbMode,
+        config.manualWhiteBalance,
+        config.whiteBalanceTemperature,
+        config.whiteBalanceTint,
+        config.advancedWhiteBalance,
+        config.splitWhiteBalanceGreen,
+        config.whiteBalanceRedGain,
+        config.whiteBalanceGreenEvenGain,
+        config.whiteBalanceGreenOddGain,
+        config.whiteBalanceBlueGain,
         config.focusMode,
         config.focusDistanceDiopters,
         config.opticalStabilization,
@@ -1669,7 +1691,10 @@ private fun CompactExposureControls(
             }
         }
     }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    Row(
+        Modifier.fillMaxWidth().padding(end = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
         if (camera.apertures.isNotEmpty()) {
             Column(Modifier.weight(1f)) {
                 Text("光圈", style = MaterialTheme.typography.labelMedium)
@@ -1695,12 +1720,138 @@ private fun CompactExposureControls(
         }
         Column(Modifier.weight(1f)) {
             Text("白平衡", style = MaterialTheme.typography.labelMedium)
-            ChoiceRow(camera.awbModes, config.awbMode, ::awbLabel, enabled) {
-                onChange(config.copy(awbMode = it))
+            ChoiceRow(
+                camera.awbModes.filter { it != CameraCharacteristics.CONTROL_AWB_MODE_OFF },
+                config.awbMode,
+                ::awbLabel,
+                enabled && !config.manualWhiteBalance,
+            ) {
+                onChange(config.copy(awbMode = it, manualWhiteBalance = false))
             }
         }
     }
+    ToggleLine(
+        "手动白平衡",
+        config.manualWhiteBalance,
+        enabled && camera.supportsManualWhiteBalance,
+    ) { onChange(config.copy(manualWhiteBalance = it)) }
+    if (config.manualWhiteBalance && camera.supportsManualWhiteBalance) {
+        ManualWhiteBalanceControls(config, enabled, onChange)
+    } else if (!camera.supportsManualWhiteBalance) {
+        Text("当前镜头不支持手动白平衡", style = MaterialTheme.typography.bodySmall)
+    }
     FocusControls(camera, config, enabled, onChange)
+}
+
+@Composable
+private fun ManualWhiteBalanceControls(
+    config: RecordingConfig,
+    enabled: Boolean,
+    onChange: (RecordingConfig) -> Unit,
+) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.weight(1f)) {
+            Text("色温 ${config.whiteBalanceTemperature}K", style = MaterialTheme.typography.labelMedium)
+            Slider(
+                value = config.whiteBalanceTemperature.toFloat(),
+                onValueChange = { onChange(config.copy(whiteBalanceTemperature = (it / 50f).toInt() * 50)) },
+                valueRange = 2_000f..10_000f,
+                steps = 159,
+                enabled = enabled && !config.advancedWhiteBalance,
+            )
+        }
+        Column(Modifier.weight(1f)) {
+            Text("色调 ${tintLabel(config.whiteBalanceTint)}", style = MaterialTheme.typography.labelMedium)
+            Slider(
+                value = config.whiteBalanceTint.toFloat(),
+                onValueChange = { onChange(config.copy(whiteBalanceTint = it.toInt())) },
+                valueRange = -100f..100f,
+                steps = 199,
+                enabled = enabled && !config.advancedWhiteBalance,
+            )
+        }
+    }
+    ToggleLine("高级 RGGB", config.advancedWhiteBalance, enabled) { advanced ->
+        onChange(if (advanced) config.withAdvancedWhiteBalanceFromTemperature() else config.copy(advancedWhiteBalance = false))
+    }
+    if (config.advancedWhiteBalance) {
+        ToggleLine("分离绿色通道", config.splitWhiteBalanceGreen, enabled) {
+            onChange(
+                config.copy(
+                    splitWhiteBalanceGreen = it,
+                    whiteBalanceGreenOddGain = if (it) {
+                        config.whiteBalanceGreenOddGain
+                    } else {
+                        config.whiteBalanceGreenEvenGain
+                    },
+                ),
+            )
+        }
+        WhiteBalanceGainRow(
+            entries = listOf(
+                "R" to config.whiteBalanceRedGain,
+                "G" to config.whiteBalanceGreenEvenGain,
+                "B" to config.whiteBalanceBlueGain,
+            ),
+            enabled = enabled,
+            onValueChange = { channel, value ->
+                onChange(
+                    when (channel) {
+                        "R" -> config.copy(whiteBalanceRedGain = value)
+                        "G" -> config.copy(
+                            whiteBalanceGreenEvenGain = value,
+                            whiteBalanceGreenOddGain = if (config.splitWhiteBalanceGreen) {
+                                config.whiteBalanceGreenOddGain
+                            } else value,
+                        )
+                        else -> config.copy(whiteBalanceBlueGain = value)
+                    },
+                )
+            },
+        )
+        if (config.splitWhiteBalanceGreen) {
+            WhiteBalanceGainRow(
+                entries = listOf(
+                    "G-even" to config.whiteBalanceGreenEvenGain,
+                    "G-odd" to config.whiteBalanceGreenOddGain,
+                ),
+                enabled = enabled,
+                onValueChange = { channel, value ->
+                    onChange(
+                        if (channel == "G-even") {
+                            config.copy(whiteBalanceGreenEvenGain = value)
+                        } else {
+                            config.copy(whiteBalanceGreenOddGain = value)
+                        },
+                    )
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun WhiteBalanceGainRow(
+    entries: List<Pair<String, Float>>,
+    enabled: Boolean,
+    onValueChange: (String, Float) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(end = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        entries.forEach { (label, value) ->
+            Column(Modifier.weight(1f)) {
+                Text("$label ${value.format2()}", style = MaterialTheme.typography.labelSmall)
+                Slider(
+                    value = value.coerceIn(1f, 8f),
+                    onValueChange = { onValueChange(label, it) },
+                    valueRange = 1f..8f,
+                    enabled = enabled,
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -1825,7 +1976,11 @@ private fun QuickCameraControls(
                                 FullscreenControl.SHUTTER -> formatShutter(displayedExposureNs)
                                 FullscreenControl.APERTURE -> displayedAperture?.let { "f/${it.format1()}" } ?: "光圈"
                                 FullscreenControl.EV -> exposureCompensationLabel(camera, config.exposureCompensation)
-                                FullscreenControl.WB -> awbLabel(config.awbMode)
+                                FullscreenControl.WB -> if (config.manualWhiteBalance) {
+                                    if (config.advancedWhiteBalance) {
+                                        if (config.splitWhiteBalanceGreen) "RGGB" else "RGB"
+                                    } else "${config.whiteBalanceTemperature}K ${tintLabel(config.whiteBalanceTint)}"
+                                } else awbLabel(config.awbMode)
                                 FullscreenControl.FOCUS -> if (config.focusMode == FocusMode.MANUAL) "MF" else "AF"
                             },
                             style = MaterialTheme.typography.labelSmall,
@@ -1835,10 +1990,40 @@ private fun QuickCameraControls(
                     }
                     if (control == FullscreenControl.WB) {
                         DropdownMenu(expanded = whiteBalanceExpanded, onDismissRequest = { whiteBalanceExpanded = false }) {
-                            camera.awbModes.forEach { mode ->
+                            if (camera.supportsManualWhiteBalance) {
+                                DropdownMenuItem(text = { Text("手动：色温 + Tint") }, onClick = {
+                                    whiteBalanceExpanded = false
+                                    onChange(config.copy(manualWhiteBalance = true, advancedWhiteBalance = false))
+                                })
+                                DropdownMenuItem(text = { Text("手动：高级 RGB（G 联动）") }, onClick = {
+                                    whiteBalanceExpanded = false
+                                    val advanced = config.withAdvancedWhiteBalanceFromTemperature()
+                                    onChange(
+                                        advanced.copy(
+                                            splitWhiteBalanceGreen = false,
+                                            whiteBalanceGreenOddGain = advanced.whiteBalanceGreenEvenGain,
+                                        ),
+                                    )
+                                })
+                                DropdownMenuItem(text = { Text("手动：高级 RGGB（G1/G2 分离）") }, onClick = {
+                                    whiteBalanceExpanded = false
+                                    val advanced = config.withAdvancedWhiteBalanceFromTemperature()
+                                    onChange(
+                                        advanced.copy(
+                                            splitWhiteBalanceGreen = true,
+                                            whiteBalanceGreenOddGain = if (config.splitWhiteBalanceGreen) {
+                                                advanced.whiteBalanceGreenOddGain
+                                            } else {
+                                                advanced.whiteBalanceGreenEvenGain
+                                            },
+                                        ),
+                                    )
+                                })
+                            }
+                            camera.awbModes.filter { it != CameraCharacteristics.CONTROL_AWB_MODE_OFF }.forEach { mode ->
                                 DropdownMenuItem(text = { Text(awbLabel(mode)) }, onClick = {
                                     whiteBalanceExpanded = false
-                                    onChange(config.copy(awbMode = mode))
+                                    onChange(config.copy(awbMode = mode, manualWhiteBalance = false))
                                 })
                             }
                         }
@@ -1887,11 +2072,127 @@ private fun QuickCameraControls(
                         valueLabel = { exposureCompensationLabel(camera, it.toInt()) },
                     )
                 }
-                FullscreenControl.APERTURE, FullscreenControl.WB -> Unit
+                FullscreenControl.WB -> if (config.manualWhiteBalance && camera.supportsManualWhiteBalance) {
+                    CompactManualWhiteBalanceControls(config, enabled, onChange)
+                }
+                FullscreenControl.APERTURE -> Unit
                 FullscreenControl.FOCUS -> FocusControls(camera, config, enabled, onChange, compact = true, lightText = lightText)
             }
         }
     }
+}
+
+@Composable
+private fun CompactManualWhiteBalanceControls(
+    config: RecordingConfig,
+    enabled: Boolean,
+    onChange: (RecordingConfig) -> Unit,
+) {
+    if (config.advancedWhiteBalance) {
+        val entries = buildList {
+            add("R" to config.whiteBalanceRedGain)
+            add("G1" to config.whiteBalanceGreenEvenGain)
+            if (config.splitWhiteBalanceGreen) add("G2" to config.whiteBalanceGreenOddGain)
+            add("B" to config.whiteBalanceBlueGain)
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(end = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            entries.forEach { (channel, value) ->
+                CompactInlineSlider(
+                    label = "$channel ${value.format1()}",
+                    value = value,
+                    onValueChange = { updated ->
+                        onChange(
+                            when (channel) {
+                                "R" -> config.copy(whiteBalanceRedGain = updated)
+                                "G1" -> config.copy(
+                                    whiteBalanceGreenEvenGain = updated,
+                                    whiteBalanceGreenOddGain = if (config.splitWhiteBalanceGreen) {
+                                        config.whiteBalanceGreenOddGain
+                                    } else updated,
+                                )
+                                "G2" -> config.copy(whiteBalanceGreenOddGain = updated)
+                                else -> config.copy(whiteBalanceBlueGain = updated)
+                            },
+                        )
+                    },
+                    valueRange = 1f..8f,
+                    steps = 0,
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f),
+                    labelWidth = 44,
+                )
+            }
+        }
+        return
+    }
+    Row(
+        Modifier.fillMaxWidth().padding(end = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        CompactInlineSlider(
+            label = "${config.whiteBalanceTemperature}K",
+            value = config.whiteBalanceTemperature.toFloat(),
+            onValueChange = { onChange(config.copy(whiteBalanceTemperature = (it / 50f).toInt() * 50)) },
+            valueRange = 2_000f..10_000f,
+            steps = 159,
+            enabled = enabled,
+            modifier = Modifier.weight(1f),
+        )
+        CompactInlineSlider(
+            label = tintLabel(config.whiteBalanceTint),
+            value = config.whiteBalanceTint.toFloat(),
+            onValueChange = { onChange(config.copy(whiteBalanceTint = it.toInt())) },
+            valueRange = -100f..100f,
+            steps = 199,
+            enabled = enabled,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun CompactInlineSlider(
+    label: String,
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    labelWidth: Int = 58,
+) {
+    Box(modifier.height(24.dp), contentAlignment = Alignment.Center) {
+        Text(label, style = MaterialTheme.typography.labelSmall, modifier = Modifier.align(Alignment.CenterStart))
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            steps = steps,
+            enabled = enabled,
+            modifier = Modifier.fillMaxWidth().height(24.dp).padding(start = labelWidth.dp),
+        )
+    }
+}
+
+private fun tintLabel(tint: Int): String = when {
+    tint > 0 -> "T+$tint"
+    else -> "T$tint"
+}
+
+private fun RecordingConfig.withAdvancedWhiteBalanceFromTemperature(): RecordingConfig {
+    if (advancedWhiteBalance) return copy(manualWhiteBalance = true)
+    val gains = manualWhiteBalanceGains(whiteBalanceTemperature, whiteBalanceTint)
+    return copy(
+        manualWhiteBalance = true,
+        advancedWhiteBalance = true,
+        whiteBalanceRedGain = gains.red,
+        whiteBalanceGreenEvenGain = gains.greenEven,
+        whiteBalanceGreenOddGain = gains.greenOdd,
+        whiteBalanceBlueGain = gains.blue,
+    )
 }
 
 private enum class FullscreenControl { ISO, SHUTTER, APERTURE, EV, WB, FOCUS }
@@ -2152,6 +2453,7 @@ private fun DeferredIntField(
 private data class MicrophoneChoice(val id: Int?, val label: String)
 
 private fun Float.format1(): String = String.format(Locale.US, "%.1f", this)
+private fun Float.format2(): String = String.format(Locale.US, "%.2f", this)
 private fun Double.format1(): String = String.format(Locale.US, "%.1f", this)
 private fun Double.format3(): String = String.format(Locale.US, "%.3f", this)
 private fun exposureCompensationLabel(camera: CameraInfo, index: Int): String {

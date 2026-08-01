@@ -61,6 +61,8 @@ object CameraCapabilities {
                 } else {
                     listOf(VideoDynamicRange.SDR)
                 }
+                val awbModes = c.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)?.toList().orEmpty()
+                val capabilities = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.toSet().orEmpty()
                 CameraInfo(
                     id = id,
                     displayName = "$facingName $id${if (focalLengths.isBlank()) "" else " · ${focalLengths}mm"}",
@@ -74,7 +76,9 @@ object CameraCapabilities {
                     exposureCompensationRange = c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
                         ?.takeUnless { it.lower == 0 && it.upper == 0 },
                     exposureCompensationStep = c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP),
-                    awbModes = c.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)?.toList().orEmpty(),
+                    awbModes = awbModes,
+                    supportsManualWhiteBalance = CameraCharacteristics.CONTROL_AWB_MODE_OFF in awbModes &&
+                        CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING in capabilities,
                     oisAvailable = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
                         ?.contains(CameraCharacteristics.LENS_OPTICAL_STABILIZATION_MODE_ON) == true,
                     noiseReductionModes = c.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)

@@ -3,8 +3,11 @@ package com.llawsxx.safecamera.recording
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.params.RggbChannelVector
 import android.graphics.Rect
 import android.os.Build
+import kotlin.math.ln
+import kotlin.math.pow
 
 object CameraRequestControls {
     fun apply(
@@ -75,10 +78,36 @@ object CameraRequestControls {
         }
 
         val awbModes = characteristics.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES) ?: intArrayOf()
-        builder.set(
-            CaptureRequest.CONTROL_AWB_MODE,
-            config.awbMode.takeIf(awbModes::contains) ?: CaptureRequest.CONTROL_AWB_MODE_AUTO,
-        )
+        val capabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
+        val supportsManualWhiteBalance = CaptureRequest.CONTROL_AWB_MODE_OFF in awbModes &&
+            CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING in capabilities
+        if (config.manualWhiteBalance && supportsManualWhiteBalance) {
+            val gains = if (config.advancedWhiteBalance) {
+                manualWhiteBalanceGains(
+                    red = config.whiteBalanceRedGain,
+                    greenEven = config.whiteBalanceGreenEvenGain,
+                    greenOdd = if (config.splitWhiteBalanceGreen) {
+                        config.whiteBalanceGreenOddGain
+                    } else {
+                        config.whiteBalanceGreenEvenGain
+                    },
+                    blue = config.whiteBalanceBlueGain,
+                )
+            } else {
+                manualWhiteBalanceGains(config.whiteBalanceTemperature, config.whiteBalanceTint)
+            }
+            builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF)
+            builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+            builder.set(
+                CaptureRequest.COLOR_CORRECTION_GAINS,
+                RggbChannelVector(gains.red, gains.greenEven, gains.greenOdd, gains.blue),
+            )
+        } else {
+            builder.set(
+                CaptureRequest.CONTROL_AWB_MODE,
+                config.awbMode.takeIf(awbModes::contains) ?: CaptureRequest.CONTROL_AWB_MODE_AUTO,
+            )
+        }
         val afModes = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
         val minimumFocusDistance = characteristics.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
         if (config.focusMode == FocusMode.MANUAL && minimumFocusDistance > 0f &&
@@ -132,4 +161,60 @@ object CameraRequestControls {
         val top = active.top + (active.height() - cropHeight) / 2
         return Rect(left, top, left + cropWidth, top + cropHeight)
     }
+}
+
+internal data class ManualWhiteBalanceGains(
+    val red: Float,
+    val greenEven: Float,
+    val greenOdd: Float,
+    val blue: Float,
+)
+
+internal fun manualWhiteBalanceGains(temperature: Int, tint: Int): ManualWhiteBalanceGains {
+    val source = colorTemperatureRgb(temperature.coerceIn(2_000, 10_000))
+    val tintValue = tint.coerceIn(-100, 100) / 100f
+    val magentaScale = 2.0.pow(tintValue.toDouble() * 0.5).toFloat()
+    val greenScale = 2.0.pow(-tintValue.toDouble() * 0.5).toFloat()
+    val rawRed = source.second / source.first * magentaScale
+    val rawGreen = greenScale
+    val rawBlue = source.second / source.third * magentaScale
+    val minimum = minOf(rawRed, rawGreen, rawBlue).coerceAtLeast(0.0001f)
+    return ManualWhiteBalanceGains(
+        red = (rawRed / minimum).coerceIn(1f, 8f),
+        greenEven = (rawGreen / minimum).coerceIn(1f, 8f),
+        greenOdd = (rawGreen / minimum).coerceIn(1f, 8f),
+        blue = (rawBlue / minimum).coerceIn(1f, 8f),
+    )
+}
+
+internal fun manualWhiteBalanceGains(
+    red: Float,
+    greenEven: Float,
+    greenOdd: Float,
+    blue: Float,
+): ManualWhiteBalanceGains = ManualWhiteBalanceGains(
+    red = red.coerceIn(1f, 8f),
+    greenEven = greenEven.coerceIn(1f, 8f),
+    greenOdd = greenOdd.coerceIn(1f, 8f),
+    blue = blue.coerceIn(1f, 8f),
+)
+
+private fun colorTemperatureRgb(temperature: Int): Triple<Float, Float, Float> {
+    val value = temperature.coerceIn(2_000, 10_000) / 100.0
+    val red = if (value <= 66.0) 255.0 else 329.698727446 * (value - 60.0).pow(-0.1332047592)
+    val green = if (value <= 66.0) {
+        99.4708025861 * ln(value) - 161.1195681661
+    } else {
+        288.1221695283 * (value - 60.0).pow(-0.0755148492)
+    }
+    val blue = when {
+        value >= 66.0 -> 255.0
+        value <= 19.0 -> 0.0
+        else -> 138.5177312231 * ln(value - 10.0) - 305.0447927307
+    }
+    return Triple(
+        red.coerceIn(1.0, 255.0).toFloat(),
+        green.coerceIn(1.0, 255.0).toFloat(),
+        blue.coerceIn(1.0, 255.0).toFloat(),
+    )
 }

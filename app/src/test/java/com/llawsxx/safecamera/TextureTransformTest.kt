@@ -2,10 +2,12 @@ package com.llawsxx.safecamera
 
 import com.llawsxx.safecamera.recording.removeTextureRotation
 import com.llawsxx.safecamera.recording.applyCenteredPixelCrop
+import com.llawsxx.safecamera.recording.manualWhiteBalanceGains
 import com.llawsxx.safecamera.screenDragToSource
 import com.llawsxx.safecamera.sourcePointToDisplay
 import com.llawsxx.safecamera.boundedPreviewTranslation
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TextureTransformTest {
@@ -47,6 +49,33 @@ class TextureTransformTest {
                 viewportHeight = 1000,
                 zoom = 2f,
             ).toFloatArray(),
+            0.0001f,
+        )
+    }
+
+    @Test
+    fun manualWhiteBalanceTracksTemperatureAndTint() {
+        val neutral = manualWhiteBalanceGains(5_500, 0)
+        assertTrue(neutral.red >= 1f && neutral.greenEven >= 1f && neutral.greenOdd >= 1f && neutral.blue >= 1f)
+        assertTrue(neutral.blue > neutral.red)
+
+        val warmLight = manualWhiteBalanceGains(2_500, 0)
+        assertTrue(warmLight.blue > warmLight.red)
+        val coolLight = manualWhiteBalanceGains(9_000, 0)
+        assertTrue(coolLight.red > coolLight.blue)
+
+        val magenta = manualWhiteBalanceGains(5_500, 100)
+        assertTrue(magenta.red > magenta.greenEven && magenta.blue > magenta.greenEven)
+        val green = manualWhiteBalanceGains(5_500, -100)
+        assertTrue(green.greenEven > green.red && green.greenOdd > green.blue)
+    }
+
+    @Test
+    fun advancedWhiteBalanceKeepsIndependentRggbWithinCameraRange() {
+        val gains = manualWhiteBalanceGains(0.5f, 2f, 3f, 10f)
+        assertArrayEquals(
+            floatArrayOf(1f, 2f, 3f, 8f),
+            floatArrayOf(gains.red, gains.greenEven, gains.greenOdd, gains.blue),
             0.0001f,
         )
     }
