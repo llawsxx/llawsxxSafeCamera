@@ -689,16 +689,20 @@ class MediaCodecRecorderEngine(
             "镜头不支持 ${config.width}x${config.height} ${if (config.videoTransformEnabled) "OpenGL 处理输入" else "MediaCodec 输入"}"
         }
         val ranges = c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
-        require(ranges.any { it.lower <= config.fps && it.upper >= config.fps }) {
+        require(config.experimentalUnadvertisedFps || ranges.any { it.lower <= config.fps && it.upper >= config.fps }) {
             "镜头不支持 ${config.fps} fps 采集"
         }
     }
 
-    private fun dynamicFpsRange(cameraId: String) = cameraManager.getCameraCharacteristics(cameraId)
-        .get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-        .orEmpty()
-        .filter { it.lower <= config.fps && it.upper >= config.fps }
-        .maxByOrNull { it.upper - it.lower }
+    private fun dynamicFpsRange(cameraId: String): android.util.Range<Int>? {
+        val declared = cameraManager.getCameraCharacteristics(cameraId)
+            .get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            .orEmpty()
+            .filter { it.lower <= config.fps && it.upper >= config.fps }
+            .maxByOrNull { it.upper - it.lower }
+        return declared ?: android.util.Range(config.fps, config.fps)
+            .takeIf { config.experimentalUnadvertisedFps }
+    }
 
     private fun closeCamera() {
         sessionGeneration++

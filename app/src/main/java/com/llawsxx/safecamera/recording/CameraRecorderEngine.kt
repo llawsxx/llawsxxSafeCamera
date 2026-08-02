@@ -91,7 +91,7 @@ class CameraRecorderEngine(
                 "当前镜头不支持 ${config.width}x${config.height} 录制"
             }
             val ranges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
-            require(ranges.any { it.lower <= config.fps && it.upper >= config.fps }) {
+            require(config.experimentalUnadvertisedFps || ranges.any { it.lower <= config.fps && it.upper >= config.fps }) {
                 "当前镜头不支持 ${config.fps} fps"
             }
         }

@@ -27,6 +27,8 @@ object ConfigPreferences {
                 VideoScalingAlgorithm.BILINEAR,
             ),
             fps = p.getInt("fps", 30).coerceAtLeast(1),
+            experimentalCameraAccess = p.getBoolean("experimentalCameraAccess", false),
+            experimentalUnadvertisedFps = p.getBoolean("experimentalUnadvertisedFps", false),
             mediaCodecMode = p.getBoolean("mediaCodecMode", false),
             videoBitrate = p.getInt("videoBitrate", 12_000_000),
             videoBitrateMode = enumValue(p.getString("videoBitrateMode", null), VideoBitrateMode.DEFAULT),
@@ -125,6 +127,8 @@ object ConfigPreferences {
             .putInt("recordHeight", c.recordHeight)
             .putString("scalingAlgorithm", c.scalingAlgorithm.name)
             .putInt("fps", c.fps)
+            .putBoolean("experimentalCameraAccess", c.experimentalCameraAccess)
+            .putBoolean("experimentalUnadvertisedFps", c.experimentalUnadvertisedFps)
             .putBoolean("mediaCodecMode", c.mediaCodecMode)
             .putInt("videoBitrate", c.videoBitrate)
             .putString("videoBitrateMode", c.videoBitrateMode.name)

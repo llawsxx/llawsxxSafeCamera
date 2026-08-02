@@ -6,6 +6,7 @@ import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.params.RggbChannelVector
 import android.graphics.Rect
 import android.os.Build
+import android.util.Range
 import kotlin.math.ln
 import kotlin.math.pow
 
@@ -49,9 +50,11 @@ object CameraRequestControls {
         }
         val targetFps = config.fps
         val availableFps = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
-        val fpsRange = availableFps
+        val declaredRange = availableFps
             .filter { it.lower <= targetFps && it.upper >= targetFps }
             .minByOrNull { (it.upper - it.lower) + (it.upper - targetFps) }
+        val fpsRange = declaredRange
+            ?: Range(targetFps, targetFps).takeIf { config.experimentalUnadvertisedFps && !config.highSpeedMode }
             ?: availableFps.minByOrNull { kotlin.math.abs(it.upper - targetFps) }
         fpsRange?.let { builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
 

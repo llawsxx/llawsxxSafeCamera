@@ -12,9 +12,28 @@ import android.os.Build
 import android.util.Size
 
 object CameraCapabilities {
-    fun query(context: Context): List<CameraInfo> {
+    fun query(context: Context, experimental: Boolean = false): List<CameraInfo> {
         val manager = context.getSystemService(CameraManager::class.java)
-        return manager.cameraIdList.mapNotNull { id ->
+        val publicIds = manager.cameraIdList.toSet()
+        val physicalIds = if (experimental && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            publicIds.flatMap { id ->
+                runCatching {
+                    manager.getCameraCharacteristics(id).physicalCameraIds
+                }.getOrDefault(emptySet())
+            }.toSet()
+        } else emptySet()
+        val guessedIds = if (experimental) {
+            buildSet {
+                addAll((0..31).map(Int::toString))
+                publicIds.mapNotNullTo(this) { it.toIntOrNull()?.let { value -> (value + 1).toString() } }
+            }.filterTo(mutableSetOf()) { id ->
+                id !in publicIds && id !in physicalIds && runCatching {
+                    manager.getCameraCharacteristics(id)
+                }.isSuccess
+            }
+        } else emptySet()
+        val candidateIds = publicIds + physicalIds + guessedIds
+        return candidateIds.mapNotNull { id ->
             runCatching {
                 val c = manager.getCameraCharacteristics(id)
                 val facing = c.get(CameraCharacteristics.LENS_FACING)
@@ -27,12 +46,13 @@ object CameraCapabilities {
                 val focalLengths = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
                     ?.joinToString("/") { "%.1f".format(it) }
                     .orEmpty()
-                val sizes = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                val streamMap = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                val sizes = streamMap
                     ?.getOutputSizes(MediaRecorder::class.java)
                     ?.sortedWith(compareByDescending<Size> { it.width.toLong() * it.height }.thenBy { it.width })
                     ?.distinctBy { "${it.width}x${it.height}" }
                     .orEmpty()
-                val previewSizes = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                val previewSizes = streamMap
                     ?.getOutputSizes(SurfaceTexture::class.java)
                     ?.sortedWith(compareByDescending<Size> { it.width.toLong() * it.height }.thenBy { it.width })
                     ?.distinctBy { "${it.width}x${it.height}" }
@@ -41,7 +61,16 @@ object CameraCapabilities {
                     ?.filter { it.upper >= 15 }
                     ?.sortedWith(compareBy({ it.upper }, { it.lower }))
                     .orEmpty()
-                val streamMap = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                val experimentalCandidate = id !in publicIds
+                val estimatedMaxFpsBySize = (sizes + previewSizes).distinctBy { "${it.width}x${it.height}" }
+                    .mapNotNull { size ->
+                        val duration = listOfNotNull(
+                            runCatching { streamMap?.getOutputMinFrameDuration(MediaRecorder::class.java, size) }.getOrNull(),
+                            runCatching { streamMap?.getOutputMinFrameDuration(SurfaceTexture::class.java, size) }.getOrNull(),
+                        ).filter { it > 0L }.minOrNull() ?: return@mapNotNull null
+                        val maxFps = (1_000_000_000.0 / duration).toInt().coerceAtLeast(1)
+                        "${size.width}x${size.height}" to maxFps
+                    }.toMap()
                 val supportsHighSpeed = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
                     ?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_CONSTRAINED_HIGH_SPEED_VIDEO) == true
                 val highSpeedModes = if (supportsHighSpeed) {
@@ -65,11 +94,13 @@ object CameraCapabilities {
                 val capabilities = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.toSet().orEmpty()
                 CameraInfo(
                     id = id,
-                    displayName = "$facingName $id${if (focalLengths.isBlank()) "" else " · ${focalLengths}mm"}",
+                    displayName = "${if (experimentalCandidate) "实验 · " else ""}$facingName $id${if (focalLengths.isBlank()) "" else " · ${focalLengths}mm"}",
                     lensFacing = facing,
                     sizes = sizes,
                     previewSizes = previewSizes,
                     fpsRanges = fps,
+                    estimatedMaxFpsBySize = estimatedMaxFpsBySize,
+                    experimentalCandidate = experimentalCandidate,
                     isoRange = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE),
                     exposureRange = c.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE),
                     apertures = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)?.toList().orEmpty(),
@@ -91,7 +122,7 @@ object CameraCapabilities {
                     dynamicRanges = dynamicRanges,
                 )
             }.getOrNull()
-        }
+        }.sortedWith(compareBy<CameraInfo> { it.experimentalCandidate }.thenBy { it.id.toIntOrNull() ?: Int.MAX_VALUE }.thenBy { it.id })
     }
 
     private fun supportsHevcDynamicRange(range: VideoDynamicRange): Boolean {

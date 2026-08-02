@@ -258,13 +258,14 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         audioInputsLoaded = true
     }
 
-    LaunchedEffect(Unit) {
-        val queriedCameras = CameraCapabilities.query(context)
+    LaunchedEffect(config.experimentalCameraAccess) {
+        val queriedCameras = CameraCapabilities.query(context, config.experimentalCameraAccess)
         (queriedCameras.firstOrNull { it.id == config.cameraId } ?: queriedCameras.firstOrNull())?.let { camera ->
             val savedSizes = if (config.videoTransformEnabled) camera.previewSizes else camera.sizes
             val savedSizeSupported = savedSizes.any { it.width == config.width && it.height == config.height }
             val size = if (savedSizeSupported) config.width to config.height else preferredSize(camera)
-            val savedFpsSupported = camera.fpsRanges.any { it.lower <= config.fps && it.upper >= config.fps }
+            val savedFpsSupported = config.experimentalUnadvertisedFps ||
+                camera.fpsRanges.any { it.lower <= config.fps && it.upper >= config.fps }
             config = config.copy(
                 cameraId = camera.id,
                 width = size.first,
@@ -749,6 +750,23 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     }
                 }
                 if (config.hasVideo) {
+                    Section("实验相机能力") {
+                        ToggleLine(
+                            "尝试枚举隐藏 / 物理镜头",
+                            config.experimentalCameraAccess,
+                            !recording,
+                        ) { enabled -> config = config.copy(experimentalCameraAccess = enabled) }
+                        ToggleLine(
+                            "允许尝试未声明 FPS",
+                            config.experimentalUnadvertisedFps,
+                            !recording && !config.highSpeedMode,
+                        ) { enabled -> config = config.copy(experimentalUnadvertisedFps = enabled) }
+                        Text(
+                            "实验镜头来自逻辑相机声明的物理 ID，以及可成功查询特征但未出现在 cameraIdList 的候选 ID。厂商仍可在打开阶段拒绝。未声明 FPS 会提交精确 Camera2 目标值，实际是否生效以录制平均 FPS 为准。",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                     val mediaCodecEngineForced = config.dynamicRange != VideoDynamicRange.SDR ||
                         config.customVideoEncoderParameters || config.customColorMetadata ||
                         config.container == ContainerFormat.MPEG_TS || config.videoTransformEnabled ||
@@ -1012,19 +1030,58 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 .filter { it > 0 }
                                 .distinct()
                                 .sorted()
-                            ChoiceRow(fpsValues, config.fps, { "$it fps" }, !recording && !config.highSpeedMode) {
-                                config = config.copy(fps = it)
+                            val unadvertisedFpsValues = listOf(5, 10, 15, 24, 25, 30, 50, 60, 120, 240)
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text("声明帧率", style = MaterialTheme.typography.labelMedium)
+                                    ChoiceRow(
+                                        fpsValues,
+                                        config.fps.takeUnless { config.experimentalUnadvertisedFps },
+                                        { "$it fps" },
+                                        !recording && !config.highSpeedMode,
+                                    ) {
+                                        config = config.copy(fps = it, experimentalUnadvertisedFps = false)
+                                    }
+                                }
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text("非声明帧率", style = MaterialTheme.typography.labelMedium)
+                                    ChoiceRow(
+                                        unadvertisedFpsValues,
+                                        config.fps.takeIf {
+                                            config.experimentalUnadvertisedFps && it in unadvertisedFpsValues
+                                        },
+                                        { "$it fps" },
+                                        !recording && !config.highSpeedMode,
+                                    ) {
+                                        config = config.copy(fps = it, experimentalUnadvertisedFps = true)
+                                    }
+                                }
                             }
                         }
-                        NumberField("自定义整数 FPS", config.fps.toString(), !recording && !config.highSpeedMode) {
-                            it.toIntOrNull()?.let { value -> config = config.copy(fps = value.coerceIn(1, 240)) }
-                        }
+                        DeferredIntField(
+                            value = config.fps,
+                            onCommit = { config = config.copy(fps = it) },
+                            label = { Text("自定义整数 FPS") },
+                            enabled = !recording && !config.highSpeedMode,
+                            minimum = 1,
+                            maximum = 240,
+                            evenOnly = false,
+                        )
                         Text(
                             "镜头声明范围：" + camera.fpsRanges.joinToString("、") {
                                 if (it.lower == it.upper) "${it.upper}" else "${it.lower}–${it.upper}"
                             },
                             style = MaterialTheme.typography.bodySmall,
                         )
+                        camera.estimatedMaxFpsBySize["${config.width}x${config.height}"]?.let { estimated ->
+                            Text(
+                                "当前分辨率按 HAL 最小帧时长推算上限：约 $estimated fps（不代表厂商一定允许该帧率）",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                         if (config.mediaCodecEngineRequested) {
                             Text(
                                 "MediaCodec 直录模式：Camera2 收到什么帧就编码什么帧，保留动态帧间隔；音频保持实时速度。",
@@ -1040,8 +1097,12 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 "Camera2 采集目标约 ${config.fps} fps；MediaCodec 直录实际收到的动态帧率"
                             } else {
                                 "Camera2 / MediaRecorder 提交 ${config.fps} fps"
-                            }) + if (fpsSupported) "" else "（当前镜头范围未声明支持）",
-                            color = if (fpsSupported) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
+                            }) + when {
+                                fpsSupported -> ""
+                                config.experimentalUnadvertisedFps -> "（实验提交，等待实测）"
+                                else -> "（当前镜头范围未声明支持）"
+                            },
+                            color = if (fpsSupported || config.experimentalUnadvertisedFps) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Text("视频码率 ${(config.videoBitrate / 1_000_000f).format1()} Mbps")
@@ -3258,6 +3319,7 @@ private fun DeferredIntField(
     modifier: Modifier = Modifier,
     minimum: Int = 16,
     maximum: Int = 16384,
+    evenOnly: Boolean = true,
 ) {
     var text by remember { mutableStateOf(value.toString()) }
     var focused by remember { mutableStateOf(false) }
@@ -3275,7 +3337,8 @@ private fun DeferredIntField(
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         modifier = modifier.onFocusChanged { state ->
             if (focused && !state.isFocused) {
-                val committed = (text.toIntOrNull() ?: minimum).coerceIn(minimum, maximum) / 2 * 2
+                val clamped = (text.toIntOrNull() ?: minimum).coerceIn(minimum, maximum)
+                val committed = if (evenOnly) clamped / 2 * 2 else clamped
                 text = committed.toString()
                 onCommit(committed)
             }
