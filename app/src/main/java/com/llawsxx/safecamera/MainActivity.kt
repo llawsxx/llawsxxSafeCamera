@@ -102,6 +102,7 @@ import androidx.lifecycle.LifecycleOwner
 import com.llawsxx.safecamera.recording.CameraCapabilities
 import com.llawsxx.safecamera.recording.CameraExposureState
 import com.llawsxx.safecamera.recording.CameraInfo
+import com.llawsxx.safecamera.recording.CameraModePreferences
 import com.llawsxx.safecamera.recording.AudioInputDevices
 import com.llawsxx.safecamera.recording.AudioInputInfo
 import com.llawsxx.safecamera.recording.ContainerFormat
@@ -187,6 +188,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
     var selectedPresetId by remember { mutableStateOf(presets.firstOrNull()?.id) }
     var presetName by remember { mutableStateOf(presets.firstOrNull()?.name.orEmpty()) }
     var presetMessage by remember { mutableStateOf<String?>(null) }
+    var restoreCameraModeAfterRecording by remember { mutableStateOf<String?>(null) }
     BackHandler(enabled = settingsOpen) { settingsOpen = false }
     var currentDisplayRotation by remember {
         mutableStateOf(displayRotationDegrees(view.display?.rotation ?: Surface.ROTATION_0))
@@ -194,6 +196,60 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
     val idlePreview = remember { IdlePreviewCamera(context.applicationContext) }
     val recording = state is RecorderState.Recording || state is RecorderState.Starting || state is RecorderState.Stopping
     val selectedCamera = cameras.firstOrNull { it.id == config.cameraId }
+
+    fun saveCameraMode() {
+        CameraModePreferences.save(context, config.cameraId, config)
+    }
+
+    fun applyCameraMode(camera: CameraInfo): RecordingConfig {
+        val saved = CameraModePreferences.load(context, camera.id)
+        val savedSize = saved?.let { it.width to it.height }
+        val availableSizes = if (config.videoTransformEnabled) camera.previewSizes else camera.sizes
+        val size = savedSize?.takeIf { (width, height) ->
+            availableSizes.any { it.width == width && it.height == height }
+        } ?: preferredSize(camera)
+        val savedFpsUsable = saved != null && !saved.highSpeedMode && (
+            saved.experimentalUnadvertisedFps ||
+                camera.fpsRanges.any { it.lower <= saved.fps && it.upper >= saved.fps }
+            )
+        val highSpeedUsable = saved?.highSpeedMode == true && camera.highSpeedModes.any {
+            it.width == size.first && it.height == size.second && saved.fps in it.minFps..it.maxFps
+        }
+        return config.copy(
+            cameraId = camera.id,
+            width = size.first,
+            height = size.second,
+            fps = if (savedFpsUsable || highSpeedUsable) saved!!.fps else preferredFps(camera),
+            experimentalUnadvertisedFps = savedFpsUsable && saved!!.experimentalUnadvertisedFps,
+            highSpeedMode = highSpeedUsable,
+            aperture = config.aperture?.takeIf(camera.apertures::contains) ?: camera.apertures.firstOrNull(),
+            opticalStabilization = config.opticalStabilization && camera.oisAvailable,
+        )
+    }
+
+    LaunchedEffect(
+        config.cameraId,
+        config.width,
+        config.height,
+        config.fps,
+        config.experimentalUnadvertisedFps,
+        config.highSpeedMode,
+        recording,
+        restoreCameraModeAfterRecording,
+    ) {
+        if (!recording && restoreCameraModeAfterRecording == null) saveCameraMode()
+    }
+
+    LaunchedEffect(recording, restoreCameraModeAfterRecording, cameras) {
+        if (!recording) {
+            restoreCameraModeAfterRecording?.let { cameraId ->
+                cameras.firstOrNull { it.id == cameraId }?.let { camera ->
+                    config = applyCameraMode(camera)
+                }
+                restoreCameraModeAfterRecording = null
+            }
+        }
+    }
 
     DisposableEffect(view, recording) {
         view.keepScreenOn = recording
@@ -584,19 +640,13 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             permissionError = permissionError,
             onConfigChange = { config = it },
             onCameraSelect = { camera ->
+                saveCameraMode()
                 if (recording) {
                     RecorderController.switchCamera(context, camera.id)
+                    restoreCameraModeAfterRecording = camera.id
                     config = config.copy(cameraId = camera.id)
                 } else {
-                    val size = preferredSize(camera)
-                    config = config.copy(
-                        cameraId = camera.id,
-                        width = size.first,
-                        height = size.second,
-                        fps = preferredFps(camera),
-                        aperture = camera.apertures.firstOrNull(),
-                        opticalStabilization = camera.oisAvailable,
-                    )
+                    config = applyCameraMode(camera)
                 }
             },
             onStart = startRecording,
