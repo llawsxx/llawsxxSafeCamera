@@ -61,7 +61,7 @@ class IdlePreviewCamera(context: Context) {
     private fun open(cameraId: String, surface: Surface) {
         val currentGeneration = ++generation
         opening = true
-        manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
+        val callback = object : CameraDevice.StateCallback() {
             override fun onOpened(device: CameraDevice) {
                 Log.d("PreviewDebug", "camera opened")
                 if (currentGeneration != generation || activeSurface !== surface || !surface.isValid) {
@@ -80,17 +80,26 @@ class IdlePreviewCamera(context: Context) {
             }
 
             override fun onDisconnected(device: CameraDevice) {
+                val wasActive = camera === device
                 if (currentGeneration == generation) opening = false
-                device.close()
-                if (camera === device) camera = null
+                runCatching { device.close() }
+                if (wasActive) camera = null
+                handleFailure(cameraId, surface, if (wasActive) generation else currentGeneration, "camera disconnected")
             }
 
             override fun onError(device: CameraDevice, error: Int) {
+                val wasActive = camera === device
                 if (currentGeneration == generation) opening = false
-                device.close()
-                if (camera === device) camera = null
+                runCatching { device.close() }
+                if (wasActive) camera = null
+                handleFailure(cameraId, surface, if (wasActive) generation else currentGeneration, "open error $error")
             }
-        }, handler)
+        }
+        runCatching { manager.openCamera(cameraId, callback, handler) }
+            .onFailure {
+                opening = false
+                handleFailure(cameraId, surface, currentGeneration, "open failed", it)
+            }
     }
 
     private fun createSession(config: RecordingConfig, surface: Surface) {
@@ -100,8 +109,7 @@ class IdlePreviewCamera(context: Context) {
         session?.close()
         configuring = true
         Log.d("PreviewDebug", "start session configure")
-        @Suppress("DEPRECATION")
-        device.createCaptureSession(listOf(surface), object : CameraCaptureSession.StateCallback() {
+        val callback = object : CameraCaptureSession.StateCallback() {
             override fun onConfigured(newSession: CameraCaptureSession) {
                 Log.d("PreviewDebug", "session configured")
                 if (currentGeneration != generation || camera !== device || !surface.isValid) {
@@ -116,8 +124,20 @@ class IdlePreviewCamera(context: Context) {
             override fun onConfigureFailed(newSession: CameraCaptureSession) {
                 if (currentGeneration == generation) configuring = false
                 newSession.close()
+                if (camera === device) camera = null
+                runCatching { device.close() }
+                handleFailure(config.cameraId, surface, currentGeneration, "session configuration rejected")
             }
-        }, handler)
+        }
+        runCatching {
+            @Suppress("DEPRECATION")
+            device.createCaptureSession(listOf(surface), callback, handler)
+        }.onFailure {
+            configuring = false
+            if (camera === device) camera = null
+            runCatching { device.close() }
+            handleFailure(config.cameraId, surface, currentGeneration, "session configuration failed", it)
+        }
     }
 
     private fun updateRepeatingRequest(config: RecordingConfig, surface: Surface) {
@@ -129,7 +149,29 @@ class IdlePreviewCamera(context: Context) {
                 CameraRequestControls.apply(manager, config.cameraId, config, this)
             }.build()
             activeSession.setRepeatingRequest(request, captureCallback, handler)
-        }.onFailure { activeSession.close() }
+        }.onFailure {
+            Log.w(TAG, "Preview repeating request failed", it)
+            runCatching { activeSession.close() }
+            if (session === activeSession) session = null
+            if (camera === device) camera = null
+            runCatching { device.close() }
+            handleFailure(config.cameraId, surface, generation, "repeating request failed", it)
+        }
+    }
+
+    private fun handleFailure(
+        cameraId: String,
+        surface: Surface,
+        failedGeneration: Int,
+        reason: String,
+        error: Throwable? = null,
+    ) {
+        if (failedGeneration != generation || activeCameraId != cameraId || activeSurface !== surface || !surface.isValid) return
+        opening = false
+        configuring = false
+        session = null
+        camera = null
+        Log.w(TAG, "$reason; preview stopped", error)
     }
 
     private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
@@ -161,5 +203,9 @@ class IdlePreviewCamera(context: Context) {
         session = null
         runCatching { camera?.close() }
         camera = null
+    }
+
+    private companion object {
+        const val TAG = "IdlePreviewCamera"
     }
 }
