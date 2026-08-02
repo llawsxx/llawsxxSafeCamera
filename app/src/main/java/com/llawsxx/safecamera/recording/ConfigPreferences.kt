@@ -37,7 +37,6 @@ object ConfigPreferences {
             highSpeedMode = p.getBoolean("highSpeedMode", false),
             colorRange = enumValue(p.getString("colorRange", null), VideoColorRange.DEFAULT),
             colorStandard = enumValue(p.getString("colorStandard", null), VideoColorStandard.DEFAULT),
-            colorMatrix = enumValue(p.getString("colorMatrix", null), VideoColorMatrix.DEFAULT),
             colorTransfer = videoColorTransfer(p.getString("colorTransfer", null)),
             rewriteColorRange = enumValue(
                 p.getString("rewriteColorRange", null),
@@ -53,9 +52,7 @@ object ConfigPreferences {
             ),
             rewriteColorMatrix = enumValue(
                 p.getString("rewriteColorMatrix", null),
-                if (p.getBoolean("forceSpsVui", false)) {
-                    enumValue(p.getString("colorMatrix", null), VideoColorMatrix.DEFAULT)
-                } else VideoColorMatrix.DEFAULT,
+                VideoColorMatrix.DEFAULT,
             ),
             rewriteColorTransfer = videoColorTransfer(
                 p.getString("rewriteColorTransfer", null)
@@ -131,7 +128,6 @@ object ConfigPreferences {
             .putBoolean("highSpeedMode", c.highSpeedMode)
             .putString("colorRange", c.colorRange.name)
             .putString("colorStandard", c.colorStandard.name)
-            .putString("colorMatrix", c.colorMatrix.name)
             .putString("colorTransfer", c.colorTransfer.name)
             .putString("rewriteColorRange", c.rewriteColorRange.name)
             .putString("rewriteColorStandard", c.rewriteColorStandard.name)

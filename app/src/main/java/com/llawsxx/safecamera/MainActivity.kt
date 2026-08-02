@@ -323,7 +323,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 dynamicRange = VideoDynamicRange.SDR,
                 colorRange = VideoColorRange.DEFAULT,
                 colorStandard = VideoColorStandard.DEFAULT,
-                colorMatrix = VideoColorMatrix.DEFAULT,
                 colorTransfer = VideoColorTransfer.DEFAULT,
                 forceSpsVui = false,
             )
@@ -336,7 +335,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 dynamicRange = VideoDynamicRange.SDR,
                 colorRange = VideoColorRange.DEFAULT,
                 colorStandard = VideoColorStandard.DEFAULT,
-                colorMatrix = VideoColorMatrix.DEFAULT,
                 colorTransfer = VideoColorTransfer.DEFAULT,
             )
         }
@@ -797,7 +795,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                             dynamicRange = range,
                                             colorRange = VideoColorRange.DEFAULT,
                                             colorStandard = VideoColorStandard.DEFAULT,
-                                            colorMatrix = VideoColorMatrix.DEFAULT,
                                             colorTransfer = VideoColorTransfer.DEFAULT,
                                         )
                                     } else {
@@ -807,7 +804,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                             highSpeedMode = false,
                                             colorRange = VideoColorRange.LIMITED,
                                             colorStandard = VideoColorStandard.BT2020,
-                                            colorMatrix = VideoColorMatrix.BT2020,
                                             colorTransfer = if (range == VideoDynamicRange.HLG10) {
                                                 VideoColorTransfer.HLG
                                             } else {
@@ -1071,11 +1067,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             Labeled("Color standard / primaries") {
                                 ChoiceRow(VideoColorStandard.entries, config.colorStandard, { it.label }, !recording && !config.highSpeedMode && !config.dynamicRange.is10Bit) {
                                     config = config.copy(colorStandard = it)
-                                }
-                            }
-                            Labeled("Matrix coefficients") {
-                                ChoiceRow(VideoColorMatrix.entries, config.colorMatrix, { it.label }, !recording && !config.highSpeedMode && !config.dynamicRange.is10Bit) {
-                                    config = config.copy(colorMatrix = it)
                                 }
                             }
                             Labeled("Transfer") {

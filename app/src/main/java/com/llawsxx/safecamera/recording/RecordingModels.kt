@@ -126,7 +126,6 @@ data class RecordingConfig(
     val highSpeedMode: Boolean = false,
     val colorRange: VideoColorRange = VideoColorRange.DEFAULT,
     val colorStandard: VideoColorStandard = VideoColorStandard.DEFAULT,
-    val colorMatrix: VideoColorMatrix = VideoColorMatrix.DEFAULT,
     val colorTransfer: VideoColorTransfer = VideoColorTransfer.DEFAULT,
     val rewriteColorRange: VideoColorRange = VideoColorRange.DEFAULT,
     val rewriteColorStandard: VideoColorStandard = VideoColorStandard.DEFAULT,
@@ -173,8 +172,7 @@ data class RecordingConfig(
     val hasAudio: Boolean get() = mode != RecordingMode.VIDEO
     val requestedFps: Double get() = fpsNumerator.toDouble() / fpsDenominator.coerceAtLeast(1)
     val customColorMetadata: Boolean get() = colorRange != VideoColorRange.DEFAULT ||
-        colorStandard != VideoColorStandard.DEFAULT || colorMatrix != VideoColorMatrix.DEFAULT ||
-        colorTransfer != VideoColorTransfer.DEFAULT
+        colorStandard != VideoColorStandard.DEFAULT || colorTransfer != VideoColorTransfer.DEFAULT
     val customRewriteColorMetadata: Boolean get() = rewriteColorRange != VideoColorRange.DEFAULT ||
         rewriteColorStandard != VideoColorStandard.DEFAULT || rewriteColorMatrix != VideoColorMatrix.DEFAULT ||
         rewriteColorTransfer != VideoColorTransfer.DEFAULT
