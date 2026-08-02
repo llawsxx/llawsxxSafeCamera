@@ -120,7 +120,12 @@ class MediaCodecRecorderEngine(
             outputPath = streamOutput.start()
             tsOutput = streamOutput
             coordinator = NativeTsMuxCoordinator(
-                NativeMpegTsMuxer(config.videoCodec, config.hasAudio),
+                NativeMpegTsMuxer(
+                    config.videoCodec,
+                    config.hasAudio,
+                    config.audioSampleRate,
+                    config.audioChannelCount,
+                ),
                 streamOutput,
                 config.hasAudio,
             ) { markMuxStarted() }
@@ -151,9 +156,14 @@ class MediaCodecRecorderEngine(
         val videoFormat = MediaFormat.createVideoFormat(videoMime, config.outputWidth, config.outputHeight).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, config.videoBitrate)
+            config.videoBitrateMode.mediaFormatValue?.let { setInteger(MediaFormat.KEY_BITRATE_MODE, it) }
             setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, config.videoKeyFrameIntervalSeconds)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                setInteger(MediaFormat.KEY_MAX_B_FRAMES, config.videoMaxBFrames)
+            } else {
+                require(config.videoMaxBFrames == 0) { "B 帧设置需要 Android 10 或更高版本" }
+            }
             config.colorRange.mediaFormatValue?.let { setInteger(MediaFormat.KEY_COLOR_RANGE, it) }
             config.colorStandard.mediaFormatValue?.let { setInteger(MediaFormat.KEY_COLOR_STANDARD, it) }
             config.colorTransfer.mediaFormatValue?.let { setInteger(MediaFormat.KEY_COLOR_TRANSFER, it) }
@@ -203,10 +213,11 @@ class MediaCodecRecorderEngine(
     }
 
     private fun prepareAudio() {
-        val sampleRate = 48_000
-        val channelMask = AudioFormat.CHANNEL_IN_STEREO
+        val sampleRate = config.audioSampleRate
+        val channelCount = config.audioChannelCount
+        val channelMask = if (channelCount == 1) AudioFormat.CHANNEL_IN_MONO else AudioFormat.CHANNEL_IN_STEREO
         val minBuffer = AudioRecord.getMinBufferSize(sampleRate, channelMask, AudioFormat.ENCODING_PCM_16BIT)
-        require(minBuffer > 0) { "设备不支持 48 kHz 双声道录音" }
+        require(minBuffer > 0) { "设备不支持 ${sampleRate / 1000.0} kHz、${if (channelCount == 1) "单声道" else "双声道"}录音" }
         @SuppressLint("MissingPermission")
         val record = AudioRecord(
             MediaRecorder.AudioSource.MIC,
@@ -225,8 +236,8 @@ class MediaCodecRecorderEngine(
         }
         audioRecord = record
 
-        val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, 2).apply {
-            setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+        val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, channelCount).apply {
+            setInteger(MediaFormat.KEY_AAC_PROFILE, config.effectiveAudioAacProfile.mediaCodecValue)
             setInteger(MediaFormat.KEY_BIT_RATE, config.audioBitrate)
             setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, max(minBuffer, 16_384))
         }
@@ -302,7 +313,7 @@ class MediaCodecRecorderEngine(
                             val count = record.read(buffer, buffer.remaining(), AudioRecord.READ_BLOCKING)
                             if (count > 0) {
                                 audioLevelDb = pcm16PeakDb(buffer, count)
-                                val frames = count / (2 * 2)
+                                val frames = count / (2 * config.audioChannelCount)
                                 codec.queueInputBuffer(inputIndex, 0, count, realAudioPtsUs(samplesRead), 0)
                                 samplesRead += frames
                             }
@@ -340,10 +351,11 @@ class MediaCodecRecorderEngine(
             } finally {
                 runCatching { record.stop() }
             }
-        }, "exact-audio-codec").apply { start() }
+        }, "media-codec-audio").apply { start() }
     }
 
-    private fun realAudioPtsUs(sampleFrames: Long): Long = multiplyDivide(sampleFrames, 1_000_000L, 48_000L)
+    private fun realAudioPtsUs(sampleFrames: Long): Long =
+        multiplyDivide(sampleFrames, 1_000_000L, config.audioSampleRate.toLong())
 
     @SuppressLint("MissingPermission")
     private fun openCamera() {

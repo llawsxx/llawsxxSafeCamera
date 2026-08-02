@@ -307,10 +307,10 @@ class CameraRecorderEngine(
             activeRecorder.setOrientationHint(recordingOrientationHint(context, config.cameraId, config.orientation))
         }
         if (config.hasAudio) {
-            activeRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            activeRecorder.setAudioSamplingRate(48_000)
+            activeRecorder.setAudioEncoder(config.effectiveAudioAacProfile.mediaRecorderValue)
+            activeRecorder.setAudioSamplingRate(config.audioSampleRate)
             activeRecorder.setAudioEncodingBitRate(config.audioBitrate)
-            activeRecorder.setAudioChannels(2)
+            activeRecorder.setAudioChannels(config.audioChannelCount)
         }
         if (config.container == ContainerFormat.MPEG_TS) {
             val sink = StreamingTsSink(

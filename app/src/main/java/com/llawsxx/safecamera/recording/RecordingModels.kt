@@ -1,6 +1,7 @@
 package com.llawsxx.safecamera.recording
 
 import android.hardware.camera2.CameraCharacteristics
+import android.media.MediaCodecInfo
 import android.media.MediaRecorder
 import android.media.MediaFormat
 import android.util.Range
@@ -18,6 +19,22 @@ enum class ContainerFormat(val label: String, val extension: String) : Serializa
 enum class VideoCodec(val label: String, val mediaRecorderValue: Int) : Serializable {
     H264("H.264 / AVC", MediaRecorder.VideoEncoder.H264),
     H265("H.265 / HEVC", MediaRecorder.VideoEncoder.HEVC)
+}
+
+enum class VideoBitrateMode(val label: String, val mediaFormatValue: Int?) : Serializable {
+    DEFAULT("编码器默认", null),
+    VBR("VBR 可变码率", MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR),
+    CBR("CBR 固定码率", MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR),
+}
+
+enum class AudioAacProfile(
+    val label: String,
+    val mediaCodecValue: Int,
+    val mediaRecorderValue: Int,
+) : Serializable {
+    LC("AAC-LC", MediaCodecInfo.CodecProfileLevel.AACObjectLC, MediaRecorder.AudioEncoder.AAC),
+    HE("HE-AAC", MediaCodecInfo.CodecProfileLevel.AACObjectHE, MediaRecorder.AudioEncoder.HE_AAC),
+    ELD("AAC-ELD", MediaCodecInfo.CodecProfileLevel.AACObjectELD, MediaRecorder.AudioEncoder.AAC_ELD),
 }
 
 enum class VideoDynamicRange(
@@ -118,7 +135,13 @@ data class RecordingConfig(
     val fps: Int = 30,
     val mediaCodecMode: Boolean = false,
     val videoBitrate: Int = 12_000_000,
+    val videoBitrateMode: VideoBitrateMode = VideoBitrateMode.DEFAULT,
+    val videoKeyFrameIntervalSeconds: Int = 2,
+    val videoMaxBFrames: Int = 0,
     val audioBitrate: Int = 192_000,
+    val audioAacProfile: AudioAacProfile = AudioAacProfile.LC,
+    val audioSampleRate: Int = 48_000,
+    val audioChannelCount: Int = 2,
     val audioInputDeviceId: Int? = null,
     val videoCodec: VideoCodec = VideoCodec.H264,
     val dynamicRange: VideoDynamicRange = VideoDynamicRange.SDR,
@@ -175,7 +198,12 @@ data class RecordingConfig(
         rewriteColorStandard != VideoColorStandard.DEFAULT || rewriteColorMatrix != VideoColorMatrix.DEFAULT ||
         rewriteColorTransfer != VideoColorTransfer.DEFAULT
     val videoTransformEnabled: Boolean get() = cropEnabled || resizeEnabled
-    val mediaCodecEngineRequested: Boolean get() = mediaCodecMode || customColorMetadata || videoTransformEnabled ||
+    val customVideoEncoderParameters: Boolean get() = videoBitrateMode != VideoBitrateMode.DEFAULT ||
+        videoKeyFrameIntervalSeconds != 2 || videoMaxBFrames != 0
+    val effectiveAudioAacProfile: AudioAacProfile get() =
+        if (container == ContainerFormat.MPEG_TS) AudioAacProfile.LC else audioAacProfile
+    val mediaCodecEngineRequested: Boolean get() = mediaCodecMode || customVideoEncoderParameters ||
+        customColorMetadata || videoTransformEnabled ||
         dynamicRange != VideoDynamicRange.SDR || (forceSpsVui && customRewriteColorMetadata)
     val transformWidth: Int get() = if (cropEnabled) cropWidth else width
     val transformHeight: Int get() = if (cropEnabled) cropHeight else height

@@ -110,6 +110,8 @@ import com.llawsxx.safecamera.recording.RecorderController
 import com.llawsxx.safecamera.recording.RecorderState
 import com.llawsxx.safecamera.recording.RecordingConfig
 import com.llawsxx.safecamera.recording.RecordingMode
+import com.llawsxx.safecamera.recording.AudioAacProfile
+import com.llawsxx.safecamera.recording.VideoBitrateMode
 import com.llawsxx.safecamera.recording.VideoCodec
 import com.llawsxx.safecamera.recording.VideoDynamicRange
 import com.llawsxx.safecamera.recording.VideoColorMatrix
@@ -300,6 +302,11 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             config = config.copy(forceSpsVui = false)
         }
     }
+    LaunchedEffect(config.container, config.audioAacProfile) {
+        if (config.container == ContainerFormat.MPEG_TS && config.audioAacProfile != AudioAacProfile.LC) {
+            config = config.copy(audioAacProfile = AudioAacProfile.LC)
+        }
+    }
     LaunchedEffect(config.mediaCodecEngineRequested, config.dynamicRange) {
         if (config.mediaCodecEngineRequested && config.hasVideo) {
             val normalized = config.copy(
@@ -314,6 +321,9 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         if (config.highSpeedMode) {
             config = config.copy(
                 mediaCodecMode = false,
+                videoBitrateMode = VideoBitrateMode.DEFAULT,
+                videoKeyFrameIntervalSeconds = 2,
+                videoMaxBFrames = 0,
                 container = ContainerFormat.MP4,
                 segmentMinutes = 0,
                 streamEnabled = false,
@@ -722,7 +732,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 }
                 if (config.hasVideo) {
                     val mediaCodecEngineForced = config.dynamicRange != VideoDynamicRange.SDR ||
-                        config.customColorMetadata ||
+                        config.customVideoEncoderParameters || config.customColorMetadata ||
                         config.container == ContainerFormat.MPEG_TS || config.videoTransformEnabled ||
                         config.forceSpsVui && config.customRewriteColorMetadata
                     ToggleLine(
@@ -739,7 +749,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     }
                     if (!(mediaCodecEngineForced && config.container == ContainerFormat.MPEG_TS)) Text(
                         if (mediaCodecEngineForced) {
-                            "当前 HDR、自定义颜色元数据、SPS/VUI 重写、中心裁切或分辨率缩放要求使用 MediaCodec 直录引擎，开关保持开启。"
+                            "当前 HDR、编码器高级参数、自定义颜色元数据、SPS/VUI 重写、中心裁切或分辨率缩放要求使用 MediaCodec 直录引擎，开关保持开启。"
                         } else {
                             "Camera2 直接连接 MediaCodec，收到的每帧都按原始时间戳输出，不主动丢帧或补帧；帧率可动态变化。MP4 仅支持单段，MPEG-TS 由内置 native muxer 封装。"
                         },
@@ -757,6 +767,10 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 width = mode.width,
                                 height = mode.height,
                                 fps = mode.maxFps,
+                                mediaCodecMode = false,
+                                videoBitrateMode = VideoBitrateMode.DEFAULT,
+                                videoKeyFrameIntervalSeconds = 2,
+                                videoMaxBFrames = 0,
                             ) else config.copy(highSpeedMode = false)
                         }
                         if (config.highSpeedMode) {
@@ -1017,6 +1031,33 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             valueRange = 1f..80f,
                             enabled = !recording,
                         )
+                        Labeled("码率模式") {
+                            ChoiceRow(
+                                VideoBitrateMode.entries,
+                                config.videoBitrateMode,
+                                { it.label },
+                                !recording && !config.highSpeedMode,
+                            ) { config = config.copy(videoBitrateMode = it) }
+                        }
+                        NumberField(
+                            "关键帧间隔（秒，0 表示每帧）",
+                            config.videoKeyFrameIntervalSeconds.toString(),
+                            !recording && !config.highSpeedMode,
+                        ) {
+                            config = config.copy(videoKeyFrameIntervalSeconds = it.toIntOrNull()?.coerceIn(0, 60) ?: 2)
+                        }
+                        Labeled("最大 B 帧数") {
+                            ChoiceRow(
+                                (0..4).toList(),
+                                config.videoMaxBFrames,
+                                { it.toString() },
+                                !recording && !config.highSpeedMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
+                            ) { config = config.copy(videoMaxBFrames = it) }
+                        }
+                        Text(
+                            "码率模式、关键帧间隔或 B 帧使用非默认值时，会自动启用 MediaCodec 直录；具体支持范围取决于硬件编码器。",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                         CameraProcessingControls(camera, config, state !is RecorderState.Starting && state !is RecorderState.Stopping) {
                             config = it
                         }
@@ -1135,7 +1176,27 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
 
             if (config.hasAudio) {
                 Section("音频") {
-                    Text("AAC · 48 kHz · 双声道")
+                    Labeled("AAC 类型") {
+                        val profiles = if (config.container == ContainerFormat.MPEG_TS) {
+                            listOf(AudioAacProfile.LC)
+                        } else {
+                            AudioAacProfile.entries
+                        }
+                        ChoiceRow(profiles, config.audioAacProfile, { it.label }, !recording) {
+                            config = config.copy(audioAacProfile = it)
+                        }
+                    }
+                    Labeled("采样率") {
+                        val sampleRates = listOf(8_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000)
+                        ChoiceRow(sampleRates, config.audioSampleRate, { "${it / 1000f} kHz" }, !recording) {
+                            config = config.copy(audioSampleRate = it)
+                        }
+                    }
+                    Labeled("声道") {
+                        ChoiceRow(listOf(1, 2), config.audioChannelCount, { if (it == 1) "单声道" else "双声道" }, !recording) {
+                            config = config.copy(audioChannelCount = it)
+                        }
+                    }
                     Text("码率 ${config.audioBitrate / 1000} kbps")
                     Slider(
                         value = config.audioBitrate / 1000f,
@@ -1143,6 +1204,9 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                         valueRange = 64f..320f,
                         enabled = !recording,
                     )
+                    if (config.container == ContainerFormat.MPEG_TS) {
+                        Text("当前 MPEG-TS 的 ADTS 封装仅支持 AAC-LC。", style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
 

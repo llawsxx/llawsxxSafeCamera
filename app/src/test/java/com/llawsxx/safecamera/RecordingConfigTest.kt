@@ -7,6 +7,9 @@ import com.llawsxx.safecamera.recording.VideoColorRange
 import com.llawsxx.safecamera.recording.VideoColorStandard
 import com.llawsxx.safecamera.recording.VideoColorTransfer
 import com.llawsxx.safecamera.recording.VideoDynamicRange
+import com.llawsxx.safecamera.recording.VideoBitrateMode
+import com.llawsxx.safecamera.recording.AudioAacProfile
+import com.llawsxx.safecamera.recording.ContainerFormat
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -75,6 +78,29 @@ class RecordingConfigTest {
                 colorStandard = com.llawsxx.safecamera.recording.VideoColorStandard.BT709,
             ).mediaCodecEngineRequested,
         )
+    }
+
+    @Test
+    fun advancedVideoEncoderParametersRequestMediaCodecEngine() {
+        assertTrue(
+            RecordingConfig(videoBitrateMode = VideoBitrateMode.CBR).mediaCodecEngineRequested,
+        )
+        assertTrue(
+            RecordingConfig(videoKeyFrameIntervalSeconds = 5).mediaCodecEngineRequested,
+        )
+        assertTrue(
+            RecordingConfig(videoMaxBFrames = 2).mediaCodecEngineRequested,
+        )
+    }
+
+    @Test
+    fun mpegTsUsesAacLcProfile() {
+        val config = RecordingConfig(
+            container = ContainerFormat.MPEG_TS,
+            audioAacProfile = AudioAacProfile.HE,
+        )
+
+        assertEquals(AudioAacProfile.LC, config.effectiveAudioAacProfile)
     }
 
     @Test

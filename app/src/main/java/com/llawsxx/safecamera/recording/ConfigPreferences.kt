@@ -29,7 +29,13 @@ object ConfigPreferences {
             fps = p.getInt("fps", 30).coerceAtLeast(1),
             mediaCodecMode = p.getBoolean("mediaCodecMode", false),
             videoBitrate = p.getInt("videoBitrate", 12_000_000),
+            videoBitrateMode = enumValue(p.getString("videoBitrateMode", null), VideoBitrateMode.DEFAULT),
+            videoKeyFrameIntervalSeconds = p.getInt("videoKeyFrameIntervalSeconds", 2).coerceIn(0, 60),
+            videoMaxBFrames = p.getInt("videoMaxBFrames", 0).coerceIn(0, 4),
             audioBitrate = p.getInt("audioBitrate", 192_000),
+            audioAacProfile = enumValue(p.getString("audioAacProfile", null), AudioAacProfile.LC),
+            audioSampleRate = p.getInt("audioSampleRate", 48_000),
+            audioChannelCount = p.getInt("audioChannelCount", 2).coerceIn(1, 2),
             audioInputDeviceId = p.getInt("audioInputDeviceId", -1).takeIf { it >= 0 },
             videoCodec = enumValue(p.getString("videoCodec", null), VideoCodec.H264),
             dynamicRange = enumValue(p.getString("dynamicRange", null), VideoDynamicRange.SDR),
@@ -119,7 +125,13 @@ object ConfigPreferences {
             .putInt("fps", c.fps)
             .putBoolean("mediaCodecMode", c.mediaCodecMode)
             .putInt("videoBitrate", c.videoBitrate)
+            .putString("videoBitrateMode", c.videoBitrateMode.name)
+            .putInt("videoKeyFrameIntervalSeconds", c.videoKeyFrameIntervalSeconds)
+            .putInt("videoMaxBFrames", c.videoMaxBFrames)
             .putInt("audioBitrate", c.audioBitrate)
+            .putString("audioAacProfile", c.audioAacProfile.name)
+            .putInt("audioSampleRate", c.audioSampleRate)
+            .putInt("audioChannelCount", c.audioChannelCount)
             .putInt("audioInputDeviceId", c.audioInputDeviceId ?: -1)
             .putString("videoCodec", c.videoCodec.name)
             .putString("dynamicRange", c.dynamicRange.name)

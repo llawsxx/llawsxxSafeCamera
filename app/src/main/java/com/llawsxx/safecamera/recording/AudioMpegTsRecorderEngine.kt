@@ -50,8 +50,9 @@ class AudioMpegTsRecorderEngine(
     private fun prepare() {
         check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) { "native MPEG-TS 音频录制需要 Android 8.0 或更高版本" }
         check(config.container == ContainerFormat.MPEG_TS && config.mode == RecordingMode.AUDIO)
-        val sampleRate = 48_000
-        val channelMask = AudioFormat.CHANNEL_IN_STEREO
+        val sampleRate = config.audioSampleRate
+        val channelCount = config.audioChannelCount
+        val channelMask = if (channelCount == 1) AudioFormat.CHANNEL_IN_MONO else AudioFormat.CHANNEL_IN_STEREO
         val minBuffer = AudioRecord.getMinBufferSize(sampleRate, channelMask, AudioFormat.ENCODING_PCM_16BIT)
         check(minBuffer > 0) { "无法初始化音频输入" }
         val audioRecord = AudioRecord(
@@ -67,7 +68,7 @@ class AudioMpegTsRecorderEngine(
             }
         }
         record = audioRecord
-        val audioFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, 2).apply {
+        val audioFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, channelCount).apply {
             setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
             setInteger(MediaFormat.KEY_BIT_RATE, config.audioBitrate)
             setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(minBuffer, 16_384))
@@ -86,7 +87,7 @@ class AudioMpegTsRecorderEngine(
         output = sink
         sink.start()
         val coordinator = NativeTsMuxCoordinator(
-            NativeMpegTsMuxer(null, true), sink, needsAudio = true, needsVideo = false,
+            NativeMpegTsMuxer(null, true, sampleRate, channelCount), sink, needsAudio = true, needsVideo = false,
         ) {
             startedAtMs = SystemClock.elapsedRealtime()
             onStarted(checkNotNull(currentPath))
@@ -95,13 +96,20 @@ class AudioMpegTsRecorderEngine(
         mux = coordinator
         running.set(true)
         audioCodec.start()
-        audioThread = Thread { audioLoop(audioCodec, audioRecord, coordinator, minBuffer) }.apply { isDaemon = true; start() }
+        audioThread = Thread { audioLoop(audioCodec, audioRecord, coordinator, minBuffer, sampleRate, channelCount) }.apply { isDaemon = true; start() }
     }
 
     @Volatile private var currentPath: String? = null
 
     @SuppressLint("MissingPermission")
-    private fun audioLoop(codec: MediaCodec, record: AudioRecord, mux: NativeTsMuxCoordinator, minBuffer: Int) {
+    private fun audioLoop(
+        codec: MediaCodec,
+        record: AudioRecord,
+        mux: NativeTsMuxCoordinator,
+        minBuffer: Int,
+        sampleRate: Int,
+        channelCount: Int,
+    ) {
         val input = ByteArray(maxOf(minBuffer, 16_384))
         val info = MediaCodec.BufferInfo()
         var inputEnded = false
@@ -116,14 +124,14 @@ class AudioMpegTsRecorderEngine(
                         if (count > 0) {
                             buffer.clear(); buffer.put(input, 0, count)
                             levelDb = pcm16PeakDb(input, count)
-                            val frames = count / 4
-                            codec.queueInputBuffer(inputIndex, 0, count, multiplyDivide(samples, 1_000_000L, 48_000L), 0)
+                            val frames = count / (2 * channelCount)
+                            codec.queueInputBuffer(inputIndex, 0, count, multiplyDivide(samples, 1_000_000L, sampleRate.toLong()), 0)
                             samples += frames
                         }
                     }
                 } else if (!inputEnded) {
                     val inputIndex = codec.dequeueInputBuffer(10_000)
-                    if (inputIndex >= 0) { codec.queueInputBuffer(inputIndex, 0, 0, multiplyDivide(samples, 1_000_000L, 48_000L), MediaCodec.BUFFER_FLAG_END_OF_STREAM); inputEnded = true }
+                    if (inputIndex >= 0) { codec.queueInputBuffer(inputIndex, 0, 0, multiplyDivide(samples, 1_000_000L, sampleRate.toLong()), MediaCodec.BUFFER_FLAG_END_OF_STREAM); inputEnded = true }
                 }
                 var eos = false
                 while (true) {
