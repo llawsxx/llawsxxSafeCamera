@@ -26,11 +26,12 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
@@ -45,10 +46,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -76,14 +77,17 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
@@ -133,6 +137,9 @@ import com.llawsxx.safecamera.recording.recordingOrientationHint
 import com.llawsxx.safecamera.recording.rotatedDimensions
 import com.llawsxx.safecamera.ui.theme.LlawsxxSafeCameraTheme
 import java.util.Locale
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
@@ -1359,11 +1366,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             }
 
             Section("方向") {
-                Labeled("方向") {
-                    ChoiceRow(OrientationMode.entries, config.orientation, { it.label }, !recording) {
-                        config = config.copy(orientation = it)
-                    }
-                }
                 ToggleLine(
                     "旋转图像像素，不写角度信息",
                     config.rotateImagePixels,
@@ -1480,7 +1482,7 @@ private fun MainRecorderScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            RecordButton(state, config, onStop, onStart, modifier = Modifier.weight(1f))
+            RecordButton(state, config, onStop, onStart, modifier = Modifier.width(88.dp).height(38.dp))
             OutlinedButton(
                 onClick = onSettings,
                 enabled = !recording,
@@ -1500,6 +1502,7 @@ private fun MainRecorderScreen(
                 selectedCamera = camera,
                 onConfigChange = onConfigChange,
                 onCameraSelect = onCameraSelect,
+                orientationEnabled = !recording,
             )
             camera?.let {
                 QuickCameraControls(
@@ -1568,7 +1571,7 @@ private fun LandscapeMainRecorderScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            RecordButton(state, config, onStop, onStart, modifier = Modifier.width(136.dp))
+            RecordButton(state, config, onStop, onStart, modifier = Modifier.width(88.dp).height(38.dp))
             PreviewToolbar(
                 config,
                 cameras,
@@ -1576,6 +1579,8 @@ private fun LandscapeMainRecorderScreen(
                 onConfigChange,
                 onCameraSelect,
                 modifier = Modifier.weight(1f),
+                orientationEnabled = !recording,
+                singleLine = true,
             )
             OutlinedButton(
                 onClick = onSettings,
@@ -1715,13 +1720,14 @@ private fun PreviewToolbar(
     onConfigChange: (RecordingConfig) -> Unit,
     onCameraSelect: (CameraInfo) -> Unit,
     modifier: Modifier = Modifier.fillMaxWidth(),
+    orientationEnabled: Boolean = true,
+    singleLine: Boolean = false,
 ) {
-    FlowRow(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
+    val controls: @Composable () -> Unit = {
         CompactChoice("镜头", cameras, selectedCamera, { it.displayName }, true, Modifier.width(116.dp), onCameraSelect)
+        CompactChoice("方向", OrientationMode.entries, config.orientation, { it.label }, orientationEnabled, Modifier.width(112.dp)) {
+            onConfigChange(config.copy(orientation = it))
+        }
         CompactChoice("布局", PreviewLayout.entries, config.previewLayout, { it.label }, true, Modifier.width(100.dp)) {
             onConfigChange(config.copy(previewLayout = it))
         }
@@ -1735,6 +1741,23 @@ private fun PreviewToolbar(
         }
         CompactChoice("旋转", listOf(0, 90, 180, 270), config.previewRotationDegrees, { "$it°" }, true, Modifier.width(88.dp)) {
             onConfigChange(config.copy(previewRotationDegrees = it))
+        }
+    }
+    if (singleLine) {
+        Row(
+            modifier = modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            controls()
+        }
+    } else {
+        FlowRow(
+            modifier = modifier,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            controls()
         }
     }
 }
@@ -1847,13 +1870,45 @@ private fun FullscreenRecorder(
             )) },
             onTap = { controlsVisible = !controlsVisible },
         )
-        Row(
-            Modifier.fillMaxWidth().align(Alignment.TopCenter).background(Color(0x22000000)).padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedButton(onClick = onExit, modifier = Modifier.height(36.dp)) { Text("返回") }
-            CompactRecordingDashboard(state, config, lightText = true, modifier = Modifier.weight(1f))
+        if (isLandscape) {
+            Row(
+                Modifier.fillMaxWidth().align(Alignment.TopCenter).background(Color(0x22000000)).padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(onClick = onExit, modifier = Modifier.height(36.dp)) { Text("返回") }
+                CompactRecordingDashboard(state, config, lightText = true, modifier = Modifier.weight(1f))
+                CompactChoice(
+                    "方向",
+                    OrientationMode.entries,
+                    config.orientation,
+                    { it.label },
+                    state !is RecorderState.Starting && state !is RecorderState.Stopping && state !is RecorderState.Recording,
+                    Modifier.width(112.dp),
+                ) { onConfigChange(config.copy(orientation = it)) }
+            }
+        } else {
+            Column(
+                Modifier.fillMaxWidth().align(Alignment.TopCenter).background(Color(0x22000000)).padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    OutlinedButton(onClick = onExit, modifier = Modifier.height(36.dp)) { Text("返回") }
+                    CompactChoice(
+                        "方向",
+                        OrientationMode.entries,
+                        config.orientation,
+                        { it.label },
+                        state !is RecorderState.Starting && state !is RecorderState.Stopping && state !is RecorderState.Recording,
+                        Modifier.width(112.dp),
+                    ) { onConfigChange(config.copy(orientation = it)) }
+                }
+                CompactRecordingDashboard(state, config, lightText = true, modifier = Modifier.fillMaxWidth())
+            }
         }
         if (controlsVisible) camera?.let {
             if (isLandscape) {
@@ -1881,9 +1936,9 @@ private fun FullscreenRecorder(
                     colors = CardDefaults.cardColors(containerColor = Color(0x22000000)),
                     modifier = Modifier
                         .align(Alignment.TopCenter)
-                        .padding(top = 48.dp)
+                        .padding(top = 76.dp)
                         .fillMaxWidth()
-                        .heightIn(max = 122.dp),
+                        .heightIn(max = 250.dp),
                 ) {
                     FullscreenCameraControls(
                         camera = it,
@@ -1929,7 +1984,7 @@ private fun FullscreenRecorder(
                 config = config,
                 onStop = onStop,
                 onStart = onStart,
-                modifier = Modifier.width(150.dp).padding(4.dp),
+                modifier = Modifier.width(88.dp).height(38.dp),
             )
         }
     }
@@ -2026,13 +2081,14 @@ private fun RecordButton(
         enabled = state !is RecorderState.Starting && state !is RecorderState.Stopping &&
             (!config.hasVideo || (config.cameraId.isNotBlank() && config.cropSizeValid && config.resizeSizeValid)),
         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
-        modifier = modifier
+        modifier = modifier,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
     ) {
         Text(
             when {
                 state is RecorderState.Stopping -> "正在保存"
                 active -> "停止"
-                else -> "开始录制"
+                else -> "开始"
             }
         )
     }
@@ -2104,11 +2160,11 @@ private fun CompactRecordingDashboard(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(status, color = if (state is RecorderState.Recording) Color(0xFFFF5252) else color, style = MaterialTheme.typography.labelMedium)
-        Text(formatDuration(stats?.elapsedMs ?: 0L), color = color, style = MaterialTheme.typography.labelMedium)
-        Text("FPS ${stats?.averageFps?.takeIf { it > 0 }?.format1() ?: "—"}", color = color, style = MaterialTheme.typography.labelMedium)
-        Text("丢帧 ${stats?.droppedFrames ?: 0}", color = color, style = MaterialTheme.typography.labelMedium)
-        Text("剩余 ${availableBytes?.let(::formatStorageBytes) ?: "—"}", color = color, style = MaterialTheme.typography.labelMedium)
+        Text(status, color = if (state is RecorderState.Recording) Color(0xFFFF5252) else color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+        Text(formatDuration(stats?.elapsedMs ?: 0L), color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+        Text("FPS ${stats?.averageFps?.takeIf { it > 0 }?.format1() ?: "—"}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+        Text("丢帧 ${stats?.droppedFrames ?: 0}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+        Text("剩余 ${availableBytes?.let(::formatStorageBytes) ?: "—"}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
     }
 }
 
@@ -2557,6 +2613,7 @@ private fun LandscapeCameraControls(
                                 valueRange = range.lower.toFloat()..range.upper.toFloat(),
                                 enabled = enabled && config.manualExposure,
                                 lightText = overlay,
+                                tickLabel = { it.roundToInt().toString() },
                             )
                         }
                     }
@@ -2571,6 +2628,7 @@ private fun LandscapeCameraControls(
                                 valueRange = range.lower / 1_000f..maximum / 1_000f,
                                 enabled = enabled && config.manualExposure,
                                 lightText = overlay,
+                                tickLabel = { formatShutter((it * 1_000).toLong()) },
                             )
                         }
                     }
@@ -2585,6 +2643,7 @@ private fun LandscapeCameraControls(
                                 steps = (range.upper - range.lower - 1).coerceAtLeast(0),
                                 enabled = enabled && !config.manualExposure,
                                 lightText = overlay,
+                                tickLabel = { exposureCompensationLabel(camera, it.roundToInt()) },
                             )
                         }
                     }
@@ -2599,6 +2658,7 @@ private fun LandscapeCameraControls(
                                 valueRange = 0f..camera.minimumFocusDistance,
                                 enabled = enabled,
                                 lightText = overlay,
+                                tickLabel = ::focusDistanceLabel,
                             )
                         }
                     }
@@ -2633,18 +2693,22 @@ private fun RowScope.VerticalValueSlider(
     enabled: Boolean,
     lightText: Boolean,
     steps: Int = 0,
+    tickLabel: (Float) -> String = ::compactRulerLabel,
 ) {
-    BoxWithConstraints(
+    Box(
         Modifier.weight(1f).fillMaxHeight(),
         contentAlignment = Alignment.Center,
     ) {
-        Slider(
+        CameraRuler(
             value = value,
             onValueChange = onValueChange,
             valueRange = valueRange,
             enabled = enabled,
             steps = steps,
-            modifier = Modifier.requiredWidth(maxHeight.coerceAtLeast(80.dp)).rotate(-90f),
+            vertical = true,
+            valueLabel = tickLabel,
+            lightText = lightText,
+            modifier = Modifier.fillMaxSize().padding(bottom = 30.dp),
         )
         Column(
             Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp),
@@ -2654,6 +2718,161 @@ private fun RowScope.VerticalValueSlider(
             Text(valueText, color = if (lightText) Color.White else Color.Unspecified, style = MaterialTheme.typography.labelSmall, maxLines = 1)
         }
     }
+}
+
+@Composable
+private fun CameraRuler(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    valueRange: ClosedFloatingPointRange<Float>,
+    enabled: Boolean,
+    vertical: Boolean,
+    valueLabel: (Float) -> String,
+    modifier: Modifier = Modifier,
+    steps: Int = 0,
+    lightText: Boolean = false,
+) {
+    val intervals = if (steps > 0) steps + 1 else 100
+    val start = valueRange.start
+    val span = valueRange.endInclusive - start
+    val safeSpan = span.takeIf { it > 0f } ?: 1f
+    fun indexFor(input: Float): Float = ((input.coerceIn(valueRange) - start) / safeSpan * intervals)
+    fun valueFor(index: Float): Float = start + index.coerceIn(0f, intervals.toFloat()) / intervals * safeSpan
+    val currentValue by rememberUpdatedState(value)
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
+    var visualIndex by remember(valueRange.start, valueRange.endInclusive, intervals) {
+        mutableStateOf(indexFor(value))
+    }
+    var dragging by remember { mutableStateOf(false) }
+    var dragStartIndex by remember { mutableStateOf(visualIndex) }
+    var dragDistance by remember { mutableStateOf(0f) }
+    LaunchedEffect(value, dragging) {
+        if (!dragging) visualIndex = indexFor(value)
+    }
+    val tickSpacing = if (vertical) 6.dp else 7.dp
+    val tickSpacingPx = with(androidx.compose.ui.platform.LocalDensity.current) { tickSpacing.toPx() }
+    val lineColor = if (lightText) Color.White else MaterialTheme.colorScheme.onSurface
+    val mutedColor = lineColor.copy(alpha = if (enabled) 0.55f else 0.25f)
+    val indicatorColor = if (enabled) MaterialTheme.colorScheme.error else lineColor.copy(alpha = 0.35f)
+    val majorEvery = when {
+        intervals <= 10 -> 1
+        intervals <= 30 -> 2
+        intervals <= 80 -> 5
+        intervals <= 200 -> 8
+        else -> ceil(intervals / 20f).toInt()
+    }
+    Canvas(
+        modifier
+            .then(if (enabled) Modifier.pointerInput(start, safeSpan, intervals, vertical) {
+                detectDragGestures(
+                    onDragStart = {
+                        dragging = true
+                        dragStartIndex = indexFor(currentValue)
+                        visualIndex = dragStartIndex
+                        dragDistance = 0f
+                    },
+                    onDragCancel = {
+                        dragging = false
+                        visualIndex = indexFor(currentValue)
+                    },
+                    onDragEnd = {
+                        val snapped = visualIndex.roundToInt().coerceIn(0, intervals)
+                        visualIndex = snapped.toFloat()
+                        currentOnValueChange(valueFor(snapped.toFloat()))
+                        dragging = false
+                    },
+                ) { change, amount ->
+                    change.consume()
+                    dragDistance += if (vertical) amount.y else amount.x
+                    visualIndex = (dragStartIndex - dragDistance / tickSpacingPx).coerceIn(0f, intervals.toFloat())
+                    currentOnValueChange(valueFor(visualIndex.roundToInt().toFloat()))
+                }
+            } else Modifier),
+    ) {
+        if (!enabled) return@Canvas
+        val center = if (vertical) size.height / 2f else size.width / 2f
+        val visibleRadius = ((if (vertical) size.height else size.width) / tickSpacingPx / 2f).toInt() + 2
+        val first = floor(visualIndex).toInt() - visibleRadius
+        val last = ceil(visualIndex).toInt() + visibleRadius
+        val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = mutedColor.toArgb()
+            textSize = if (vertical) 8.dp.toPx() else 9.dp.toPx()
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+        for (index in first..last) {
+            if (index !in 0..intervals) continue
+            val position = center + (index - visualIndex) * tickSpacingPx
+            val major = index % majorEvery == 0 || index == intervals
+            if (vertical) {
+                val length = if (major) size.width * 0.42f else size.width * 0.22f
+                drawLine(
+                    color = if (major) lineColor else mutedColor,
+                    start = androidx.compose.ui.geometry.Offset(size.width / 2f - length / 2f, position),
+                    end = androidx.compose.ui.geometry.Offset(size.width / 2f + length / 2f, position),
+                    strokeWidth = if (major) 1.5.dp.toPx() else 1.dp.toPx(),
+                )
+                if (major) {
+                    drawContext.canvas.nativeCanvas.drawText(
+                        valueLabel(valueFor(index.toFloat())),
+                        size.width / 2f,
+                        position - 4.dp.toPx(),
+                        textPaint,
+                    )
+                }
+            } else {
+                val length = if (major) size.height * 0.42f else size.height * 0.22f
+                drawLine(
+                    color = if (major) lineColor else mutedColor,
+                    start = androidx.compose.ui.geometry.Offset(position, size.height / 2f - length / 2f),
+                    end = androidx.compose.ui.geometry.Offset(position, size.height / 2f + length / 2f),
+                    strokeWidth = if (major) 1.5.dp.toPx() else 1.dp.toPx(),
+                )
+                if (major) {
+                    drawContext.canvas.nativeCanvas.drawText(
+                        valueLabel(valueFor(index.toFloat())),
+                        position,
+                        10.dp.toPx(),
+                        textPaint,
+                    )
+                }
+            }
+        }
+        if (vertical) {
+            drawLine(
+                indicatorColor,
+                androidx.compose.ui.geometry.Offset(0f, center),
+                androidx.compose.ui.geometry.Offset(size.width, center),
+                2.dp.toPx(),
+            )
+        } else {
+            drawLine(
+                indicatorColor,
+                androidx.compose.ui.geometry.Offset(center, 12.dp.toPx()),
+                androidx.compose.ui.geometry.Offset(center, size.height),
+                2.dp.toPx(),
+            )
+        }
+    }
+}
+
+private fun compactRulerLabel(value: Float): String = when {
+    kotlin.math.abs(value) >= 10_000f -> "${(value / 1_000f).format1()}k"
+    kotlin.math.abs(value) >= 100f -> value.roundToInt().toString()
+    kotlin.math.abs(value) >= 10f -> value.format1().trimEnd('0').trimEnd('.')
+    else -> value.format2().trimEnd('0').trimEnd('.')
+}
+
+private fun rulerValueLabel(
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    currentLabel: String,
+): String {
+    val prefix = currentLabel.takeWhile { !it.isDigit() && it != '-' && it != '+' }.trim()
+    val suffix = when {
+        currentLabel.endsWith("K") -> "K"
+        else -> ""
+    }
+    return "$prefix${compactRulerLabel(value)}$suffix"
 }
 
 @Composable
@@ -2700,6 +2919,7 @@ private fun LandscapeWhiteBalanceSliders(
                     valueRange = 1f..8f,
                     enabled = enabled,
                     lightText = lightText,
+                    tickLabel = { it.format1() },
                 )
             }
         } else {
@@ -2712,6 +2932,7 @@ private fun LandscapeWhiteBalanceSliders(
                 steps = 159,
                 enabled = enabled,
                 lightText = lightText,
+                tickLabel = { "${it.roundToInt()}K" },
             )
             VerticalValueSlider(
                 label = "Tint",
@@ -2722,6 +2943,7 @@ private fun LandscapeWhiteBalanceSliders(
                 steps = 199,
                 enabled = enabled,
                 lightText = lightText,
+                tickLabel = { tintLabel(it.roundToInt()) },
             )
         }
     }
@@ -2807,8 +3029,17 @@ private fun QuickCameraControls(
     val displayedAperture = if (config.manualExposure) config.aperture else liveExposure?.aperture ?: config.aperture
     val supportsManualFocus = camera.minimumFocusDistance > 0f &&
         camera.afModes.contains(CameraCharacteristics.CONTROL_AF_MODE_OFF)
+    val adjustmentRows = when (selected) {
+        FullscreenControl.WB -> when {
+            !config.manualWhiteBalance -> 1
+            config.advancedWhiteBalance -> if (config.splitWhiteBalanceGreen) 4 else 3
+            else -> 2
+        }
+        else -> 1
+    }
+    val adjustmentHeight = (adjustmentRows * 44).dp
     Column(
-        Modifier.fillMaxWidth().height(54.dp),
+        Modifier.fillMaxWidth().height(30.dp + adjustmentHeight),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Row(
@@ -2951,7 +3182,7 @@ private fun QuickCameraControls(
                 }
             }
         }
-        Box(Modifier.fillMaxWidth().height(24.dp)) {
+        Box(Modifier.fillMaxWidth().height(adjustmentHeight)) {
             when (selected) {
                 FullscreenControl.ISO -> camera.isoRange?.let { range ->
                     CompactValueSlider(
@@ -3013,9 +3244,9 @@ private fun CompactManualWhiteBalanceControls(
             if (config.splitWhiteBalanceGreen) add("G2" to config.whiteBalanceGreenOddGain)
             add("B" to config.whiteBalanceBlueGain)
         }
-        Row(
+        Column(
             Modifier.fillMaxWidth().padding(end = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             entries.forEach { (channel, value) ->
                 CompactInlineSlider(
@@ -3039,16 +3270,15 @@ private fun CompactManualWhiteBalanceControls(
                     valueRange = 1f..8f,
                     steps = 0,
                     enabled = enabled,
-                    modifier = Modifier.weight(1f),
-                    labelWidth = 44,
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
         return
     }
-    Row(
+    Column(
         Modifier.fillMaxWidth().padding(end = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         CompactInlineSlider(
             label = "${config.whiteBalanceTemperature}K",
@@ -3057,7 +3287,7 @@ private fun CompactManualWhiteBalanceControls(
             valueRange = 2_000f..10_000f,
             steps = 159,
             enabled = enabled,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.fillMaxWidth(),
         )
         CompactInlineSlider(
             label = tintLabel(config.whiteBalanceTint),
@@ -3066,7 +3296,7 @@ private fun CompactManualWhiteBalanceControls(
             valueRange = -100f..100f,
             steps = 199,
             enabled = enabled,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }
@@ -3080,18 +3310,19 @@ private fun CompactInlineSlider(
     steps: Int,
     enabled: Boolean,
     modifier: Modifier = Modifier,
-    labelWidth: Int = 58,
 ) {
-    Box(modifier.height(24.dp), contentAlignment = Alignment.Center) {
-        Text(label, style = MaterialTheme.typography.labelSmall, modifier = Modifier.align(Alignment.CenterStart))
-        Slider(
+    Box(modifier.height(44.dp), contentAlignment = Alignment.Center) {
+        CameraRuler(
             value = value,
             onValueChange = onValueChange,
             valueRange = valueRange,
             steps = steps,
             enabled = enabled,
-            modifier = Modifier.fillMaxWidth().height(24.dp).padding(start = labelWidth.dp),
+            vertical = false,
+            valueLabel = { rulerValueLabel(it, valueRange, label) },
+            modifier = Modifier.fillMaxSize(),
         )
+        Text(label, style = MaterialTheme.typography.labelSmall, modifier = Modifier.align(Alignment.BottomStart))
     }
 }
 
@@ -3186,24 +3417,23 @@ private fun CompactValueSlider(
     valueLabel: (Float) -> String,
     steps: Int = 0,
 ) {
-    Box(Modifier.fillMaxWidth().height(24.dp), contentAlignment = Alignment.Center) {
-        Slider(
+    Box(Modifier.fillMaxWidth().height(44.dp), contentAlignment = Alignment.Center) {
+        CameraRuler(
             value = value,
             onValueChange = onValueChange,
             valueRange = valueRange,
             steps = steps,
             enabled = enabled,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(24.dp)
-                .padding(start = 88.dp, end = 16.dp),
+            vertical = false,
+            valueLabel = valueLabel,
+            modifier = Modifier.fillMaxSize(),
         )
         Text(
             text = valueLabel(value),
             color = MaterialTheme.colorScheme.inverseOnSurface,
             style = MaterialTheme.typography.labelSmall,
             modifier = Modifier
-                .align(Alignment.CenterStart)
+                .align(Alignment.BottomStart)
                 .padding(start = 4.dp)
                 .background(MaterialTheme.colorScheme.inverseSurface, MaterialTheme.shapes.extraSmall)
                 .padding(horizontal = 8.dp, vertical = 2.dp),
