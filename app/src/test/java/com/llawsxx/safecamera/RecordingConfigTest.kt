@@ -94,6 +94,25 @@ class RecordingConfigTest {
     }
 
     @Test
+    fun audioAgcRequestsMediaCodecEngineForVideoRecording() {
+        assertTrue(
+            RecordingConfig(audioAutomaticGainControl = true).mediaCodecEngineRequested,
+        )
+        assertTrue(
+            !RecordingConfig(
+                mode = com.llawsxx.safecamera.recording.RecordingMode.AUDIO,
+                audioAutomaticGainControl = true,
+            ).mediaCodecEngineRequested,
+        )
+        assertTrue(
+            !RecordingConfig(
+                mode = com.llawsxx.safecamera.recording.RecordingMode.VIDEO,
+                audioAutomaticGainControl = true,
+            ).mediaCodecEngineRequested,
+        )
+    }
+
+    @Test
     fun mpegTsUsesAacLcProfile() {
         val config = RecordingConfig(
             container = ContainerFormat.MPEG_TS,

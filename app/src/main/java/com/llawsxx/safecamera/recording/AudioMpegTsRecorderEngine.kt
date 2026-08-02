@@ -8,6 +8,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaRecorder
+import android.media.audiofx.AutomaticGainControl
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
@@ -31,6 +32,7 @@ class AudioMpegTsRecorderEngine(
     private val handler = Handler(thread.looper)
     private var config = initialConfig
     private var record: AudioRecord? = null
+    private var automaticGainControl: AutomaticGainControl? = null
     private var codec: MediaCodec? = null
     private var mux: NativeTsMuxCoordinator? = null
     private var output: NativeTsOutput? = null
@@ -60,6 +62,15 @@ class AudioMpegTsRecorderEngine(
             AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuffer * 2, 16_384),
         )
         check(audioRecord.state == AudioRecord.STATE_INITIALIZED) { "无法初始化麦克风" }
+        if (config.audioAutomaticGainControl) {
+            check(AutomaticGainControl.isAvailable()) { "当前设备不支持自动增益控制（AGC）" }
+            automaticGainControl = checkNotNull(AutomaticGainControl.create(audioRecord.audioSessionId)) {
+                "无法为当前音频输入创建自动增益控制（AGC）"
+            }.apply {
+                enabled = true
+                check(this.enabled) { "当前音频输入无法启用自动增益控制（AGC）" }
+            }
+        }
         config.audioInputDeviceId?.let { selectedId ->
             val device = AudioInputDevices.find(context, selectedId)
             when {
@@ -161,6 +172,7 @@ class AudioMpegTsRecorderEngine(
             runCatching { record?.stop() }
             audioThread?.join(5_000)
             runCatching { codec?.stop() }; runCatching { codec?.release() }; codec = null
+            releaseAutomaticGainControl()
             runCatching { record?.release() }; record = null
             mux?.finish(); mux = null
             output?.close(); output = null
@@ -173,6 +185,7 @@ class AudioMpegTsRecorderEngine(
         runCatching { record?.stop() }
         audioThread?.join(1_000)
         runCatching { codec?.stop() }; runCatching { codec?.release() }; codec = null
+        releaseAutomaticGainControl()
         runCatching { record?.release() }; record = null
         runCatching { mux?.finish() }; mux = null
         runCatching { output?.close() }; output = null
@@ -181,6 +194,12 @@ class AudioMpegTsRecorderEngine(
     override fun updatePreview(surface: Surface?) = Unit
     override fun switchCamera(cameraId: String) = Unit
     override fun updateCameraControls(updated: RecordingConfig) { config = config.copy(audioInputDeviceId = updated.audioInputDeviceId) }
+
+    private fun releaseAutomaticGainControl() {
+        runCatching { automaticGainControl?.enabled = false }
+        runCatching { automaticGainControl?.release() }
+        automaticGainControl = null
+    }
 
     private val statsTick = object : Runnable {
         override fun run() {

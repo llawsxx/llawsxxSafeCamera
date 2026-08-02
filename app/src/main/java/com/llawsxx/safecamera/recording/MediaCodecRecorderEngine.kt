@@ -19,6 +19,7 @@ import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.media.MediaRecorder
+import android.media.audiofx.AutomaticGainControl
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
@@ -57,6 +58,7 @@ class MediaCodecRecorderEngine(
     private var videoCodec: MediaCodec? = null
     private var audioCodec: MediaCodec? = null
     private var audioRecord: AudioRecord? = null
+    private var automaticGainControl: AutomaticGainControl? = null
     private var output: OutputHandle? = null
     private var mux: EncodedMuxCoordinator? = null
     private var tsOutput: NativeTsOutput? = null
@@ -227,6 +229,15 @@ class MediaCodecRecorderEngine(
             max(minBuffer * 2, 16_384),
         )
         require(record.state == AudioRecord.STATE_INITIALIZED) { "无法初始化麦克风" }
+        if (config.audioAutomaticGainControl) {
+            require(AutomaticGainControl.isAvailable()) { "当前设备不支持自动增益控制（AGC）" }
+            automaticGainControl = requireNotNull(AutomaticGainControl.create(record.audioSessionId)) {
+                "无法为当前音频输入创建自动增益控制（AGC）"
+            }.apply {
+                enabled = true
+                require(this.enabled) { "当前音频输入无法启用自动增益控制（AGC）" }
+            }
+        }
         config.audioInputDeviceId?.let { selectedId ->
             val device = AudioInputDevices.find(context, selectedId)
             when {
@@ -590,6 +601,8 @@ class MediaCodecRecorderEngine(
         runCatching { transformRenderer?.release() }; transformRenderer = null
         runCatching { videoCodec?.stop() }; runCatching { videoCodec?.release() }; videoCodec = null
         runCatching { audioCodec?.stop() }; runCatching { audioCodec?.release() }; audioCodec = null
+        runCatching { automaticGainControl?.enabled = false }
+        runCatching { automaticGainControl?.release() }; automaticGainControl = null
         runCatching { audioRecord?.release() }; audioRecord = null
         runCatching { encoderSurface?.release() }; encoderSurface = null
     }

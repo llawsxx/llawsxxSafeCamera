@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.media.audiofx.AutomaticGainControl
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.llawsxx.safecamera.MainActivity
@@ -64,6 +65,24 @@ class RecordingService : Service() {
         if (config.cropEnabled && Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             finishWithError("中心裁切录制需要 Android 8.0 或更高版本")
             return
+        }
+        if (config.audioAutomaticGainControl) {
+            if (!config.hasAudio) {
+                finishWithError("当前录制模式不包含音频，无法启用自动增益控制（AGC）")
+                return
+            }
+            if (config.highSpeedMode) {
+                finishWithError("高速录像模式不支持自动增益控制（AGC）")
+                return
+            }
+            if (!AutomaticGainControl.isAvailable()) {
+                finishWithError("当前设备不支持自动增益控制（AGC）")
+                return
+            }
+            if (!config.hasVideo && config.container != ContainerFormat.MPEG_TS) {
+                finishWithError("纯音频 MP4 录制不支持自动增益控制（AGC）")
+                return
+            }
         }
         val outputStore = RecordingOutputStore(this, config.outputTreeUri)
         val onStarted: (String) -> Unit = { path ->

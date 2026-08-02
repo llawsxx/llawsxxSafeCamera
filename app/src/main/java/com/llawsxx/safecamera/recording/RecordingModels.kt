@@ -142,6 +142,7 @@ data class RecordingConfig(
     val audioAacProfile: AudioAacProfile = AudioAacProfile.LC,
     val audioSampleRate: Int = 48_000,
     val audioChannelCount: Int = 2,
+    val audioAutomaticGainControl: Boolean = false,
     val audioInputDeviceId: Int? = null,
     val videoCodec: VideoCodec = VideoCodec.H264,
     val dynamicRange: VideoDynamicRange = VideoDynamicRange.SDR,
@@ -203,6 +204,7 @@ data class RecordingConfig(
     val effectiveAudioAacProfile: AudioAacProfile get() =
         if (container == ContainerFormat.MPEG_TS) AudioAacProfile.LC else audioAacProfile
     val mediaCodecEngineRequested: Boolean get() = mediaCodecMode || customVideoEncoderParameters ||
+        (hasVideo && hasAudio && audioAutomaticGainControl) ||
         customColorMetadata || videoTransformEnabled ||
         dynamicRange != VideoDynamicRange.SDR || (forceSpsVui && customRewriteColorMetadata)
     val transformWidth: Int get() = if (cropEnabled) cropWidth else width

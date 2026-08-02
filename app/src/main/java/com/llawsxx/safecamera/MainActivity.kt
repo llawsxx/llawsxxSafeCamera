@@ -10,6 +10,7 @@ import android.hardware.display.DisplayManager
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.media.audiofx.AutomaticGainControl
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -307,6 +308,13 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             config = config.copy(audioAacProfile = AudioAacProfile.LC)
         }
     }
+    LaunchedEffect(config.mode, config.container, config.audioAutomaticGainControl) {
+        val agcPathSupported = config.hasAudio &&
+            (config.hasVideo || config.container == ContainerFormat.MPEG_TS) && !config.highSpeedMode
+        if (config.audioAutomaticGainControl && (!agcPathSupported || !AutomaticGainControl.isAvailable())) {
+            config = config.copy(audioAutomaticGainControl = false)
+        }
+    }
     LaunchedEffect(config.mediaCodecEngineRequested, config.dynamicRange) {
         if (config.mediaCodecEngineRequested && config.hasVideo) {
             val normalized = config.copy(
@@ -327,6 +335,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 container = ContainerFormat.MP4,
                 segmentMinutes = 0,
                 streamEnabled = false,
+                audioAutomaticGainControl = false,
                 manualExposure = false,
                 dynamicRange = VideoDynamicRange.SDR,
                 colorRange = VideoColorRange.DEFAULT,
@@ -771,6 +780,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 videoBitrateMode = VideoBitrateMode.DEFAULT,
                                 videoKeyFrameIntervalSeconds = 2,
                                 videoMaxBFrames = 0,
+                                audioAutomaticGainControl = false,
                             ) else config.copy(highSpeedMode = false)
                         }
                         if (config.highSpeedMode) {
@@ -1203,6 +1213,23 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                         onValueChange = { config = config.copy(audioBitrate = (it * 1000).toInt()) },
                         valueRange = 64f..320f,
                         enabled = !recording,
+                    )
+                    val agcPathSupported = config.hasAudio &&
+                        (config.hasVideo || config.container == ContainerFormat.MPEG_TS) && !config.highSpeedMode
+                    val agcAvailable = AutomaticGainControl.isAvailable()
+                    ToggleLine(
+                        "自动增益控制（AGC）",
+                        config.audioAutomaticGainControl,
+                        !recording && agcPathSupported && agcAvailable,
+                    ) { config = config.copy(audioAutomaticGainControl = it) }
+                    Text(
+                        when {
+                            !agcAvailable -> "当前设备未提供系统 AGC。"
+                            !agcPathSupported -> "纯音频 MP4 使用 MediaRecorder，无法绑定系统 AGC；纯音频 MPEG-TS 支持。"
+                            config.audioAutomaticGainControl -> "已请求系统 AGC；实际增益策略和效果由设备音频实现决定。"
+                            else -> "AGC 会根据输入响度自动调整麦克风增益，可能产生音量抽吸感。"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
                     )
                     if (config.container == ContainerFormat.MPEG_TS) {
                         Text("当前 MPEG-TS 的 ADTS 封装仅支持 AAC-LC。", style = MaterialTheme.typography.bodySmall)
