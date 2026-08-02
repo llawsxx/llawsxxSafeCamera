@@ -2546,18 +2546,22 @@ private fun LandscapeCameraControls(
                                             FullscreenControl.WB -> { selected = control; whiteBalanceExpanded = true }
                                             FullscreenControl.APERTURE -> { selected = control; apertureExpanded = true }
                                             FullscreenControl.FOCUS -> if (supportsManualFocus) {
-                                                selected = control
-                                                val nextManual = config.focusMode != FocusMode.MANUAL
-                                                onChange(
-                                                    config.copy(
-                                                        focusMode = if (nextManual) FocusMode.MANUAL else FocusMode.CONTINUOUS,
-                                                        focusDistanceDiopters = if (nextManual) {
-                                                            liveExposure?.focusDistanceDiopters
-                                                                ?.coerceIn(0f, camera.minimumFocusDistance)
-                                                                ?: config.focusDistanceDiopters
-                                                        } else config.focusDistanceDiopters,
-                                                    ),
-                                                )
+                                                if (config.focusMode == FocusMode.MANUAL && selected != control) {
+                                                    selected = control
+                                                } else {
+                                                    selected = control
+                                                    val nextManual = config.focusMode != FocusMode.MANUAL
+                                                    onChange(
+                                                        config.copy(
+                                                            focusMode = if (nextManual) FocusMode.MANUAL else FocusMode.CONTINUOUS,
+                                                            focusDistanceDiopters = if (nextManual) {
+                                                                liveExposure?.focusDistanceDiopters
+                                                                    ?.coerceIn(0f, camera.minimumFocusDistance)
+                                                                    ?: config.focusDistanceDiopters
+                                                            } else config.focusDistanceDiopters,
+                                                        ),
+                                                    )
+                                                }
                                             }
                                             else -> selected = control
                                         }
