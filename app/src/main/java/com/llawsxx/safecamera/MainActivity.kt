@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.display.DisplayManager
 import android.media.AudioDeviceCallback
@@ -29,11 +30,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -42,6 +45,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -76,11 +80,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
@@ -1325,6 +1331,32 @@ private fun MainRecorderScreen(
 ) {
     val context = LocalContext.current
     val recording = state is RecorderState.Recording || state is RecorderState.Starting || state is RecorderState.Stopping
+    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    if (isLandscape && config.hasVideo && camera != null) {
+        LandscapeMainRecorderScreen(
+            state = state,
+            config = config,
+            cameras = cameras,
+            camera = camera,
+            liveExposure = liveExposure,
+            sensorRotation = sensorRotation,
+            displayRotation = displayRotation,
+            userRotation = userRotation,
+            previewResumeEpoch = previewResumeEpoch,
+            permissionError = permissionError,
+            recording = recording,
+            onConfigChange = onConfigChange,
+            onCameraSelect = onCameraSelect,
+            onStart = onStart,
+            onStop = onStop,
+            onSettings = onSettings,
+            onExitApp = onExitApp,
+            onSurface = onSurface,
+            onBufferReady = onBufferReady,
+        )
+        DisposableEffect(Unit) { onDispose { onSurface(null) } }
+        return
+    }
     Column(
         Modifier
             .fillMaxSize()
@@ -1395,6 +1427,95 @@ private fun MainRecorderScreen(
 }
 
 @Composable
+private fun LandscapeMainRecorderScreen(
+    state: RecorderState,
+    config: RecordingConfig,
+    cameras: List<CameraInfo>,
+    camera: CameraInfo,
+    liveExposure: CameraExposureState?,
+    sensorRotation: Int,
+    displayRotation: Int,
+    userRotation: Int,
+    previewResumeEpoch: Int,
+    permissionError: String?,
+    recording: Boolean,
+    onConfigChange: (RecordingConfig) -> Unit,
+    onCameraSelect: (CameraInfo) -> Unit,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onSettings: () -> Unit,
+    onExitApp: () -> Unit,
+    onSurface: (Surface?) -> Unit,
+    onBufferReady: (Int) -> Unit,
+) {
+    Column(
+        Modifier.fillMaxSize().statusBarsPadding().padding(vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            RecordButton(state, config, onStop, onStart, modifier = Modifier.width(136.dp))
+            PreviewToolbar(
+                config,
+                cameras,
+                camera,
+                onConfigChange,
+                onCameraSelect,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedButton(
+                onClick = onSettings,
+                enabled = !recording,
+                modifier = Modifier.height(38.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+            ) { Text("设置", style = MaterialTheme.typography.labelMedium) }
+            OutlinedButton(
+                onClick = onExitApp,
+                modifier = Modifier.height(38.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+            ) { Text("退出", style = MaterialTheme.typography.labelMedium) }
+        }
+        Row(
+            Modifier.fillMaxWidth().weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            LandscapeCameraControls(
+                camera = camera,
+                config = config,
+                liveExposure = liveExposure,
+                enabled = state !is RecorderState.Starting && state !is RecorderState.Stopping && !config.highSpeedMode,
+                onChange = onConfigChange,
+                modifier = Modifier.width(356.dp).fillMaxHeight(),
+            )
+            RemainingSpacePreview(
+                config = config,
+                camera = camera,
+                sensorRotation = sensorRotation,
+                displayRotation = displayRotation,
+                userRotation = userRotation,
+                previewResumeEpoch = previewResumeEpoch,
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                onSurface = onSurface,
+                onBufferReady = onBufferReady,
+                onConfigChange = onConfigChange,
+                showZoomControls = false,
+            )
+            ZoomControls(
+                config = config,
+                onChange = onConfigChange,
+                modifier = Modifier.width(46.dp).align(Alignment.CenterVertically),
+            )
+        }
+        CompactRecordingDashboard(state, config)
+        if (config.hasAudio) AudioLevelMeter((state as? RecorderState.Recording)?.stats?.audioLevelDb ?: -60f)
+        permissionError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+    }
+}
+
+@Composable
 private fun RemainingSpacePreview(
     config: RecordingConfig,
     camera: CameraInfo,
@@ -1406,6 +1527,7 @@ private fun RemainingSpacePreview(
     onSurface: (Surface?) -> Unit,
     onBufferReady: (Int) -> Unit,
     onConfigChange: (RecordingConfig) -> Unit,
+    showZoomControls: Boolean = true,
 ) {
     val previewBuffer = previewBufferSize(camera, config)
     Box(modifier, contentAlignment = Alignment.Center) {
@@ -1433,21 +1555,18 @@ private fun RemainingSpacePreview(
                 mfAssistCenterY = boundedAssistCenter(config.mfAssistCenterY + dy, config.mfAssistMagnification),
             )) },
         )
-        Row(
-            Modifier.align(Alignment.TopEnd).padding(6.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            OutlinedButton(
-                onClick = { onConfigChange(assistConfigAtMagnification(config, previousMagnification(config))) },
-                enabled = config.mfAssistMagnification > 1,
-                modifier = Modifier.size(36.dp),
-                contentPadding = PaddingValues(0.dp),
-            ) { Text("−") }
-            OutlinedButton(
-                onClick = { onConfigChange(assistConfigAtMagnification(config, nextMagnification(config))) },
-                modifier = Modifier.size(36.dp),
-                contentPadding = PaddingValues(0.dp),
-            ) { Text("+") }
+        if (showZoomControls) {
+            Row(
+                Modifier.align(Alignment.TopEnd).padding(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                ZoomButton("−", config.mfAssistMagnification > 1) {
+                    onConfigChange(assistConfigAtMagnification(config, previousMagnification(config)))
+                }
+                ZoomButton("+", true) {
+                    onConfigChange(assistConfigAtMagnification(config, nextMagnification(config)))
+                }
+            }
         }
         if (config.mfAssistMagnification > 1) {
             val overviewCenter = sourcePointToDisplay(
@@ -1484,9 +1603,10 @@ private fun PreviewToolbar(
     selectedCamera: CameraInfo?,
     onConfigChange: (RecordingConfig) -> Unit,
     onCameraSelect: (CameraInfo) -> Unit,
+    modifier: Modifier = Modifier.fillMaxWidth(),
 ) {
     FlowRow(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -1589,6 +1709,7 @@ private fun FullscreenRecorder(
     val context = LocalContext.current
     val previewBuffer = previewBufferSize(camera, config)
     var controlsVisible by remember { mutableStateOf(true) }
+    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
         val fullscreenPreviewModifier = Modifier.fillMaxSize()
         PreviewPanel(
@@ -1624,21 +1745,43 @@ private fun FullscreenRecorder(
             CompactRecordingDashboard(state, config, lightText = true, modifier = Modifier.weight(1f))
         }
         if (controlsVisible) camera?.let {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0x22000000)),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 48.dp)
-                    .fillMaxWidth()
-                    .heightIn(max = 122.dp),
-            ) {
-                FullscreenCameraControls(
+            if (isLandscape) {
+                LandscapeCameraControls(
                     camera = it,
                     config = config,
                     liveExposure = liveExposure,
                     enabled = state !is RecorderState.Starting && state !is RecorderState.Stopping && !config.highSpeedMode,
                     onChange = onConfigChange,
+                    overlay = true,
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 8.dp, top = 48.dp, bottom = 54.dp)
+                        .width(356.dp)
+                        .fillMaxHeight(),
                 )
+                ZoomControls(
+                    config = config,
+                    onChange = onConfigChange,
+                    overlay = true,
+                    modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp),
+                )
+            } else {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0x22000000)),
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 48.dp)
+                        .fillMaxWidth()
+                        .heightIn(max = 122.dp),
+                ) {
+                    FullscreenCameraControls(
+                        camera = it,
+                        config = config,
+                        liveExposure = liveExposure,
+                        enabled = state !is RecorderState.Starting && state !is RecorderState.Stopping && !config.highSpeedMode,
+                        onChange = onConfigChange,
+                    )
+                }
             }
         }
         if (controlsVisible && config.mfAssistMagnification > 1) {
@@ -2137,6 +2280,375 @@ private fun WhiteBalanceGainRow(
             }
         }
     }
+}
+
+@Composable
+private fun LandscapeCameraControls(
+    camera: CameraInfo,
+    config: RecordingConfig,
+    liveExposure: CameraExposureState?,
+    enabled: Boolean,
+    onChange: (RecordingConfig) -> Unit,
+    modifier: Modifier = Modifier,
+    overlay: Boolean = false,
+) {
+    var selected by remember { mutableStateOf(FullscreenControl.ISO) }
+    var whiteBalanceExpanded by remember { mutableStateOf(false) }
+    var apertureExpanded by remember { mutableStateOf(false) }
+    val displayedIso = if (config.manualExposure) config.iso else liveExposure?.iso ?: config.iso
+    val displayedExposureNs = if (config.manualExposure) config.exposureNs else liveExposure?.exposureNs ?: config.exposureNs
+    val displayedAperture = if (config.manualExposure) config.aperture else liveExposure?.aperture ?: config.aperture
+    val supportsManualFocus = camera.minimumFocusDistance > 0f &&
+        camera.afModes.contains(CameraCharacteristics.CONTROL_AF_MODE_OFF)
+    val foreground = if (overlay) Color.White else Color.Unspecified
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = if (overlay) Color(0x66000000) else MaterialTheme.colorScheme.surfaceContainer,
+        ),
+    ) {
+        Row(
+            Modifier.fillMaxSize().padding(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Column(
+                Modifier.width(166.dp).fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().height(32.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(if (config.manualExposure) "手动" else "自动", color = foreground, style = MaterialTheme.typography.labelSmall)
+                    Switch(
+                        checked = config.manualExposure,
+                        onCheckedChange = { manual ->
+                            onChange(
+                                if (manual) config.copy(
+                                    manualExposure = true,
+                                    iso = liveExposure?.iso ?: config.iso,
+                                    exposureNs = liveExposure?.exposureNs ?: config.exposureNs,
+                                    aperture = liveExposure?.aperture ?: config.aperture,
+                                ) else config.copy(manualExposure = false),
+                            )
+                        },
+                        enabled = enabled && camera.isoRange != null,
+                        modifier = Modifier.size(30.dp).scale(0.65f),
+                    )
+                }
+                FullscreenControl.entries.toList().chunked(2).forEach { controls ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        controls.forEach { control ->
+                            Box(Modifier.weight(1f)) {
+                                OutlinedButton(
+                                    onClick = {
+                                        when (control) {
+                                            FullscreenControl.WB -> { selected = control; whiteBalanceExpanded = true }
+                                            FullscreenControl.APERTURE -> { selected = control; apertureExpanded = true }
+                                            FullscreenControl.FOCUS -> if (supportsManualFocus) {
+                                                selected = control
+                                                val nextManual = config.focusMode != FocusMode.MANUAL
+                                                onChange(
+                                                    config.copy(
+                                                        focusMode = if (nextManual) FocusMode.MANUAL else FocusMode.CONTINUOUS,
+                                                        focusDistanceDiopters = if (nextManual) {
+                                                            liveExposure?.focusDistanceDiopters
+                                                                ?.coerceIn(0f, camera.minimumFocusDistance)
+                                                                ?: config.focusDistanceDiopters
+                                                        } else config.focusDistanceDiopters,
+                                                    ),
+                                                )
+                                            }
+                                            else -> selected = control
+                                        }
+                                    },
+                                    enabled = enabled && when (control) {
+                                        FullscreenControl.FOCUS -> supportsManualFocus
+                                        FullscreenControl.APERTURE -> config.manualExposure && camera.apertures.isNotEmpty()
+                                        FullscreenControl.EV -> !config.manualExposure && camera.exposureCompensationRange != null
+                                        else -> true
+                                    },
+                                    modifier = Modifier.fillMaxWidth().height(38.dp),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                                ) {
+                                    Text(
+                                        when (control) {
+                                            FullscreenControl.ISO -> "ISO $displayedIso"
+                                            FullscreenControl.SHUTTER -> formatShutter(displayedExposureNs)
+                                            FullscreenControl.APERTURE -> displayedAperture?.let { "f/${it.format1()}" } ?: "光圈"
+                                            FullscreenControl.EV -> exposureCompensationLabel(camera, config.exposureCompensation)
+                                            FullscreenControl.WB -> if (config.manualWhiteBalance) {
+                                                if (config.advancedWhiteBalance) {
+                                                    if (config.splitWhiteBalanceGreen) "RGGB" else "RGB"
+                                                } else "${config.whiteBalanceTemperature}K"
+                                            } else awbLabel(config.awbMode)
+                                            FullscreenControl.FOCUS -> if (config.focusMode == FocusMode.MANUAL) "MF" else "AF"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                if (control == FullscreenControl.WB) {
+                                    DropdownMenu(expanded = whiteBalanceExpanded, onDismissRequest = { whiteBalanceExpanded = false }) {
+                                        if (camera.supportsManualWhiteBalance) {
+                                            DropdownMenuItem(text = { Text("手动：色温 + Tint") }, onClick = {
+                                                whiteBalanceExpanded = false
+                                                onChange(config.copy(manualWhiteBalance = true, advancedWhiteBalance = false))
+                                            })
+                                            DropdownMenuItem(text = { Text("手动：高级 RGB（G 联动）") }, onClick = {
+                                                whiteBalanceExpanded = false
+                                                val advanced = config.withAdvancedWhiteBalanceFromTemperature()
+                                                onChange(advanced.copy(splitWhiteBalanceGreen = false, whiteBalanceGreenOddGain = advanced.whiteBalanceGreenEvenGain))
+                                            })
+                                            DropdownMenuItem(text = { Text("手动：高级 RGGB（G1/G2 分离）") }, onClick = {
+                                                whiteBalanceExpanded = false
+                                                val advanced = config.withAdvancedWhiteBalanceFromTemperature()
+                                                onChange(advanced.copy(splitWhiteBalanceGreen = true))
+                                            })
+                                        }
+                                        camera.awbModes.filter { it != CameraCharacteristics.CONTROL_AWB_MODE_OFF }.forEach { mode ->
+                                            DropdownMenuItem(text = { Text(awbLabel(mode)) }, onClick = {
+                                                whiteBalanceExpanded = false
+                                                onChange(config.copy(awbMode = mode, manualWhiteBalance = false))
+                                            })
+                                        }
+                                    }
+                                }
+                                if (control == FullscreenControl.APERTURE) {
+                                    DropdownMenu(expanded = apertureExpanded, onDismissRequest = { apertureExpanded = false }) {
+                                        camera.apertures.forEach { aperture ->
+                                            DropdownMenuItem(text = { Text("f/${aperture.format1()}") }, onClick = {
+                                                apertureExpanded = false
+                                                onChange(config.copy(aperture = aperture))
+                                            })
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Box(Modifier.weight(1f).fillMaxHeight()) {
+                when (selected) {
+                    FullscreenControl.ISO -> camera.isoRange?.let { range ->
+                        LandscapeSliderColumns {
+                            VerticalValueSlider(
+                                label = "ISO",
+                                valueText = displayedIso.toString(),
+                                value = displayedIso.coerceIn(range.lower, range.upper).toFloat(),
+                                onValueChange = { onChange(config.copy(manualExposure = true, iso = it.toInt())) },
+                                valueRange = range.lower.toFloat()..range.upper.toFloat(),
+                                enabled = enabled && config.manualExposure,
+                                lightText = overlay,
+                            )
+                        }
+                    }
+                    FullscreenControl.SHUTTER -> camera.exposureRange?.let { range ->
+                        val maximum = minOf(range.upper, config.maximumExposureNs).coerceAtLeast(range.lower)
+                        LandscapeSliderColumns {
+                            VerticalValueSlider(
+                                label = "快门",
+                                valueText = formatShutter(displayedExposureNs),
+                                value = (displayedExposureNs / 1_000f).coerceIn(range.lower / 1_000f, maximum / 1_000f),
+                                onValueChange = { onChange(config.copy(manualExposure = true, exposureNs = (it * 1_000).toLong())) },
+                                valueRange = range.lower / 1_000f..maximum / 1_000f,
+                                enabled = enabled && config.manualExposure,
+                                lightText = overlay,
+                            )
+                        }
+                    }
+                    FullscreenControl.EV -> camera.exposureCompensationRange?.let { range ->
+                        LandscapeSliderColumns {
+                            VerticalValueSlider(
+                                label = "EV",
+                                valueText = exposureCompensationLabel(camera, config.exposureCompensation),
+                                value = config.exposureCompensation.coerceIn(range.lower, range.upper).toFloat(),
+                                onValueChange = { onChange(config.copy(exposureCompensation = it.toInt())) },
+                                valueRange = range.lower.toFloat()..range.upper.toFloat(),
+                                steps = (range.upper - range.lower - 1).coerceAtLeast(0),
+                                enabled = enabled && !config.manualExposure,
+                                lightText = overlay,
+                            )
+                        }
+                    }
+                    FullscreenControl.WB -> LandscapeWhiteBalanceSliders(config, enabled, overlay, onChange)
+                    FullscreenControl.FOCUS -> if (config.focusMode == FocusMode.MANUAL && supportsManualFocus) {
+                        LandscapeSliderColumns {
+                            VerticalValueSlider(
+                                label = "对焦",
+                                valueText = focusDistanceLabel(config.focusDistanceDiopters.coerceIn(0f, camera.minimumFocusDistance)),
+                                value = config.focusDistanceDiopters.coerceIn(0f, camera.minimumFocusDistance),
+                                onValueChange = { onChange(config.copy(focusDistanceDiopters = it)) },
+                                valueRange = 0f..camera.minimumFocusDistance,
+                                enabled = enabled,
+                                lightText = overlay,
+                            )
+                        }
+                    }
+                    FullscreenControl.APERTURE -> Text(
+                        "点击左侧光圈按钮选择档位",
+                        color = foreground,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LandscapeSliderColumns(content: @Composable RowScope.() -> Unit) {
+    Row(
+        Modifier.fillMaxSize(),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        content = content,
+    )
+}
+
+@Composable
+private fun RowScope.VerticalValueSlider(
+    label: String,
+    valueText: String,
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    valueRange: ClosedFloatingPointRange<Float>,
+    enabled: Boolean,
+    lightText: Boolean,
+    steps: Int = 0,
+) {
+    BoxWithConstraints(
+        Modifier.weight(1f).fillMaxHeight(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            enabled = enabled,
+            steps = steps,
+            modifier = Modifier.requiredWidth(maxHeight.coerceAtLeast(80.dp)).rotate(-90f),
+        )
+        Column(
+            Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(label, color = if (lightText) Color.White else Color.Unspecified, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+            Text(valueText, color = if (lightText) Color.White else Color.Unspecified, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+private fun LandscapeWhiteBalanceSliders(
+    config: RecordingConfig,
+    enabled: Boolean,
+    lightText: Boolean,
+    onChange: (RecordingConfig) -> Unit,
+) {
+    if (!config.manualWhiteBalance) {
+        Text(
+            "点击左侧白平衡按钮选择手动模式",
+            color = if (lightText) Color.White else Color.Unspecified,
+            style = MaterialTheme.typography.labelSmall,
+        )
+        return
+    }
+    LandscapeSliderColumns {
+        if (config.advancedWhiteBalance) {
+            val entries = buildList {
+                add("R" to config.whiteBalanceRedGain)
+                add("G1" to config.whiteBalanceGreenEvenGain)
+                if (config.splitWhiteBalanceGreen) add("G2" to config.whiteBalanceGreenOddGain)
+                add("B" to config.whiteBalanceBlueGain)
+            }
+            entries.forEach { (channel, channelValue) ->
+                VerticalValueSlider(
+                    label = channel,
+                    valueText = channelValue.format1(),
+                    value = channelValue.coerceIn(1f, 8f),
+                    onValueChange = { updated ->
+                        onChange(
+                            when (channel) {
+                                "R" -> config.copy(whiteBalanceRedGain = updated)
+                                "G1" -> config.copy(
+                                    whiteBalanceGreenEvenGain = updated,
+                                    whiteBalanceGreenOddGain = if (config.splitWhiteBalanceGreen) config.whiteBalanceGreenOddGain else updated,
+                                )
+                                "G2" -> config.copy(whiteBalanceGreenOddGain = updated)
+                                else -> config.copy(whiteBalanceBlueGain = updated)
+                            },
+                        )
+                    },
+                    valueRange = 1f..8f,
+                    enabled = enabled,
+                    lightText = lightText,
+                )
+            }
+        } else {
+            VerticalValueSlider(
+                label = "色温",
+                valueText = "${config.whiteBalanceTemperature}K",
+                value = config.whiteBalanceTemperature.toFloat(),
+                onValueChange = { onChange(config.copy(whiteBalanceTemperature = (it / 50f).toInt() * 50)) },
+                valueRange = 2_000f..10_000f,
+                steps = 159,
+                enabled = enabled,
+                lightText = lightText,
+            )
+            VerticalValueSlider(
+                label = "Tint",
+                valueText = tintLabel(config.whiteBalanceTint),
+                value = config.whiteBalanceTint.toFloat(),
+                onValueChange = { onChange(config.copy(whiteBalanceTint = it.toInt())) },
+                valueRange = -100f..100f,
+                steps = 199,
+                enabled = enabled,
+                lightText = lightText,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ZoomControls(
+    config: RecordingConfig,
+    onChange: (RecordingConfig) -> Unit,
+    modifier: Modifier = Modifier,
+    overlay: Boolean = false,
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = if (overlay) Color(0x66000000) else MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Column(
+            Modifier.padding(4.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            ZoomButton("+", true) { onChange(assistConfigAtMagnification(config, nextMagnification(config))) }
+            Text("${config.mfAssistMagnification}x", color = if (overlay) Color.White else Color.Unspecified, style = MaterialTheme.typography.labelSmall)
+            ZoomButton("−", config.mfAssistMagnification > 1) {
+                onChange(assistConfigAtMagnification(config, previousMagnification(config)))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ZoomButton(label: String, enabled: Boolean, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.size(36.dp),
+        contentPadding = PaddingValues(0.dp),
+    ) { Text(label) }
 }
 
 @Composable
