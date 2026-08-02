@@ -279,6 +279,10 @@ data class CameraExposureState(
     val exposureNs: Long?,
     val aperture: Float?,
     val focusDistanceDiopters: Float?,
+    val whiteBalanceRedGain: Float? = null,
+    val whiteBalanceGreenEvenGain: Float? = null,
+    val whiteBalanceGreenOddGain: Float? = null,
+    val whiteBalanceBlueGain: Float? = null,
 )
 
 sealed interface RecorderState {

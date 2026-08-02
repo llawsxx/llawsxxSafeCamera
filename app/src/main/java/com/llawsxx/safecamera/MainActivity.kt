@@ -615,6 +615,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         FullscreenRecorder(
             state = state,
             config = config,
+            cameras = cameras,
             camera = selectedCamera,
             liveExposure = liveExposure?.takeIf { it.cameraId == config.cameraId },
             sensorRotation = sensorRotation,
@@ -624,6 +625,16 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             previewResumeEpoch = previewResumeEpoch,
             visible = config.previewMode == PreviewMode.FULL,
             onConfigChange = { config = it },
+            onCameraSelect = { camera ->
+                saveCameraMode()
+                if (recording) {
+                    RecorderController.switchCamera(context, camera.id)
+                    restoreCameraModeAfterRecording = camera.id
+                    config = config.copy(cameraId = camera.id)
+                } else {
+                    config = applyCameraMode(camera)
+                }
+            },
             onExit = { config = config.copy(previewLayout = PreviewLayout.STACKED) },
             onStart = startRecording,
             onStop = { RecorderController.stop(context) },
@@ -1825,6 +1836,7 @@ private fun <T> CompactChoice(
 private fun FullscreenRecorder(
     state: RecorderState,
     config: RecordingConfig,
+    cameras: List<CameraInfo>,
     camera: CameraInfo?,
     liveExposure: CameraExposureState?,
     sensorRotation: Int,
@@ -1834,6 +1846,7 @@ private fun FullscreenRecorder(
     previewResumeEpoch: Int,
     visible: Boolean,
     onConfigChange: (RecordingConfig) -> Unit,
+    onCameraSelect: (CameraInfo) -> Unit,
     onExit: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
@@ -1877,6 +1890,14 @@ private fun FullscreenRecorder(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 OutlinedButton(onClick = onExit, modifier = Modifier.height(36.dp)) { Text("返回") }
+                CompactChoice(
+                    "镜头",
+                    cameras,
+                    camera,
+                    { it.displayName },
+                    state !is RecorderState.Starting && state !is RecorderState.Stopping,
+                    Modifier.width(116.dp),
+                ) { onCameraSelect(it) }
                 CompactRecordingDashboard(state, config, lightText = true, modifier = Modifier.weight(1f))
                 CompactChoice(
                     "方向",
@@ -1898,6 +1919,14 @@ private fun FullscreenRecorder(
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     OutlinedButton(onClick = onExit, modifier = Modifier.height(36.dp)) { Text("返回") }
+                    CompactChoice(
+                        "镜头",
+                        cameras,
+                        camera,
+                        { it.displayName },
+                        state !is RecorderState.Starting && state !is RecorderState.Stopping,
+                        Modifier.width(116.dp),
+                    ) { onCameraSelect(it) }
                     CompactChoice(
                         "方向",
                         OrientationMode.entries,
@@ -2565,16 +2594,16 @@ private fun LandscapeCameraControls(
                                         if (camera.supportsManualWhiteBalance) {
                                             DropdownMenuItem(text = { Text("手动：色温 + Tint") }, onClick = {
                                                 whiteBalanceExpanded = false
-                                                onChange(config.copy(manualWhiteBalance = true, advancedWhiteBalance = false))
+                                                onChange(config.withManualWhiteBalanceFromLive(liveExposure, advanced = false))
                                             })
                                             DropdownMenuItem(text = { Text("手动：高级 RGB（G 联动）") }, onClick = {
                                                 whiteBalanceExpanded = false
-                                                val advanced = config.withAdvancedWhiteBalanceFromTemperature()
+                                                val advanced = config.withManualWhiteBalanceFromLive(liveExposure, advanced = true)
                                                 onChange(advanced.copy(splitWhiteBalanceGreen = false, whiteBalanceGreenOddGain = advanced.whiteBalanceGreenEvenGain))
                                             })
                                             DropdownMenuItem(text = { Text("手动：高级 RGGB（G1/G2 分离）") }, onClick = {
                                                 whiteBalanceExpanded = false
-                                                val advanced = config.withAdvancedWhiteBalanceFromTemperature()
+                                                val advanced = config.withManualWhiteBalanceFromLive(liveExposure, advanced = true)
                                                 onChange(advanced.copy(splitWhiteBalanceGreen = true))
                                             })
                                         }
@@ -3134,11 +3163,11 @@ private fun QuickCameraControls(
                             if (camera.supportsManualWhiteBalance) {
                                 DropdownMenuItem(text = { Text("手动：色温 + Tint") }, onClick = {
                                     whiteBalanceExpanded = false
-                                    onChange(config.copy(manualWhiteBalance = true, advancedWhiteBalance = false))
+                                    onChange(config.withManualWhiteBalanceFromLive(liveExposure, advanced = false))
                                 })
                                 DropdownMenuItem(text = { Text("手动：高级 RGB（G 联动）") }, onClick = {
                                     whiteBalanceExpanded = false
-                                    val advanced = config.withAdvancedWhiteBalanceFromTemperature()
+                                    val advanced = config.withManualWhiteBalanceFromLive(liveExposure, advanced = true)
                                     onChange(
                                         advanced.copy(
                                             splitWhiteBalanceGreen = false,
@@ -3148,7 +3177,7 @@ private fun QuickCameraControls(
                                 })
                                 DropdownMenuItem(text = { Text("手动：高级 RGGB（G1/G2 分离）") }, onClick = {
                                     whiteBalanceExpanded = false
-                                    val advanced = config.withAdvancedWhiteBalanceFromTemperature()
+                                    val advanced = config.withManualWhiteBalanceFromLive(liveExposure, advanced = true)
                                     onChange(
                                         advanced.copy(
                                             splitWhiteBalanceGreen = true,
@@ -3341,6 +3370,77 @@ private fun RecordingConfig.withAdvancedWhiteBalanceFromTemperature(): Recording
         whiteBalanceGreenEvenGain = gains.greenEven,
         whiteBalanceGreenOddGain = gains.greenOdd,
         whiteBalanceBlueGain = gains.blue,
+    )
+}
+
+private fun RecordingConfig.withManualWhiteBalanceFromLive(
+    live: CameraExposureState?,
+    advanced: Boolean,
+): RecordingConfig {
+    val liveGains = if (!manualWhiteBalance) {
+        listOfNotNull(
+            live?.whiteBalanceRedGain,
+            live?.whiteBalanceGreenEvenGain,
+            live?.whiteBalanceGreenOddGain,
+            live?.whiteBalanceBlueGain,
+        ).takeIf { it.size == 4 && it.all { gain -> gain.isFinite() && gain > 0f } }
+    } else {
+        null
+    }
+    if (liveGains == null) {
+        return if (advanced) withAdvancedWhiteBalanceFromTemperature() else copy(
+            manualWhiteBalance = true,
+            advancedWhiteBalance = false,
+        )
+    }
+
+    val liveRed = liveGains[0].coerceIn(1f, 8f)
+    val liveGreenEven = liveGains[1].coerceIn(1f, 8f)
+    val liveGreenOdd = liveGains[2].coerceIn(1f, 8f)
+    val liveBlue = liveGains[3].coerceIn(1f, 8f)
+    if (advanced) {
+        return copy(
+            manualWhiteBalance = true,
+            advancedWhiteBalance = true,
+            whiteBalanceRedGain = liveRed,
+            whiteBalanceGreenEvenGain = liveGreenEven,
+            whiteBalanceGreenOddGain = liveGreenOdd,
+            whiteBalanceBlueGain = liveBlue,
+        )
+    }
+
+    val minimum = minOf(liveRed, liveGreenEven, liveGreenOdd, liveBlue).coerceAtLeast(0.0001f)
+    val red = liveRed / minimum
+    val greenEven = liveGreenEven / minimum
+    val greenOdd = liveGreenOdd / minimum
+    val blue = liveBlue / minimum
+    val targetGreen = (greenEven + greenOdd) / 2f
+    var bestTemperature = whiteBalanceTemperature
+    var bestTint = whiteBalanceTint
+    var bestError = Float.POSITIVE_INFINITY
+    for (temperature in 2_000..10_000 step 50) {
+        for (tint in -100..100 step 2) {
+            val candidate = manualWhiteBalanceGains(temperature, tint)
+            val error =
+                (candidate.red - red) * (candidate.red - red) +
+                (candidate.greenEven - targetGreen) * (candidate.greenEven - targetGreen) +
+                (candidate.blue - blue) * (candidate.blue - blue)
+            if (error < bestError) {
+                bestError = error
+                bestTemperature = temperature
+                bestTint = tint
+            }
+        }
+    }
+    return copy(
+        manualWhiteBalance = true,
+        advancedWhiteBalance = false,
+        whiteBalanceTemperature = bestTemperature,
+        whiteBalanceTint = bestTint,
+        whiteBalanceRedGain = liveRed,
+        whiteBalanceGreenEvenGain = liveGreenEven,
+        whiteBalanceGreenOddGain = liveGreenOdd,
+        whiteBalanceBlueGain = liveBlue,
     )
 }
 

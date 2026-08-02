@@ -446,12 +446,17 @@ class CameraRecorderEngine(
             request: CaptureRequest,
             result: android.hardware.camera2.TotalCaptureResult,
         ) {
+            val whiteBalanceGains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
             RecorderController.updateExposure(
                 cameraId = config.cameraId,
                 iso = result.get(CaptureResult.SENSOR_SENSITIVITY),
                 exposureNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
                 aperture = result.get(CaptureResult.LENS_APERTURE),
                 focusDistanceDiopters = result.get(CaptureResult.LENS_FOCUS_DISTANCE),
+                whiteBalanceRedGain = whiteBalanceGains?.red,
+                whiteBalanceGreenEvenGain = whiteBalanceGains?.greenEven,
+                whiteBalanceGreenOddGain = whiteBalanceGains?.greenOdd,
+                whiteBalanceBlueGain = whiteBalanceGains?.blue,
             )
             val timestamp = result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP) ?: return
             if (firstFrameNs == 0L) firstFrameNs = timestamp

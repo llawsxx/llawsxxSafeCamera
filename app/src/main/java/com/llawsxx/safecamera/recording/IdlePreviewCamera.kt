@@ -181,12 +181,17 @@ class IdlePreviewCamera(context: Context) {
             result: android.hardware.camera2.TotalCaptureResult,
         ) {
             val cameraId = activeCameraId ?: return
+            val whiteBalanceGains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
             RecorderController.updateExposure(
                 cameraId = cameraId,
                 iso = result.get(CaptureResult.SENSOR_SENSITIVITY),
                 exposureNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
                 aperture = result.get(CaptureResult.LENS_APERTURE),
                 focusDistanceDiopters = result.get(CaptureResult.LENS_FOCUS_DISTANCE),
+                whiteBalanceRedGain = whiteBalanceGains?.red,
+                whiteBalanceGreenEvenGain = whiteBalanceGains?.greenEven,
+                whiteBalanceGreenOddGain = whiteBalanceGains?.greenOdd,
+                whiteBalanceBlueGain = whiteBalanceGains?.blue,
             )
         }
     }

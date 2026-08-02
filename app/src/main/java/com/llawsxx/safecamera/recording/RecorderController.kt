@@ -74,6 +74,10 @@ object RecorderController {
         exposureNs: Long?,
         aperture: Float?,
         focusDistanceDiopters: Float?,
+        whiteBalanceRedGain: Float?,
+        whiteBalanceGreenEvenGain: Float?,
+        whiteBalanceGreenOddGain: Float?,
+        whiteBalanceBlueGain: Float?,
     ) {
         val now = SystemClock.elapsedRealtime()
         val previous = mutableExposure.value
@@ -85,6 +89,10 @@ object RecorderController {
             exposureNs,
             aperture,
             focusDistanceDiopters,
+            whiteBalanceRedGain,
+            whiteBalanceGreenEvenGain,
+            whiteBalanceGreenOddGain,
+            whiteBalanceBlueGain,
         )
     }
 }
