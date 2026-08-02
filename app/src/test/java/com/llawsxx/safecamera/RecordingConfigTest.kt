@@ -41,6 +41,11 @@ class RecordingConfigTest {
     }
 
     @Test
+    fun pixelRotationRequestsMediaCodecEngine() {
+        assertTrue(RecordingConfig(rotateImagePixels = true).mediaCodecEngineRequested)
+    }
+
+    @Test
     fun resizeRejectsUpscalingAndAspectRatioChanges() {
         assertTrue(
             RecordingConfig(

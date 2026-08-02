@@ -2,6 +2,8 @@ package com.llawsxx.safecamera
 
 import com.llawsxx.safecamera.recording.removeTextureRotation
 import com.llawsxx.safecamera.recording.applyCenteredPixelCrop
+import com.llawsxx.safecamera.recording.applyTextureRotation
+import com.llawsxx.safecamera.recording.rotatedDimensions
 import com.llawsxx.safecamera.recording.manualWhiteBalanceGains
 import com.llawsxx.safecamera.screenDragToSource
 import com.llawsxx.safecamera.sourcePointToDisplay
@@ -11,6 +13,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TextureTransformTest {
+    @Test
+    fun quarterTurnSwapsEncodedDimensions() {
+        assertTrue(rotatedDimensions(1080, 1920, 90) == (1920 to 1080))
+        assertTrue(rotatedDimensions(1080, 1920, 270) == (1920 to 1080))
+        assertTrue(rotatedDimensions(1080, 1920, 180) == (1080 to 1920))
+    }
+
     @Test
     fun dragDirectionTracksRotationAndMirror() {
         assertArrayEquals(floatArrayOf(0.05f, 0f), screenDragToSource(10f, 0f, 100, 100, 2f, 0, false).toFloatArray(), 0.0001f)
@@ -143,6 +152,52 @@ class TextureTransformTest {
                 0f, -0.8f, 0f, 0f,
                 0f, 0f, 1f, 0f,
                 0.2f, 0.9f, 0f, 1f,
+            ),
+            matrix,
+            0.0001f,
+        )
+    }
+
+    @Test
+    fun usesInverseTextureSamplingForClockwiseImageRotation() {
+        val matrix = floatArrayOf(
+            1f, 0f, 0f, 0f,
+            0f, 1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 0f, 0f, 1f,
+        )
+
+        applyTextureRotation(matrix, 90)
+
+        assertArrayEquals(
+            floatArrayOf(
+                0f, 1f, 0f, 0f,
+                -1f, 0f, 0f, 0f,
+                0f, 0f, 1f, 0f,
+                1f, 0f, 0f, 1f,
+            ),
+            matrix,
+            0.0001f,
+        )
+    }
+
+    @Test
+    fun usesInverseTextureSamplingForCounterClockwiseImageRotation() {
+        val matrix = floatArrayOf(
+            1f, 0f, 0f, 0f,
+            0f, 1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 0f, 0f, 1f,
+        )
+
+        applyTextureRotation(matrix, 270)
+
+        assertArrayEquals(
+            floatArrayOf(
+                0f, -1f, 0f, 0f,
+                1f, 0f, 0f, 0f,
+                0f, 0f, 1f, 0f,
+                0f, 1f, 0f, 1f,
             ),
             matrix,
             0.0001f,

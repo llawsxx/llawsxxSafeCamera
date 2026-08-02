@@ -24,9 +24,22 @@ internal fun recordingOrientationHint(context: Context, cameraId: String, mode: 
             else -> 0
         }
     } ?: fallbackDegrees
-    return if (characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT) {
+    return recordingOrientationDegrees(
+        sensorDegrees,
+        characteristics.get(CameraCharacteristics.LENS_FACING) ?: CameraCharacteristics.LENS_FACING_EXTERNAL,
+        deviceDegrees,
+    )
+}
+
+internal fun recordingOrientationDegrees(sensorDegrees: Int, lensFacing: Int, deviceDegrees: Int): Int =
+    if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
         (sensorDegrees + deviceDegrees) % 360
     } else {
         (sensorDegrees - deviceDegrees + 360) % 360
     }
-}
+
+internal fun rotationSwapsDimensions(rotationDegrees: Int): Boolean =
+    ((rotationDegrees % 360) + 360) % 360 in setOf(90, 270)
+
+internal fun rotatedDimensions(width: Int, height: Int, rotationDegrees: Int): Pair<Int, Int> =
+    if (rotationSwapsDimensions(rotationDegrees)) height to width else width to height

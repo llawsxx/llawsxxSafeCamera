@@ -122,6 +122,8 @@ import com.llawsxx.safecamera.recording.VideoColorTransfer
 import com.llawsxx.safecamera.recording.VideoScalingAlgorithm
 import com.llawsxx.safecamera.recording.awbLabel
 import com.llawsxx.safecamera.recording.manualWhiteBalanceGains
+import com.llawsxx.safecamera.recording.recordingOrientationHint
+import com.llawsxx.safecamera.recording.rotatedDimensions
 import com.llawsxx.safecamera.ui.theme.LlawsxxSafeCameraTheme
 import java.util.Locale
 import kotlinx.coroutines.delay
@@ -336,6 +338,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 segmentMinutes = 0,
                 streamEnabled = false,
                 audioAutomaticGainControl = false,
+                rotateImagePixels = false,
                 manualExposure = false,
                 dynamicRange = VideoDynamicRange.SDR,
                 colorRange = VideoColorRange.DEFAULT,
@@ -820,6 +823,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                             dynamicRange = range,
                                             videoCodec = VideoCodec.H265,
                                             highSpeedMode = false,
+                                            rotateImagePixels = false,
                                             colorRange = VideoColorRange.LIMITED,
                                             colorStandard = VideoColorStandard.BT2020,
                                             colorTransfer = if (range == VideoDynamicRange.HLG10) {
@@ -1242,6 +1246,26 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     ChoiceRow(OrientationMode.entries, config.orientation, { it.label }, !recording) {
                         config = config.copy(orientation = it)
                     }
+                }
+                ToggleLine(
+                    "旋转图像像素，不写角度信息",
+                    config.rotateImagePixels,
+                    !recording && !config.highSpeedMode && !config.dynamicRange.is10Bit,
+                ) { config = config.copy(rotateImagePixels = it) }
+                if (config.rotateImagePixels && config.cameraId.isNotBlank()) {
+                    val pixelRotation = runCatching {
+                        recordingOrientationHint(context, config.cameraId, config.orientation)
+                    }.getOrDefault(0)
+                    val encodedSize = rotatedDimensions(config.outputWidth, config.outputHeight, pixelRotation)
+                    Text(
+                        "图像旋转 ${pixelRotation}° 后编码为 ${encodedSize.first}×${encodedSize.second}；MP4 旋转角度保持 0°。切换镜头时会动态旋转像素。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                } else {
+                    Text(
+                        "关闭时保持编码像素方向，并通过 MP4 角度信息控制播放方向。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
                 if (config.hasVideo && config.container == ContainerFormat.MPEG_TS) {
                     Text(

@@ -80,6 +80,9 @@ class MediaCodecRecorderEngine(
     private var audioThread: Thread? = null
     private val firstVideoFrame = CountDownLatch(1)
     private var firstVideoPtsUs = Long.MIN_VALUE
+    private var pixelRotationDegrees = 0
+    private var encodedOutputWidth = initialConfig.outputWidth
+    private var encodedOutputHeight = initialConfig.outputHeight
 
     override fun start(preview: Surface?) {
         cameraHandler.post {
@@ -102,7 +105,16 @@ class MediaCodecRecorderEngine(
             "录制分辨率必须为偶数、不超过处理区域 ${config.transformWidth}×${config.transformHeight}，且宽高比一致"
         }
         require(!config.videoTransformEnabled || config.dynamicRange == VideoDynamicRange.SDR) {
-            "中心裁切和分辨率缩放暂不支持 HDR/10-bit 录制"
+            "像素旋转、中心裁切和分辨率缩放暂不支持 HDR/10-bit 录制"
+        }
+        pixelRotationDegrees = if (config.rotateImagePixels) {
+            recordingOrientationHint(context, config.cameraId, config.orientation)
+        } else {
+            0
+        }
+        rotatedDimensions(config.outputWidth, config.outputHeight, pixelRotationDegrees).let {
+            encodedOutputWidth = it.first
+            encodedOutputHeight = it.second
         }
 
         val baseName = "REC_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())}"
@@ -136,7 +148,9 @@ class MediaCodecRecorderEngine(
             output = handle
             outputPath = handle.displayPath
             val mediaMuxer = MediaMuxer(handle.descriptor().fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-            mediaMuxer.setOrientationHint(recordingOrientationHint(context, config.cameraId, config.orientation))
+            if (!config.rotateImagePixels) {
+                mediaMuxer.setOrientationHint(recordingOrientationHint(context, config.cameraId, config.orientation))
+            }
             coordinator = MediaMuxCoordinator(mediaMuxer, config.hasAudio) { markMuxStarted() }
         }
         mux = if (config.forceSpsVui && config.customRewriteColorMetadata) {
@@ -155,7 +169,7 @@ class MediaCodecRecorderEngine(
         }
 
         val videoMime = if (config.videoCodec == VideoCodec.H265) MediaFormat.MIMETYPE_VIDEO_HEVC else MediaFormat.MIMETYPE_VIDEO_AVC
-        val videoFormat = MediaFormat.createVideoFormat(videoMime, config.outputWidth, config.outputHeight).apply {
+        val videoFormat = MediaFormat.createVideoFormat(videoMime, encodedOutputWidth, encodedOutputHeight).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, config.videoBitrate)
             config.videoBitrateMode.mediaFormatValue?.let { setInteger(MediaFormat.KEY_BITRATE_MODE, it) }
@@ -185,7 +199,7 @@ class MediaCodecRecorderEngine(
         }
         val encoderName = MediaCodecList(MediaCodecList.REGULAR_CODECS).findEncoderForFormat(videoFormat)
         requireNotNull(encoderName) {
-            "没有编码器支持 ${config.outputWidth}×${config.outputHeight} ${config.dynamicRange.label} @ ${config.fps} fps"
+            "没有编码器支持 ${encodedOutputWidth}×${encodedOutputHeight} ${config.dynamicRange.label} @ ${config.fps} fps"
         }
         val video = MediaCodec.createByCodecName(encoderName)
         video.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
@@ -197,9 +211,10 @@ class MediaCodecRecorderEngine(
                 inputHeight = config.height,
                 cropWidth = config.transformWidth,
                 cropHeight = config.transformHeight,
-                outputWidth = config.outputWidth,
-                outputHeight = config.outputHeight,
+                outputWidth = encodedOutputWidth,
+                outputHeight = encodedOutputHeight,
                 scalingAlgorithm = config.scalingAlgorithm,
+                initialPixelRotationDegrees = pixelRotationDegrees,
                 onFirstFrame = {},
             )
         }
@@ -509,7 +524,20 @@ class MediaCodecRecorderEngine(
                 onNotice("未切换：目标镜头不支持当前尺寸或 ${config.fps} fps")
                 return@post
             }
+            val targetRotation = if (config.rotateImagePixels) {
+                val targetRotation = recordingOrientationHint(context, cameraId, config.orientation)
+                if (rotationSwapsDimensions(targetRotation) != rotationSwapsDimensions(pixelRotationDegrees)) {
+                    onNotice("未切换：目标镜头的图像方向需要改变编码宽高")
+                    return@post
+                }
+                targetRotation
+            } else null
             closeCamera()
+            targetRotation?.let {
+                pixelRotationDegrees = it
+                transformRenderer?.setPixelRotationDegrees(it)
+            }
+            lastSensorNs = 0L
             config = config.copy(cameraId = cameraId)
             openCamera()
         }

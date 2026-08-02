@@ -25,6 +25,7 @@ internal class GlVideoTransformRenderer(
     private val outputWidth: Int,
     private val outputHeight: Int,
     private val scalingAlgorithm: VideoScalingAlgorithm,
+    initialPixelRotationDegrees: Int,
     private val onFirstFrame: () -> Unit,
 ) {
     private val renderThread = HandlerThread("video-transform-render").apply { start() }
@@ -47,6 +48,7 @@ internal class GlVideoTransformRenderer(
     )
     private val textureMatrix = FloatArray(16)
     private var firstFrameDelivered = false
+    private var pixelRotationDegrees = normalizedRotation(initialPixelRotationDegrees)
     val surfaceTexture: SurfaceTexture
     val inputSurface: Surface
 
@@ -129,6 +131,7 @@ internal class GlVideoTransformRenderer(
         surfaceTexture.getTransformMatrix(textureMatrix)
         removeTextureRotation(textureMatrix)
         applyCenteredPixelCrop(textureMatrix, inputWidth, inputHeight, cropWidth, cropHeight)
+        applyTextureRotation(textureMatrix, pixelRotationDegrees)
 
         GLES20.glViewport(0, 0, outputWidth, outputHeight)
         GLES20.glUseProgram(program)
@@ -140,13 +143,22 @@ internal class GlVideoTransformRenderer(
         GLES20.glVertexAttribPointer(texCoordLocation, 2, GLES20.GL_FLOAT, false, 16, vertices)
         GLES20.glUniformMatrix4fv(matrixLocation, 1, false, textureMatrix, 0)
         if (cropSizeLocation >= 0) {
-            GLES20.glUniform2f(cropSizeLocation, cropWidth.toFloat(), cropHeight.toFloat())
+            val swapsDimensions = pixelRotationDegrees == 90 || pixelRotationDegrees == 270
+            GLES20.glUniform2f(
+                cropSizeLocation,
+                (if (swapsDimensions) cropHeight else cropWidth).toFloat(),
+                (if (swapsDimensions) cropWidth else cropHeight).toFloat(),
+            )
         }
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         EGLExt.eglPresentationTimeANDROID(display, eglSurface, surfaceTexture.timestamp)
         check(EGL14.eglSwapBuffers(display, eglSurface)) { "编码帧交换失败" }
+    }
+
+    fun setPixelRotationDegrees(rotationDegrees: Int) {
+        renderHandler.post { pixelRotationDegrees = normalizedRotation(rotationDegrees) }
     }
 
     fun release() {
@@ -277,6 +289,43 @@ internal class GlVideoTransformRenderer(
             ByteBuffer.allocateDirect(values.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
                 put(values); position(0)
             }
+    }
+}
+
+private fun normalizedRotation(degrees: Int): Int = ((degrees % 360) + 360) % 360
+
+internal fun applyTextureRotation(matrix: FloatArray, rotationDegrees: Int) {
+    require(matrix.size >= 16)
+    // The texture matrix maps output coordinates back to source coordinates, so it must use
+    // the inverse of the rotation that should be visible in the encoded image.
+    val rotation = when (normalizedRotation(-rotationDegrees)) {
+        90 -> floatArrayOf(
+            0f, -1f, 0f, 0f,
+            1f, 0f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 1f, 0f, 1f,
+        )
+        180 -> floatArrayOf(
+            -1f, 0f, 0f, 0f,
+            0f, -1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            1f, 1f, 0f, 1f,
+        )
+        270 -> floatArrayOf(
+            0f, 1f, 0f, 0f,
+            -1f, 0f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            1f, 0f, 0f, 1f,
+        )
+        else -> return
+    }
+    val source = matrix.copyOf()
+    for (column in 0..3) {
+        for (row in 0..3) {
+            matrix[column * 4 + row] = (0..3).sumOf { index ->
+                (source[index * 4 + row] * rotation[column * 4 + index]).toDouble()
+            }.toFloat()
+        }
     }
 }
 

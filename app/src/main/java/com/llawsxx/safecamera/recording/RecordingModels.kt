@@ -158,6 +158,7 @@ data class RecordingConfig(
     val container: ContainerFormat = ContainerFormat.MP4,
     val segmentMinutes: Int = 10,
     val orientation: OrientationMode = OrientationMode.FOLLOW_SENSOR,
+    val rotateImagePixels: Boolean = false,
     val previewMode: PreviewMode = PreviewMode.FULL,
     val previewLayout: PreviewLayout = PreviewLayout.STACKED,
     val previewRotationDegrees: Int = 0,
@@ -198,7 +199,7 @@ data class RecordingConfig(
     val customRewriteColorMetadata: Boolean get() = rewriteColorRange != VideoColorRange.DEFAULT ||
         rewriteColorStandard != VideoColorStandard.DEFAULT || rewriteColorMatrix != VideoColorMatrix.DEFAULT ||
         rewriteColorTransfer != VideoColorTransfer.DEFAULT
-    val videoTransformEnabled: Boolean get() = cropEnabled || resizeEnabled
+    val videoTransformEnabled: Boolean get() = cropEnabled || resizeEnabled || rotateImagePixels
     val customVideoEncoderParameters: Boolean get() = videoBitrateMode != VideoBitrateMode.DEFAULT ||
         videoKeyFrameIntervalSeconds != 2 || videoMaxBFrames != 0
     val effectiveAudioAacProfile: AudioAacProfile get() =

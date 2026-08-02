@@ -68,6 +68,7 @@ object ConfigPreferences {
             container = enumValue(p.getString("container", null), ContainerFormat.MP4),
             segmentMinutes = p.getInt("segmentMinutes", 10),
             orientation = enumValue(p.getString("orientation", null), OrientationMode.FOLLOW_SENSOR),
+            rotateImagePixels = p.getBoolean("rotateImagePixels", false),
             previewMode = enumValue(p.getString("previewMode", null), PreviewMode.FULL),
             previewLayout = enumValue(p.getString("previewLayout", null), PreviewLayout.STACKED),
             previewRotationDegrees = p.getInt("previewRotationDegrees", 0).let { ((it % 360) + 360) % 360 },
@@ -149,6 +150,7 @@ object ConfigPreferences {
             .putString("container", c.container.name)
             .putInt("segmentMinutes", c.segmentMinutes)
             .putString("orientation", c.orientation.name)
+            .putBoolean("rotateImagePixels", c.rotateImagePixels)
             .putString("previewMode", c.previewMode.name)
             .putString("previewLayout", c.previewLayout.name)
             .putInt("previewRotationDegrees", c.previewRotationDegrees)
