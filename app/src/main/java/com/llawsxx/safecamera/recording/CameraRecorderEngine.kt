@@ -83,16 +83,16 @@ class CameraRecorderEngine(
             }
             require(size != null) { "高速模式不支持 ${config.width}x${config.height}" }
             require(map?.getHighSpeedVideoFpsRangesFor(size).orEmpty().any {
-                it.lower <= config.encoderFps && it.upper >= config.encoderFps
-            }) { "高速模式不支持 ${config.encoderFps} fps" }
+                it.lower <= config.fps && it.upper >= config.fps
+            }) { "高速模式不支持 ${config.fps} fps" }
         } else {
             val sizes = map?.getOutputSizes(MediaRecorder::class.java).orEmpty()
             require(sizes.any { it.width == config.width && it.height == config.height }) {
                 "当前镜头不支持 ${config.width}x${config.height} 录制"
             }
             val ranges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
-            require(ranges.any { it.lower <= config.encoderFps && it.upper >= config.encoderFps }) {
-                "当前镜头不支持 ${config.encoderFps} fps"
+            require(ranges.any { it.lower <= config.fps && it.upper >= config.fps }) {
+                "当前镜头不支持 ${config.fps} fps"
             }
         }
     }
@@ -104,8 +104,8 @@ class CameraRecorderEngine(
         val size = map.highSpeedVideoSizes.firstOrNull { it.width == config.width && it.height == config.height }
             ?: return null
         return map.getHighSpeedVideoFpsRangesFor(size)
-            .filter { it.lower <= config.encoderFps && it.upper >= config.encoderFps }
-            .minByOrNull { (it.upper - it.lower) + (it.upper - config.encoderFps) }
+            .filter { it.lower <= config.fps && it.upper >= config.fps }
+            .minByOrNull { (it.upper - it.lower) + (it.upper - config.fps) }
     }
 
     override fun stop(onComplete: () -> Unit) {
@@ -217,7 +217,7 @@ class CameraRecorderEngine(
                 characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
                     ?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_CONSTRAINED_HIGH_SPEED_VIDEO) == true &&
                     map?.highSpeedVideoSizes?.firstOrNull { it.width == config.width && it.height == config.height }
-                        ?.let { size -> map.getHighSpeedVideoFpsRangesFor(size).any { config.encoderFps in it.lower..it.upper } } == true
+                        ?.let { size -> map.getHighSpeedVideoFpsRangesFor(size).any { config.fps in it.lower..it.upper } } == true
             } else {
                 map?.getOutputSizes(MediaRecorder::class.java)
                     ?.any { it.width == config.width && it.height == config.height } == true
@@ -302,7 +302,7 @@ class CameraRecorderEngine(
         if (config.hasVideo) {
             activeRecorder.setVideoEncoder(config.videoCodec.mediaRecorderValue)
             activeRecorder.setVideoSize(config.width, config.height)
-            activeRecorder.setVideoFrameRate(config.encoderFps)
+            activeRecorder.setVideoFrameRate(config.fps)
             activeRecorder.setVideoEncodingBitRate(config.videoBitrate)
             activeRecorder.setOrientationHint(recordingOrientationHint(context, config.cameraId, config.orientation))
         }
@@ -456,7 +456,7 @@ class CameraRecorderEngine(
             val timestamp = result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP) ?: return
             if (firstFrameNs == 0L) firstFrameNs = timestamp
             if (lastFrameNs > 0L) {
-                val expected = 1_000_000_000.0 / config.requestedFps
+                val expected = 1_000_000_000.0 / config.fps
                 val interval = timestamp - lastFrameNs
                 if (interval > expected * 1.5) droppedFrames += max(0, (interval / expected).toLong() - 1L)
             }

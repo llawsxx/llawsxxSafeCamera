@@ -26,9 +26,8 @@ object ConfigPreferences {
                 p.getString("scalingAlgorithm", null),
                 VideoScalingAlgorithm.BILINEAR,
             ),
-            fpsNumerator = p.getInt("fpsNumerator", p.getInt("fps", 30)),
-            fpsDenominator = p.getInt("fpsDenominator", 1).coerceAtLeast(1),
-            exactFrameRateMode = p.getBoolean("exactFrameRateMode", false),
+            fps = p.getInt("fps", 30).coerceAtLeast(1),
+            mediaCodecMode = p.getBoolean("mediaCodecMode", false),
             videoBitrate = p.getInt("videoBitrate", 12_000_000),
             audioBitrate = p.getInt("audioBitrate", 192_000),
             audioInputDeviceId = p.getInt("audioInputDeviceId", -1).takeIf { it >= 0 },
@@ -117,9 +116,8 @@ object ConfigPreferences {
             .putInt("recordWidth", c.recordWidth)
             .putInt("recordHeight", c.recordHeight)
             .putString("scalingAlgorithm", c.scalingAlgorithm.name)
-            .putInt("fpsNumerator", c.fpsNumerator)
-            .putInt("fpsDenominator", c.fpsDenominator)
-            .putBoolean("exactFrameRateMode", c.exactFrameRateMode)
+            .putInt("fps", c.fps)
+            .putBoolean("mediaCodecMode", c.mediaCodecMode)
             .putInt("videoBitrate", c.videoBitrate)
             .putInt("audioBitrate", c.audioBitrate)
             .putInt("audioInputDeviceId", c.audioInputDeviceId ?: -1)

@@ -253,13 +253,12 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             val savedSizes = if (config.videoTransformEnabled) camera.previewSizes else camera.sizes
             val savedSizeSupported = savedSizes.any { it.width == config.width && it.height == config.height }
             val size = if (savedSizeSupported) config.width to config.height else preferredSize(camera)
-            val savedFpsSupported = camera.fpsRanges.any { it.lower <= config.encoderFps && it.upper >= config.encoderFps }
+            val savedFpsSupported = camera.fpsRanges.any { it.lower <= config.fps && it.upper >= config.fps }
             config = config.copy(
                 cameraId = camera.id,
                 width = size.first,
                 height = size.second,
-                fpsNumerator = if (savedFpsSupported) config.fpsNumerator else preferredFps(camera),
-                fpsDenominator = if (savedFpsSupported) config.fpsDenominator else 1,
+                fps = if (savedFpsSupported) config.fps else preferredFps(camera),
                 iso = camera.isoRange?.let { config.iso.coerceIn(it.lower, it.upper) } ?: config.iso,
                 exposureNs = camera.exposureRange?.let { config.exposureNs.coerceIn(it.lower, it.upper) } ?: config.exposureNs,
                 aperture = config.aperture?.takeIf(camera.apertures::contains) ?: camera.apertures.firstOrNull(),
@@ -268,7 +267,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 } ?: 0,
                 opticalStabilization = config.opticalStabilization && camera.oisAvailable,
                 highSpeedMode = config.highSpeedMode && camera.highSpeedModes.any {
-                    it.width == size.first && it.height == size.second && config.encoderFps in it.minFps..it.maxFps
+                    it.width == size.first && it.height == size.second && config.fps in it.minFps..it.maxFps
                 },
             )
         }
@@ -301,8 +300,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             config = config.copy(forceSpsVui = false)
         }
     }
-    LaunchedEffect(config.exactEngineRequested, config.dynamicRange) {
-        if (config.exactEngineRequested && config.hasVideo) {
+    LaunchedEffect(config.mediaCodecEngineRequested, config.dynamicRange) {
+        if (config.mediaCodecEngineRequested && config.hasVideo) {
             val normalized = config.copy(
                 segmentMinutes = if (config.container == ContainerFormat.MP4) 0 else config.segmentMinutes,
                 highSpeedMode = false,
@@ -314,8 +313,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
     LaunchedEffect(config.highSpeedMode) {
         if (config.highSpeedMode) {
             config = config.copy(
-                fpsDenominator = 1,
-                exactFrameRateMode = false,
+                mediaCodecMode = false,
                 container = ContainerFormat.MP4,
                 segmentMinutes = 0,
                 streamEnabled = false,
@@ -339,7 +337,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             )
         }
     }
-    LaunchedEffect(config.fpsNumerator, config.fpsDenominator, config.cameraId, cameras) {
+    LaunchedEffect(config.fps, config.cameraId, cameras) {
         selectedCamera?.exposureRange?.let { range ->
             val maximum = minOf(range.upper, config.maximumExposureNs).coerceAtLeast(range.lower)
             val exposure = config.exposureNs.coerceIn(range.lower, maximum)
@@ -410,8 +408,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.recordWidth,
         config.recordHeight,
         config.scalingAlgorithm,
-        config.fpsNumerator,
-        config.fpsDenominator,
+        config.fps,
         config.manualExposure,
         config.iso,
         config.exposureNs,
@@ -567,8 +564,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                         cameraId = camera.id,
                         width = size.first,
                         height = size.second,
-                        fpsNumerator = preferredFps(camera),
-                        fpsDenominator = 1,
+                        fps = preferredFps(camera),
                         aperture = camera.apertures.firstOrNull(),
                         opticalStabilization = camera.oisAvailable,
                     )
@@ -712,11 +708,11 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             selectedInput,
                             { it.label },
                             !recording && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ||
-                                (config.hasVideo && config.exactEngineRequested)),
+                                (config.hasVideo && config.mediaCodecEngineRequested)),
                         ) { config = config.copy(audioInputDeviceId = it.id) }
                     }
                     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P &&
-                        (!config.hasVideo || !config.exactEngineRequested)
+                        (!config.hasVideo || !config.mediaCodecEngineRequested)
                     ) {
                         Text(
                             "Android 9 以下的系统 MediaRecorder 不能指定物理麦克风；精确帧率引擎仍可选择。",
@@ -725,25 +721,25 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     }
                 }
                 if (config.hasVideo) {
-                    val exactEngineForced = config.dynamicRange != VideoDynamicRange.SDR ||
-                        config.fpsDenominator != 1 || config.customColorMetadata ||
+                    val mediaCodecEngineForced = config.dynamicRange != VideoDynamicRange.SDR ||
+                        config.customColorMetadata ||
                         config.container == ContainerFormat.MPEG_TS || config.videoTransformEnabled ||
                         config.forceSpsVui && config.customRewriteColorMetadata
                     ToggleLine(
                         "MediaCodec 直录引擎",
-                        config.exactEngineRequested,
+                        config.mediaCodecEngineRequested,
                         !recording && !config.highSpeedMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-                            !exactEngineForced,
-                    ) { enabled -> config = config.copy(exactFrameRateMode = enabled) }
-                    if (exactEngineForced && config.container == ContainerFormat.MPEG_TS) {
+                            !mediaCodecEngineForced,
+                    ) { enabled -> config = config.copy(mediaCodecMode = enabled) }
+                    if (mediaCodecEngineForced && config.container == ContainerFormat.MPEG_TS) {
                         Text(
                             "MPEG-TS 封装由内置 muxer 处理，必须使用 MediaCodec 直录引擎；开关保持开启。",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
-                    if (!(exactEngineForced && config.container == ContainerFormat.MPEG_TS)) Text(
-                        if (exactEngineForced) {
-                            "当前 HDR、非整数帧率、自定义颜色元数据、SPS/VUI 重写、中心裁切或分辨率缩放要求使用 MediaCodec 直录引擎，开关保持开启。"
+                    if (!(mediaCodecEngineForced && config.container == ContainerFormat.MPEG_TS)) Text(
+                        if (mediaCodecEngineForced) {
+                            "当前 HDR、自定义颜色元数据、SPS/VUI 重写、中心裁切或分辨率缩放要求使用 MediaCodec 直录引擎，开关保持开启。"
                         } else {
                             "Camera2 直接连接 MediaCodec，收到的每帧都按原始时间戳输出，不主动丢帧或补帧；帧率可动态变化。MP4 仅支持单段，MPEG-TS 由内置 native muxer 封装。"
                         },
@@ -760,23 +756,21 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 highSpeedMode = true,
                                 width = mode.width,
                                 height = mode.height,
-                                fpsNumerator = mode.maxFps,
-                                fpsDenominator = 1,
+                                fps = mode.maxFps,
                             ) else config.copy(highSpeedMode = false)
                         }
                         if (config.highSpeedMode) {
                             val modes = camera.highSpeedModes
                             val selectedMode = modes.firstOrNull {
                                 it.width == config.width && it.height == config.height &&
-                                    config.encoderFps in it.minFps..it.maxFps
+                                    config.fps in it.minFps..it.maxFps
                             }
                             Labeled("高速组合") {
                                 ChoiceRow(modes, selectedMode, { it.label }, !recording) { mode ->
                                     config = config.copy(
                                         width = mode.width,
                                         height = mode.height,
-                                        fpsNumerator = mode.maxFps,
-                                        fpsDenominator = 1,
+                                        fps = mode.maxFps,
                                     )
                                 }
                             }
@@ -984,25 +978,12 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 .filter { it > 0 }
                                 .distinct()
                                 .sorted()
-                            ChoiceRow(fpsValues, config.encoderFps, { "$it fps" }, !recording && !config.highSpeedMode) {
-                                config = config.copy(fpsNumerator = it, fpsDenominator = 1)
+                            ChoiceRow(fpsValues, config.fps, { "$it fps" }, !recording && !config.highSpeedMode) {
+                                config = config.copy(fps = it)
                             }
                         }
-                        Labeled("常用帧率提示") {
-                            ChoiceRow(
-                                listOf(
-                                    60_000 to 1_001,
-                                    30_000 to 1_001,
-                                    24_000 to 1_001,
-                                ),
-                                (config.fpsNumerator to config.fpsDenominator).takeIf { config.fpsDenominator != 1 },
-                                { (numerator, denominator) ->
-                                    "$numerator/$denominator (${(numerator.toDouble() / denominator).format3()})"
-                                },
-                                !recording && !config.highSpeedMode,
-                            ) { (numerator, denominator) ->
-                                config = config.copy(fpsNumerator = numerator, fpsDenominator = denominator)
-                            }
+                        NumberField("自定义整数 FPS", config.fps.toString(), !recording && !config.highSpeedMode) {
+                            it.toIntOrNull()?.let { value -> config = config.copy(fps = value.coerceIn(1, 240)) }
                         }
                         Text(
                             "镜头声明范围：" + camera.fpsRanges.joinToString("、") {
@@ -1010,39 +991,21 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             },
                             style = MaterialTheme.typography.bodySmall,
                         )
-                        if (config.exactEngineRequested) {
+                        if (config.mediaCodecEngineRequested) {
                             Text(
                                 "MediaCodec 直录模式：Camera2 收到什么帧就编码什么帧，保留动态帧间隔；音频保持实时速度。",
                                 color = MaterialTheme.colorScheme.secondary,
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(
-                                value = config.fpsNumerator.toString(),
-                                onValueChange = { value -> value.toIntOrNull()?.let { config = config.copy(fpsNumerator = it.coerceIn(1, 240_000)) } },
-                                label = { Text("FPS 分子") },
-                                singleLine = true,
-                                enabled = !recording && !config.highSpeedMode,
-                                modifier = Modifier.weight(1f),
-                            )
-                            OutlinedTextField(
-                                value = config.fpsDenominator.toString(),
-                                onValueChange = { value -> value.toIntOrNull()?.let { config = config.copy(fpsDenominator = it.coerceIn(1, 10_000)) } },
-                                label = { Text("FPS 分母") },
-                                singleLine = true,
-                                enabled = !recording && !config.highSpeedMode,
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
                         val fpsSupported = camera.fpsRanges.any {
-                            it.lower <= config.encoderFps && it.upper >= config.encoderFps
+                            it.lower <= config.fps && it.upper >= config.fps
                         }
                         Text(
-                            (if (config.exactEngineRequested) {
-                                "Camera2 采集目标约 ${config.encoderFps} fps；MediaCodec 直录实际收到的动态帧率"
+                            (if (config.mediaCodecEngineRequested) {
+                                "Camera2 采集目标约 ${config.fps} fps；MediaCodec 直录实际收到的动态帧率"
                             } else {
-                                "Camera2 / MediaRecorder 提交 ${config.encoderFps} fps"
+                                "Camera2 / MediaRecorder 提交 ${config.fps} fps"
                             }) + if (fpsSupported) "" else "（当前镜头范围未声明支持）",
                             color = if (fpsSupported) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
@@ -1131,7 +1094,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     ChoiceRow(containers, config.container, { it.label }, !recording) {
                         config = config.copy(
                             container = it,
-                            segmentMinutes = if (it == ContainerFormat.MP4 && config.exactEngineRequested) 0 else config.segmentMinutes,
+                            segmentMinutes = if (it == ContainerFormat.MP4 && config.mediaCodecEngineRequested) 0 else config.segmentMinutes,
                             streamEnabled = config.streamEnabled && it == ContainerFormat.MPEG_TS,
                         )
                     }
@@ -1143,7 +1106,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     }
                 }
                 NumberField("分段时长（分钟，0 为不分段）", config.segmentMinutes.toString(), !recording &&
-                    (!config.exactEngineRequested || config.container == ContainerFormat.MPEG_TS)) {
+                    (!config.mediaCodecEngineRequested || config.container == ContainerFormat.MPEG_TS)) {
                     config = config.copy(segmentMinutes = it.toIntOrNull()?.coerceIn(0, 720) ?: 0)
                 }
                 if (config.container == ContainerFormat.MPEG_TS) {
@@ -2699,7 +2662,6 @@ private data class MicrophoneChoice(val id: Int?, val label: String)
 private fun Float.format1(): String = String.format(Locale.US, "%.1f", this)
 private fun Float.format2(): String = String.format(Locale.US, "%.2f", this)
 private fun Double.format1(): String = String.format(Locale.US, "%.1f", this)
-private fun Double.format3(): String = String.format(Locale.US, "%.3f", this)
 private fun exposureCompensationLabel(camera: CameraInfo, index: Int): String {
     val step = camera.exposureCompensationStep?.toFloat() ?: 0f
     val ev = index * step

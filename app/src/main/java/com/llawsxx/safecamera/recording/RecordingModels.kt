@@ -115,9 +115,8 @@ data class RecordingConfig(
     val recordWidth: Int = 1920,
     val recordHeight: Int = 1080,
     val scalingAlgorithm: VideoScalingAlgorithm = VideoScalingAlgorithm.BILINEAR,
-    val fpsNumerator: Int = 30,
-    val fpsDenominator: Int = 1,
-    val exactFrameRateMode: Boolean = false,
+    val fps: Int = 30,
+    val mediaCodecMode: Boolean = false,
     val videoBitrate: Int = 12_000_000,
     val audioBitrate: Int = 192_000,
     val audioInputDeviceId: Int? = null,
@@ -170,14 +169,13 @@ data class RecordingConfig(
 ) : Serializable {
     val hasVideo: Boolean get() = mode != RecordingMode.AUDIO
     val hasAudio: Boolean get() = mode != RecordingMode.VIDEO
-    val requestedFps: Double get() = fpsNumerator.toDouble() / fpsDenominator.coerceAtLeast(1)
     val customColorMetadata: Boolean get() = colorRange != VideoColorRange.DEFAULT ||
         colorStandard != VideoColorStandard.DEFAULT || colorTransfer != VideoColorTransfer.DEFAULT
     val customRewriteColorMetadata: Boolean get() = rewriteColorRange != VideoColorRange.DEFAULT ||
         rewriteColorStandard != VideoColorStandard.DEFAULT || rewriteColorMatrix != VideoColorMatrix.DEFAULT ||
         rewriteColorTransfer != VideoColorTransfer.DEFAULT
     val videoTransformEnabled: Boolean get() = cropEnabled || resizeEnabled
-    val exactEngineRequested: Boolean get() = exactFrameRateMode || fpsDenominator != 1 || customColorMetadata || videoTransformEnabled ||
+    val mediaCodecEngineRequested: Boolean get() = mediaCodecMode || customColorMetadata || videoTransformEnabled ||
         dynamicRange != VideoDynamicRange.SDR || (forceSpsVui && customRewriteColorMetadata)
     val transformWidth: Int get() = if (cropEnabled) cropWidth else width
     val transformHeight: Int get() = if (cropEnabled) cropHeight else height
@@ -191,12 +189,9 @@ data class RecordingConfig(
             recordWidth % 2 == 0 && recordHeight % 2 == 0 &&
             recordWidth.toLong() * transformHeight == recordHeight.toLong() * transformWidth
     )
-    val encoderFps: Int get() = requestedFps.toInt().let { base ->
-        if (requestedFps - base >= 0.5) base + 1 else base
-    }.coerceAtLeast(1)
     val maximumExposureNs: Long get() = minOf(
         1_000_000_000L,
-        2_000_000_000L * fpsDenominator.coerceAtLeast(1) / fpsNumerator.coerceAtLeast(1),
+        2_000_000_000L / fps.coerceAtLeast(1),
     )
 }
 

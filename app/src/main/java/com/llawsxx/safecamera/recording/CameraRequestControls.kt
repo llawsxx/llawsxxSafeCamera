@@ -47,7 +47,7 @@ object CameraRequestControls {
             }
             distortionMode?.let { builder.set(CaptureRequest.DISTORTION_CORRECTION_MODE, it) }
         }
-        val targetFps = config.encoderFps
+        val targetFps = config.fps
         val availableFps = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
         val fpsRange = availableFps
             .filter { it.lower <= targetFps && it.upper >= targetFps }

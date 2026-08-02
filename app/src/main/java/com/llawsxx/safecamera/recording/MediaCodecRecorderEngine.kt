@@ -36,7 +36,7 @@ import kotlin.math.max
 import kotlin.math.log10
 
 @RequiresApi(Build.VERSION_CODES.O)
-class ExactFrameRateRecorderEngine(
+class MediaCodecRecorderEngine(
     private val context: Context,
     initialConfig: RecordingConfig,
     private val outputStore: RecordingOutputStore,
@@ -151,7 +151,7 @@ class ExactFrameRateRecorderEngine(
         val videoFormat = MediaFormat.createVideoFormat(videoMime, config.outputWidth, config.outputHeight).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, config.videoBitrate)
-            setInteger(MediaFormat.KEY_FRAME_RATE, config.encoderFps)
+            setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
             config.colorRange.mediaFormatValue?.let { setInteger(MediaFormat.KEY_COLOR_RANGE, it) }
@@ -173,7 +173,7 @@ class ExactFrameRateRecorderEngine(
         }
         val encoderName = MediaCodecList(MediaCodecList.REGULAR_CODECS).findEncoderForFormat(videoFormat)
         requireNotNull(encoderName) {
-            "没有编码器支持 ${config.outputWidth}×${config.outputHeight} ${config.dynamicRange.label} @ ${config.encoderFps} fps"
+            "没有编码器支持 ${config.outputWidth}×${config.outputHeight} ${config.dynamicRange.label} @ ${config.fps} fps"
         }
         val video = MediaCodec.createByCodecName(encoderName)
         video.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
@@ -459,7 +459,7 @@ class ExactFrameRateRecorderEngine(
             val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
             if (firstSensorNs == 0L) firstSensorNs = timestamp
             if (lastSensorNs > 0L) {
-                val expected = 1_000_000_000.0 / config.encoderFps
+                val expected = 1_000_000_000.0 / config.fps
                 val interval = timestamp - lastSensorNs
                 if (interval > expected * 1.5) {
                     droppedFrames += max(0L, (interval / expected).toLong() - 1L)
@@ -483,7 +483,7 @@ class ExactFrameRateRecorderEngine(
         cameraHandler.post {
             if (cameraId == config.cameraId || !running.get()) return@post
             if (!runCatching { validateCameraMode(cameraId) }.isSuccess) {
-                onNotice("未切换：目标镜头不支持当前尺寸或 ${config.encoderFps} fps")
+                onNotice("未切换：目标镜头不支持当前尺寸或 ${config.fps} fps")
                 return@post
             }
             closeCamera()
@@ -636,15 +636,15 @@ class ExactFrameRateRecorderEngine(
             "镜头不支持 ${config.width}x${config.height} ${if (config.videoTransformEnabled) "OpenGL 处理输入" else "MediaCodec 输入"}"
         }
         val ranges = c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
-        require(ranges.any { it.lower <= config.encoderFps && it.upper >= config.encoderFps }) {
-            "镜头不支持 ${config.encoderFps} fps 采集"
+        require(ranges.any { it.lower <= config.fps && it.upper >= config.fps }) {
+            "镜头不支持 ${config.fps} fps 采集"
         }
     }
 
     private fun dynamicFpsRange(cameraId: String) = cameraManager.getCameraCharacteristics(cameraId)
         .get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
         .orEmpty()
-        .filter { it.lower <= config.encoderFps && it.upper >= config.encoderFps }
+        .filter { it.lower <= config.fps && it.upper >= config.fps }
         .maxByOrNull { it.upper - it.lower }
 
     private fun closeCamera() {

@@ -77,7 +77,7 @@ class RecordingService : Service() {
         val onNotice: (String) -> Unit = { message -> updateNotification("录制继续 · $message") }
         val onError: (String) -> Unit = { message -> finishWithError(message) }
         val useNativeAudioTs = config.container == ContainerFormat.MPEG_TS && !config.hasVideo
-        val useExactEngine = (config.exactEngineRequested || config.container == ContainerFormat.MPEG_TS) &&
+        val useMediaCodecEngine = (config.mediaCodecEngineRequested || config.container == ContainerFormat.MPEG_TS) &&
             config.hasVideo && !config.highSpeedMode
         val newEngine: RecorderEngine = if (useNativeAudioTs && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             AudioMpegTsRecorderEngine(
@@ -89,8 +89,8 @@ class RecordingService : Service() {
                 onNotice = onNotice,
                 onError = onError,
             )
-        } else if (useExactEngine && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            ExactFrameRateRecorderEngine(
+        } else if (useMediaCodecEngine && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            MediaCodecRecorderEngine(
                 context = this,
                 initialConfig = config,
                 outputStore = outputStore,
@@ -99,7 +99,7 @@ class RecordingService : Service() {
                 onNotice = onNotice,
                 onError = onError,
             )
-        } else if (!useExactEngine && !useNativeAudioTs) {
+        } else if (!useMediaCodecEngine && !useNativeAudioTs) {
             CameraRecorderEngine(
                 context = this,
                 initialConfig = config,

@@ -11,14 +11,14 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class RationalTimestampTest {
+class RecordingConfigTest {
     @Test
-    fun exactEngineCanBeRequestedForIntegerFrameRate() {
-        assertTrue(RecordingConfig(fpsNumerator = 30, exactFrameRateMode = true).exactEngineRequested)
+    fun mediaCodecEngineCanBeRequestedExplicitly() {
+        assertTrue(RecordingConfig(fps = 30, mediaCodecMode = true).mediaCodecEngineRequested)
     }
 
     @Test
-    fun centerCropAndResizeRequestExactEngineAndUseFinalRecordingSize() {
+    fun centerCropAndResizeRequestMediaCodecEngineAndUseFinalRecordingSize() {
         val config = RecordingConfig(
             width = 4000,
             height = 3000,
@@ -30,7 +30,7 @@ class RationalTimestampTest {
             recordHeight = 1080,
         )
 
-        assertTrue(config.exactEngineRequested)
+        assertTrue(config.mediaCodecEngineRequested)
         assertTrue(config.cropSizeValid)
         assertTrue(config.resizeSizeValid)
         assertEquals(1920, config.outputWidth)
@@ -69,12 +69,11 @@ class RationalTimestampTest {
     }
 
     @Test
-    fun rationalFrameRateAndColorMetadataStillRequestExactEngineAutomatically() {
-        assertTrue(RecordingConfig(fpsNumerator = 30_000, fpsDenominator = 1_001).exactEngineRequested)
+    fun colorMetadataRequestsMediaCodecEngineAutomatically() {
         assertTrue(
             RecordingConfig(
                 colorStandard = com.llawsxx.safecamera.recording.VideoColorStandard.BT709,
-            ).exactEngineRequested,
+            ).mediaCodecEngineRequested,
         )
     }
 
@@ -93,7 +92,7 @@ class RationalTimestampTest {
         assertEquals(VideoColorRange.LIMITED, config.colorRange)
         assertEquals(VideoColorRange.FULL, config.rewriteColorRange)
         assertTrue(config.customRewriteColorMetadata)
-        assertTrue(config.exactEngineRequested)
+        assertTrue(config.mediaCodecEngineRequested)
     }
 
     @Test
@@ -102,41 +101,24 @@ class RationalTimestampTest {
 
         assertEquals(VideoColorRange.DEFAULT, config.colorRange)
         assertTrue(config.customRewriteColorMetadata)
-        assertTrue(!config.exactEngineRequested)
+        assertTrue(!config.mediaCodecEngineRequested)
     }
 
     @Test
     fun exposureCannotExceedTwoFrameIntervals() {
-        assertEquals(66_666_666L, RecordingConfig(fpsNumerator = 30).maximumExposureNs)
-        assertEquals(
-            66_733_333L,
-            RecordingConfig(fpsNumerator = 30_000, fpsDenominator = 1_001).maximumExposureNs,
-        )
-        assertEquals(
-            33_366_666L,
-            RecordingConfig(fpsNumerator = 60_000, fpsDenominator = 1_001).maximumExposureNs,
-        )
+        assertEquals(66_666_666L, RecordingConfig(fps = 30).maximumExposureNs)
+        assertEquals(33_333_333L, RecordingConfig(fps = 60).maximumExposureNs)
     }
 
     @Test
     fun exposureHasOneSecondCapAtVeryLowFrameRates() {
-        assertEquals(1_000_000_000L, RecordingConfig(fpsNumerator = 1, fpsDenominator = 2).maximumExposureNs)
-    }
-
-    @Test
-    fun ntsc5994UsesExactRationalTimeline() {
-        fun pts(frame: Long) = multiplyDivide(frame, 1_000_000L * 1001L, 60_000L)
-
-        assertEquals(0L, pts(0))
-        assertEquals(1_001_000L, pts(60))
-        assertEquals(1_001_000_000L, pts(60_000))
-        assertTrue((1L..10_000L).all { pts(it) > pts(it - 1) })
+        assertEquals(1_000_000_000L, RecordingConfig(fps = 1).maximumExposureNs)
     }
 
     @Test
     fun multiplyDivideAvoidsOverflowForLongRecordings() {
-        val tenHoursOfFrames = 2_157_842L
-        val pts = multiplyDivide(tenHoursOfFrames, 1_000_000L * 1001L, 60_000L)
+        val tenHoursOfAudioFrames = 1_728_000_000L
+        val pts = multiplyDivide(tenHoursOfAudioFrames, 1_000_000L, 48_000L)
 
         assertTrue(pts > 35_000_000_000L)
     }
