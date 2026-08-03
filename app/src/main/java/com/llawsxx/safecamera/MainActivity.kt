@@ -79,6 +79,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
@@ -521,14 +522,24 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.noiseReductionMode,
         config.edgeMode,
         config.previewMode,
+        config.previewWidth,
+        config.previewHeight,
+        previewRotationDegrees,
     ) {
         val surface = previewSurface?.takeIf { it.isValid }
-        val canPreview = appInForeground && config.hasVideo && config.previewMode == PreviewMode.FULL &&
+        val previewRequested = config.hasVideo && config.previewMode == PreviewMode.FULL &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        val canPreview = appInForeground && previewRequested
         when {
             state is RecorderState.Idle || state is RecorderState.Error -> {
-                RecorderController.attachPreview(null)
-                if (canPreview && surface != null){
+                RecorderController.attachPreview(
+                    surface = surface,
+                    width = config.previewWidth,
+                    height = config.previewHeight,
+                    enabled = canPreview,
+                    rotationDegrees = previewRotationDegrees,
+                )
+                if (canPreview && surface != null) {
                     if(previewReadyEpoch == previewResumeEpoch){
                         idlePreview.show(config, surface)
                     }
@@ -537,13 +548,13 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             }
             else -> {
                 idlePreview.hide()
-                when {
-                    canPreview -> RecorderController.attachPreview(surface)
-                    appInForeground || surface == null -> RecorderController.attachPreview(null)
-                    // Keep a still-valid Surface attached while backgrounded so recording
-                    // does not suffer two Camera2 session rebuilds on every app switch.
-                    else -> Unit
-                }
+                RecorderController.attachPreview(
+                    surface = surface,
+                    width = config.previewWidth,
+                    height = config.previewHeight,
+                    enabled = canPreview,
+                    rotationDegrees = previewRotationDegrees,
+                )
             }
         }
     }
@@ -812,6 +823,20 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     }
                 }
                 if (config.hasVideo) {
+                    Section("预览") {
+                        ToggleLine(
+                            "永久预览 Surface",
+                            config.permanentPreviewSurface,
+                            !recording,
+                        ) { enabled -> config = config.copy(permanentPreviewSurface = enabled) }
+                        Text(
+                            "启用后，Camera2 会把预览输出到独立的内部 Surface，再通过 GPU 绘制到界面。" +
+                                "界面 Surface 在前后台切换时销毁或重建，不会导致录制 Session 重建，可减少录制丢帧；" +
+                                "代价是增加 GPU 负载、功耗和少量预览延迟。预览开关仍会切换 Camera2 request 中是否包含预览输出。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.secondary,
+                        )
+                    }
                     Section("实验相机能力") {
                         ToggleLine(
                             "尝试枚举隐藏 / 物理镜头",
@@ -1710,6 +1735,20 @@ private fun PreviewToolbar(
 ) {
     val controls: @Composable () -> Unit = {
         CompactChoice("镜头", cameras, selectedCamera, { it.displayName }, true, Modifier.width(116.dp), onCameraSelect)
+        val previewSizes = selectedCamera?.let(::previewSizeOptions).orEmpty()
+        val selectedPreviewSize = previewSizes.firstOrNull {
+            it.first == config.previewWidth && it.second == config.previewHeight
+        } ?: previewSizes.firstOrNull()
+        CompactChoice(
+            "预览尺寸",
+            previewSizes,
+            selectedPreviewSize,
+            { if (it.first == 0) "跟随录制" else "${it.first}x${it.second}" },
+            orientationEnabled,
+            Modifier.width(140.dp),
+        ) { size ->
+            onConfigChange(config.copy(previewWidth = size.first, previewHeight = size.second))
+        }
         CompactChoice("方向", OrientationMode.entries, config.orientation, { it.label }, orientationEnabled, Modifier.width(112.dp)) {
             onConfigChange(config.copy(orientation = it))
         }
@@ -1860,6 +1899,12 @@ private fun FullscreenRecorder(
                     state !is RecorderState.Starting && state !is RecorderState.Stopping,
                     Modifier.width(116.dp),
                 ) { onCameraSelect(it) }
+                PreviewSizeChoice(
+                    camera,
+                    config,
+                    onConfigChange,
+                    state !is RecorderState.Starting && state !is RecorderState.Stopping && state !is RecorderState.Recording,
+                )
                 CompactRecordingDashboard(state, config, lightText = true, modifier = Modifier.weight(1f))
                 CompactChoice(
                     "方向",
@@ -1978,6 +2023,29 @@ private fun FullscreenRecorder(
 }
 
 @Composable
+private fun PreviewSizeChoice(
+    camera: CameraInfo?,
+    config: RecordingConfig,
+    onConfigChange: (RecordingConfig) -> Unit,
+    enabled: Boolean,
+) {
+    val options = camera?.let(::previewSizeOptions).orEmpty()
+    val selected = options.firstOrNull {
+        it.first == config.previewWidth && it.second == config.previewHeight
+    } ?: options.firstOrNull()
+    CompactChoice(
+        "预览尺寸",
+        options,
+        selected,
+        { if (it.first == 0) "跟随录制" else "${it.first}x${it.second}" },
+        enabled,
+        Modifier.width(140.dp),
+    ) { size ->
+        onConfigChange(config.copy(previewWidth = size.first, previewHeight = size.second))
+    }
+}
+
+@Composable
 private fun PreviewPanel(
     visible: Boolean,
     hasVideo: Boolean,
@@ -2009,27 +2077,29 @@ private fun PreviewPanel(
             contentAlignment = Alignment.Center,
         ) {
             if (hasVideo) {
-                AndroidView(
-                    factory = { context -> CameraPreviewView(context) },
-                    update = { view ->
-                        view.configure(
-                            width = bufferWidth,
-                            height = bufferHeight,
-                            previewRotationDegrees = previewRotationDegrees,
-                            resumeEpoch = resumeEpoch,
-                            assistZoom = assistZoom,
-                            cropFrameWidthFraction = cropFrameWidthFraction,
-                            cropFrameHeightFraction = cropFrameHeightFraction,
-                            centerX = centerX,
-                            centerY = centerY,
-                            onPan = onPan,
-                            onTap = onTap,
-                            callback = { surface -> onSurface(if (visible) surface else null) },
-                            onBufferReady = onBufferReady,
-                        )
-                    },
-                    modifier = Modifier.fillMaxSize(),
-                )
+                key(bufferWidth, bufferHeight) {
+                    AndroidView(
+                        factory = { context -> CameraPreviewView(context) },
+                        update = { view ->
+                            view.configure(
+                                width = bufferWidth,
+                                height = bufferHeight,
+                                previewRotationDegrees = previewRotationDegrees,
+                                resumeEpoch = resumeEpoch,
+                                assistZoom = assistZoom,
+                                cropFrameWidthFraction = cropFrameWidthFraction,
+                                cropFrameHeightFraction = cropFrameHeightFraction,
+                                centerX = centerX,
+                                centerY = centerY,
+                                onPan = onPan,
+                                onTap = onTap,
+                                callback = { surface -> onSurface(surface) },
+                                onBufferReady = onBufferReady,
+                            )
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
             if (!visible || !hasVideo) {
                 Box(Modifier.fillMaxSize().background(Color(0xCC111416)), contentAlignment = Alignment.Center) {
@@ -3594,19 +3664,33 @@ private fun preferredFps(camera: CameraInfo): Int = when {
 
 private fun previewBufferSize(camera: CameraInfo?, config: RecordingConfig): Pair<Int, Int> {
     if (camera == null) return config.width to config.height
-    val exact = camera.previewSizes.firstOrNull {
+    val supportedSizes = camera.surfaceViewSizes.ifEmpty { camera.previewSizes }
+    val selected = supportedSizes.firstOrNull { it.width == config.previewWidth && it.height == config.previewHeight }
+    if (selected != null) return selected.width to selected.height
+    val fpsUsableSizes = supportedSizes.filter { size ->
+        camera.estimatedMaxFpsBySize["${size.width}x${size.height}"]?.let { it >= config.fps } ?: true
+    }.ifEmpty { supportedSizes }
+    val exact = fpsUsableSizes.firstOrNull {
         it.width == config.width && it.height == config.height
     }
     if (exact != null) return exact.width to exact.height
     val targetAspect = config.width.toDouble() / config.height.coerceAtLeast(1)
     val targetArea = config.width.toLong() * config.height
-    val best = camera.previewSizes.minByOrNull { size ->
+    val best = fpsUsableSizes.minByOrNull { size ->
         val aspect = size.width.toDouble() / size.height.coerceAtLeast(1)
         val aspectPenalty = kotlin.math.abs(aspect - targetAspect) * 1_000_000_000.0
         val areaPenalty = kotlin.math.abs(size.width.toLong() * size.height - targetArea).toDouble()
         aspectPenalty + areaPenalty
     }
     return best?.let { it.width to it.height } ?: (config.width to config.height)
+}
+
+private fun previewSizeOptions(camera: CameraInfo): List<Pair<Int, Int>> {
+    val sizes = (camera.surfaceViewSizes.ifEmpty { camera.previewSizes })
+        .map { it.width to it.height }
+        .distinct()
+        .sortedWith(compareByDescending<Pair<Int, Int>> { it.first.toLong() * it.second }.thenBy { it.first })
+    return listOf(0 to 0) + sizes
 }
 
 private fun displayRotationDegrees(rotation: Int): Int = when (rotation) {

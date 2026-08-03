@@ -42,6 +42,8 @@ class CameraRecorderEngine(
     private var session: CameraCaptureSession? = null
     private var recorderSurface: Surface? = null
     private var previewSurface: Surface? = null
+    private var previewEnabled = false
+    private var permanentPreviewRenderer: PermanentPreviewRenderer? = null
     private var outputPath: String? = null
     private var currentOutput: OutputHandle? = null
     private var nextOutput: OutputHandle? = null
@@ -64,9 +66,19 @@ class CameraRecorderEngine(
     @Volatile private var finalizationThread: Thread? = null
     private val lastStatsAt = AtomicLong(0L)
 
-    override fun start(preview: Surface?) { handler.post {
-        previewSurface = preview?.takeIf { it.isValid && config.previewMode != PreviewMode.OFF }
-        runCatching { prepareRecorder() }
+    override fun start(preview: Surface?, previewEnabled: Boolean, previewRotationDegrees: Int) { handler.post {
+        previewSurface = preview?.takeIf { it.isValid }
+        this.previewEnabled = previewEnabled && (config.permanentPreviewSurface || previewSurface != null)
+        runCatching {
+            if (config.permanentPreviewSurface) {
+                permanentPreviewRenderer = PermanentPreviewRenderer(
+                    config.previewWidth.takeIf { it > 0 && !config.highSpeedMode } ?: config.width,
+                    config.previewHeight.takeIf { it > 0 && !config.highSpeedMode } ?: config.height,
+                    previewRotationDegrees,
+                ).also { it.setOutput(previewSurface, this.previewEnabled, previewRotationDegrees) }
+            }
+            prepareRecorder()
+        }
             .onFailure { fail("无法准备录制器: ${it.message}") }
     } }
 
@@ -119,6 +131,7 @@ class CameraRecorderEngine(
             val activeSession = session
             val activeCamera = camera
             val activeSink = tsSink
+            val activePreviewRenderer = permanentPreviewRenderer
             finalizingRecorder = activeRecorder
             finalizingSession = activeSession
             finalizingCamera = activeCamera
@@ -126,6 +139,7 @@ class CameraRecorderEngine(
             session = null
             camera = null
             tsSink = null
+            permanentPreviewRenderer = null
             runCatching { activeSession?.stopRepeating() }
 
             val unblockRecorder = Runnable {
@@ -139,6 +153,7 @@ class CameraRecorderEngine(
                     handler.removeCallbacks(unblockRecorder)
                     runCatching { activeSession?.close() }
                     runCatching { activeCamera?.close() }
+                    runCatching { activePreviewRenderer?.release() }
                     runCatching { activeRecorder?.reset() }
                     runCatching { activeRecorder?.release() }
                     recorderSurface = null
@@ -186,6 +201,8 @@ class CameraRecorderEngine(
         handler.post {
             handler.removeCallbacksAndMessages(null)
             closeCamera()
+            runCatching { permanentPreviewRenderer?.release() }
+            permanentPreviewRenderer = null
             runCatching { recorder?.release() }
             recorder = null
             recorderSurface = null
@@ -201,11 +218,32 @@ class CameraRecorderEngine(
         }
     }
 
-    override fun updatePreview(surface: Surface?) { handler.post {
+    override fun updatePreview(surface: Surface?, enabled: Boolean, previewRotationDegrees: Int) { handler.post {
         val nextSurface = surface?.takeIf { it.isValid }
-        if (previewSurface == nextSurface) return@post
+        val surfaceChanged = previewSurface !== nextSurface
+        val nextEnabled = enabled && (permanentPreviewRenderer != null || nextSurface != null)
+        val enabledChanged = previewEnabled != nextEnabled
+        if (!surfaceChanged && !enabledChanged) {
+            permanentPreviewRenderer?.setOutput(nextSurface, previewEnabled, previewRotationDegrees)
+            return@post
+        }
         previewSurface = nextSurface
-        if (config.hasVideo && recorder != null && camera != null) createSession(startRecorder = false)
+        previewEnabled = nextEnabled
+        permanentPreviewRenderer?.let { renderer ->
+            renderer.setOutput(nextSurface, previewEnabled, previewRotationDegrees)
+            if (enabledChanged) submitRepeatingRequest()
+            return@post
+        }
+        if (config.hasVideo && recorder != null && camera != null) {
+            // A SurfaceView is commonly destroyed while its window is backgrounded.
+            // Keep the existing session and stop targeting that output; rebuilding here
+            // and again when a new Surface arrives causes a long recording-frame gap.
+            if (surfaceChanged && nextSurface != null) {
+                createSession(startRecorder = false)
+            } else {
+                submitRepeatingRequest()
+            }
+        }
     } }
 
     override fun switchCamera(cameraId: String) { handler.post {
@@ -262,7 +300,7 @@ class CameraRecorderEngine(
         runCatching {
             val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(recordSurface)
-                previewSurface?.takeIf { it.isValid }?.let(::addTarget)
+                requestPreviewSurface()?.let(::addTarget)
                 CameraRequestControls.apply(manager, config.cameraId, config, this)
                 highSpeedFpsRange()?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
             }.build()
@@ -271,6 +309,23 @@ class CameraRecorderEngine(
             } else activeSession.setRepeatingRequest(request, captureCallback, handler)
         }.onFailure { onNotice("实时参数更新失败: ${it.message}") }
     } }
+
+    private fun submitRepeatingRequest() {
+        val device = camera ?: return
+        val activeSession = session ?: return
+        val recordSurface = recorderSurface ?: return
+        runCatching {
+            val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                addTarget(recordSurface)
+                requestPreviewSurface()?.let(::addTarget)
+                CameraRequestControls.apply(manager, config.cameraId, config, this)
+                highSpeedFpsRange()?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+            }.build()
+            if (config.highSpeedMode && activeSession is CameraConstrainedHighSpeedCaptureSession) {
+                activeSession.setRepeatingBurst(activeSession.createHighSpeedRequestList(request), captureCallback, handler)
+            } else activeSession.setRepeatingRequest(request, captureCallback, handler)
+        }.onFailure { onNotice("preview request update failed: ${it.message}") }
+    }
 
     private fun prepareRecorder() {
         validateVideoConfig()
@@ -395,7 +450,7 @@ class CameraRecorderEngine(
     private fun createSession(startRecorder: Boolean) {
         val device = camera ?: return
         val recordSurface = recorderSurface ?: return
-        val previewAtCreation = previewSurface?.takeIf { it.isValid }
+        val previewAtCreation = sessionPreviewSurface()
         val currentGeneration = ++sessionGeneration
         runCatching { session?.close() }
         val surfaces = mutableListOf(recordSurface)
@@ -410,7 +465,7 @@ class CameraRecorderEngine(
                 runCatching {
                     val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                         addTarget(recordSurface)
-                        previewAtCreation?.takeIf { it.isValid }?.let(::addTarget)
+                        requestPreviewSurface()?.let(::addTarget)
                         CameraRequestControls.apply(manager, config.cameraId, config, this)
                         highSpeedFpsRange()?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                     }.build()
@@ -427,7 +482,12 @@ class CameraRecorderEngine(
             override fun onConfigureFailed(newSession: CameraCaptureSession) {
                 if (currentGeneration != sessionGeneration || stopped) return
                 if (previewAtCreation != null) {
+                    if (permanentPreviewRenderer != null) {
+                        fail("相机不支持永久预览 Surface 与当前录制配置的组合")
+                        return
+                    }
                     previewSurface = null
+                    previewEnabled = false
                     createSession(startRecorder)
                     onNotice("预览 Surface 不兼容，录制继续")
                 } else {
@@ -544,6 +604,15 @@ class CameraRecorderEngine(
         runCatching { camera?.close() }
         camera = null
     }
+
+    private fun sessionPreviewSurface(): Surface? =
+        permanentPreviewRenderer?.inputSurface?.takeIf { it.isValid }
+            ?: previewSurface?.takeIf { it.isValid }
+
+    private fun requestPreviewSurface(): Surface? = if (previewEnabled) {
+        permanentPreviewRenderer?.inputSurface?.takeIf { it.isValid }
+            ?: previewSurface?.takeIf { it.isValid }
+    } else null
 
     private fun fail(message: String) {
         if (!stopped) onError(message)

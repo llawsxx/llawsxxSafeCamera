@@ -19,7 +19,9 @@ object RecorderController {
     @Volatile internal var previewSurface: Surface? = null
     @Volatile internal var previewWidth: Int = 0
     @Volatile internal var previewHeight: Int = 0
-    @Volatile internal var previewUpdater: ((Surface?) -> Unit)? = null
+    @Volatile internal var previewEnabled: Boolean = false
+    @Volatile internal var previewRotationDegrees: Int = 0
+    @Volatile internal var previewUpdater: ((Surface?, Boolean, Int) -> Unit)? = null
 
     fun start(context: Context, config: RecordingConfig) {
         mutableState.value = RecorderState.Starting()
@@ -56,12 +58,22 @@ object RecorderController {
         )
     }
 
-    fun attachPreview(surface: Surface?, width: Int = 0, height: Int = 0) {
-        if (previewSurface === surface && previewWidth == width && previewHeight == height) return
+    fun attachPreview(
+        surface: Surface?,
+        width: Int = 0,
+        height: Int = 0,
+        enabled: Boolean = surface != null,
+        rotationDegrees: Int = 0,
+    ) {
+        if (previewSurface === surface && previewWidth == width && previewHeight == height &&
+            previewEnabled == enabled && previewRotationDegrees == rotationDegrees
+        ) return
         previewSurface = surface
         previewWidth = width
         previewHeight = height
-        previewUpdater?.invoke(surface)
+        previewEnabled = enabled
+        previewRotationDegrees = rotationDegrees
+        previewUpdater?.invoke(surface, enabled, rotationDegrees)
     }
 
     internal fun update(state: RecorderState) {

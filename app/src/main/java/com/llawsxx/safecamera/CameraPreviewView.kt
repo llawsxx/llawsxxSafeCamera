@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.os.Build
 import android.util.Log
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -21,6 +22,8 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Surfa
     private var bufferReadyCallback: ((Int) -> Unit)? = null
     private var bufferWidth = 1
     private var bufferHeight = 1
+    private var appliedBufferWidth = 0
+    private var appliedBufferHeight = 0
     private var resumeEpoch = 0
     private var reportedReadyEpoch = Int.MIN_VALUE
     private var assistZoom = 1f
@@ -33,6 +36,9 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Surfa
 
     init {
         clipChildren = true
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            surfaceView.setSurfaceLifecycle(SurfaceView.SURFACE_LIFECYCLE_FOLLOWS_ATTACHMENT)
+        }
         surfaceView.holder.addCallback(this)
         addView(transformLayer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
     }
@@ -137,6 +143,8 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Surfa
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
+        appliedBufferWidth = 0
+        appliedBufferHeight = 0
         applyBufferSize()
         updateLayout()
     }
@@ -149,12 +157,17 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Surfa
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         reportedReadyEpoch = Int.MIN_VALUE
+        appliedBufferWidth = 0
+        appliedBufferHeight = 0
         post { surfaceCallback?.invoke(null) }
     }
 
     private fun applyBufferSize() {
+        if (appliedBufferWidth == bufferWidth && appliedBufferHeight == bufferHeight) return
         Log.d("PreviewDebug", "configure buffer=$bufferWidth x $bufferHeight view=$width x $height")
         surfaceView.holder.setFixedSize(bufferWidth, bufferHeight)
+        appliedBufferWidth = bufferWidth
+        appliedBufferHeight = bufferHeight
     }
 
     private fun reportBufferReadyIfFocused() {

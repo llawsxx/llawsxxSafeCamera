@@ -72,7 +72,10 @@ object ConfigPreferences {
             orientation = enumValue(p.getString("orientation", null), OrientationMode.FOLLOW_SENSOR),
             rotateImagePixels = p.getBoolean("rotateImagePixels", false),
             previewMode = enumValue(p.getString("previewMode", null), PreviewMode.FULL),
+            permanentPreviewSurface = p.getBoolean("permanentPreviewSurface", false),
             previewLayout = enumValue(p.getString("previewLayout", null), PreviewLayout.STACKED),
+            previewWidth = p.getInt("previewWidth", 0).coerceAtLeast(0),
+            previewHeight = p.getInt("previewHeight", 0).coerceAtLeast(0),
             manualExposure = p.getBoolean("manualExposure", false),
             iso = p.getInt("iso", 400),
             exposureNs = p.getLong("exposureNs", 10_000_000L),
@@ -154,7 +157,10 @@ object ConfigPreferences {
             .putString("orientation", c.orientation.name)
             .putBoolean("rotateImagePixels", c.rotateImagePixels)
             .putString("previewMode", c.previewMode.name)
+            .putBoolean("permanentPreviewSurface", c.permanentPreviewSurface)
             .putString("previewLayout", c.previewLayout.name)
+            .putInt("previewWidth", c.previewWidth)
+            .putInt("previewHeight", c.previewHeight)
             .putBoolean("manualExposure", c.manualExposure)
             .putInt("iso", c.iso)
             .putLong("exposureNs", c.exposureNs)

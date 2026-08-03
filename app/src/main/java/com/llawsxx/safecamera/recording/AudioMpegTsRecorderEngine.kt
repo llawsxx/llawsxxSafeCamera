@@ -44,7 +44,7 @@ class AudioMpegTsRecorderEngine(
     private var segment = 1
     @Volatile private var levelDb = -60f
 
-    override fun start(preview: Surface?) {
+    override fun start(preview: Surface?, previewEnabled: Boolean, previewRotationDegrees: Int) {
         handler.post { runCatching { prepare() }.onFailure { onError("无法启动 native MPEG-TS 音频录制: ${it.message}") } }
     }
 
@@ -191,7 +191,7 @@ class AudioMpegTsRecorderEngine(
         runCatching { output?.close() }; output = null
         thread.quitSafely()
     }
-    override fun updatePreview(surface: Surface?) = Unit
+    override fun updatePreview(surface: Surface?, enabled: Boolean, previewRotationDegrees: Int) = Unit
     override fun switchCamera(cameraId: String) = Unit
     override fun updateCameraControls(updated: RecordingConfig) { config = config.copy(audioInputDeviceId = updated.audioInputDeviceId) }
 

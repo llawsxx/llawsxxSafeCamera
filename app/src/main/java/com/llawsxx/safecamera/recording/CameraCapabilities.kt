@@ -10,6 +10,7 @@ import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Build
 import android.util.Size
+import android.view.SurfaceHolder
 
 object CameraCapabilities {
     fun query(context: Context, experimental: Boolean = false): List<CameraInfo> {
@@ -57,16 +58,23 @@ object CameraCapabilities {
                     ?.sortedWith(compareByDescending<Size> { it.width.toLong() * it.height }.thenBy { it.width })
                     ?.distinctBy { "${it.width}x${it.height}" }
                     .orEmpty()
+                val surfaceViewSizes = streamMap
+                    ?.getOutputSizes(SurfaceHolder::class.java)
+                    ?.sortedWith(compareByDescending<Size> { it.width.toLong() * it.height }.thenBy { it.width })
+                    ?.distinctBy { "${it.width}x${it.height}" }
+                    .orEmpty()
                 val fps = c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
                     ?.filter { it.upper >= 15 }
                     ?.sortedWith(compareBy({ it.upper }, { it.lower }))
                     .orEmpty()
                 val experimentalCandidate = id !in publicIds
-                val estimatedMaxFpsBySize = (sizes + previewSizes).distinctBy { "${it.width}x${it.height}" }
+                val estimatedMaxFpsBySize = (sizes + previewSizes + surfaceViewSizes)
+                    .distinctBy { "${it.width}x${it.height}" }
                     .mapNotNull { size ->
                         val duration = listOfNotNull(
                             runCatching { streamMap?.getOutputMinFrameDuration(MediaRecorder::class.java, size) }.getOrNull(),
                             runCatching { streamMap?.getOutputMinFrameDuration(SurfaceTexture::class.java, size) }.getOrNull(),
+                            runCatching { streamMap?.getOutputMinFrameDuration(SurfaceHolder::class.java, size) }.getOrNull(),
                         ).filter { it > 0L }.minOrNull() ?: return@mapNotNull null
                         val maxFps = (1_000_000_000.0 / duration).toInt().coerceAtLeast(1)
                         "${size.width}x${size.height}" to maxFps
@@ -98,6 +106,7 @@ object CameraCapabilities {
                     lensFacing = facing,
                     sizes = sizes,
                     previewSizes = previewSizes,
+                    surfaceViewSizes = surfaceViewSizes,
                     fpsRanges = fps,
                     estimatedMaxFpsBySize = estimatedMaxFpsBySize,
                     experimentalCandidate = experimentalCandidate,

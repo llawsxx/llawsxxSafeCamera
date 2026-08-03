@@ -29,9 +29,12 @@ class IdlePreviewCamera(context: Context) {
         Log.d("PreviewDebug", "show")
         if (!surface.isValid || !config.hasVideo) return@post
         val sameTarget = activeCameraId == config.cameraId && activeSurface === surface
+        val previousConfig = activeConfig
         activeConfig = config
         if (sameTarget) {
             when {
+                camera != null && session != null && previousConfig?.previewBufferKey() != config.previewBufferKey() ->
+                    createSession(config, surface)
                 camera != null && session != null -> updateRepeatingRequest(config, surface)
                 opening || configuring -> Unit
                 camera != null -> createSession(config, surface)
@@ -214,3 +217,6 @@ class IdlePreviewCamera(context: Context) {
         const val TAG = "IdlePreviewCamera"
     }
 }
+
+private fun RecordingConfig.previewBufferKey(): String =
+    if (previewWidth > 0 && previewHeight > 0) "$previewWidth x $previewHeight" else "$width x $height"

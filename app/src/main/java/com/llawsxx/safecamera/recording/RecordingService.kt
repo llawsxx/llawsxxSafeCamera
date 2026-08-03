@@ -134,7 +134,11 @@ class RecordingService : Service() {
         }
         engine = newEngine
         RecorderController.previewUpdater = newEngine::updatePreview
-        newEngine.start(RecorderController.previewSurface)
+        newEngine.start(
+            RecorderController.previewSurface,
+            RecorderController.previewEnabled,
+            RecorderController.previewRotationDegrees,
+        )
     }
 
     private fun stopRecording() {

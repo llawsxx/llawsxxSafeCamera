@@ -53,6 +53,8 @@ class MediaCodecRecorderEngine(
     private var camera: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var previewSurface: Surface? = null
+    private var previewEnabled = false
+    private var permanentPreviewRenderer: PermanentPreviewRenderer? = null
     private var encoderSurface: Surface? = null
     private var transformRenderer: GlVideoTransformRenderer? = null
     private var videoCodec: MediaCodec? = null
@@ -84,10 +86,20 @@ class MediaCodecRecorderEngine(
     private var encodedOutputWidth = initialConfig.outputWidth
     private var encodedOutputHeight = initialConfig.outputHeight
 
-    override fun start(preview: Surface?) {
+    override fun start(preview: Surface?, previewEnabled: Boolean, previewRotationDegrees: Int) {
         cameraHandler.post {
-            previewSurface = preview?.takeIf { it.isValid && config.previewMode != PreviewMode.OFF }
-            runCatching { prepare() }.onFailure { fail("无法启动 MediaCodec 录制: ${it.message}") }
+            previewSurface = preview?.takeIf { it.isValid }
+            this.previewEnabled = previewEnabled && (config.permanentPreviewSurface || previewSurface != null)
+            runCatching {
+                if (config.permanentPreviewSurface) {
+                    permanentPreviewRenderer = PermanentPreviewRenderer(
+                        config.previewWidth.takeIf { it > 0 } ?: config.width,
+                        config.previewHeight.takeIf { it > 0 } ?: config.height,
+                        previewRotationDegrees,
+                    ).also { it.setOutput(previewSurface, this.previewEnabled, previewRotationDegrees) }
+                }
+                prepare()
+            }.onFailure { fail("无法启动 MediaCodec 录制: ${it.message}") }
         }
     }
 
@@ -400,7 +412,7 @@ class MediaCodecRecorderEngine(
     private fun createSession() {
         val device = camera ?: return
         val recordSurface = cameraInputSurface() ?: return
-        val preview = previewSurface?.takeIf { it.isValid }
+        val preview = sessionPreviewSurface()
         val generation = ++sessionGeneration
         session?.close()
         val surfaces = mutableListOf(recordSurface).apply { preview?.let(::add) }
@@ -411,7 +423,7 @@ class MediaCodecRecorderEngine(
                 runCatching {
                     val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                         addTarget(recordSurface)
-                        preview?.takeIf { it.isValid }?.let(::addTarget)
+                        requestPreviewSurface()?.let(::addTarget)
                         CameraRequestControls.apply(cameraManager, config.cameraId, config, this)
                         dynamicFpsRange(config.cameraId)?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                     }.build()
@@ -420,7 +432,12 @@ class MediaCodecRecorderEngine(
             }
             override fun onConfigureFailed(newSession: CameraCaptureSession) {
                 if (preview != null && running.get() && generation == sessionGeneration) {
+                    if (permanentPreviewRenderer != null) {
+                        fail("相机不支持永久预览 Surface 与当前录制配置的组合")
+                        return
+                    }
                     previewSurface = null
+                    previewEnabled = false
                     createSession()
                     onNotice("预览不兼容，MediaCodec 录制继续")
                 } else if (generation == sessionGeneration) fail("相机不支持当前编码 Surface")
@@ -513,12 +530,33 @@ class MediaCodecRecorderEngine(
         }
     }
 
-    override fun updatePreview(surface: Surface?) {
+    override fun updatePreview(surface: Surface?, enabled: Boolean, previewRotationDegrees: Int) {
         cameraHandler.post {
             val next = surface?.takeIf { it.isValid }
-            if (previewSurface == next) return@post
+            val nextEnabled = enabled && (permanentPreviewRenderer != null || next != null)
+            val surfaceChanged = previewSurface !== next
+            val enabledChanged = previewEnabled != nextEnabled
+            if (!surfaceChanged && !enabledChanged) {
+                permanentPreviewRenderer?.setOutput(next, previewEnabled, previewRotationDegrees)
+                return@post
+            }
             previewSurface = next
-            if (camera != null && running.get()) createSession()
+            previewEnabled = nextEnabled
+            permanentPreviewRenderer?.let { renderer ->
+                renderer.setOutput(next, nextEnabled, previewRotationDegrees)
+                if (enabledChanged) submitRepeatingRequest()
+                return@post
+            }
+            if (camera != null && running.get()) {
+                // Do not rebuild just because SurfaceView was destroyed in background.
+                // The recording-only request can continue on the current session; a
+                // replacement Surface, if any, requires only one later rebuild.
+                if (surfaceChanged && next != null) {
+                    createSession()
+                } else {
+                    submitRepeatingRequest()
+                }
+            }
         }
     }
 
@@ -572,19 +610,23 @@ class MediaCodecRecorderEngine(
                 noiseReductionMode = updated.noiseReductionMode,
                 edgeMode = updated.edgeMode,
             )
-            val device = camera ?: return@post
-            val activeSession = session ?: return@post
-            val recordSurface = cameraInputSurface() ?: return@post
-            runCatching {
-                val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                    addTarget(recordSurface)
-                    previewSurface?.takeIf { it.isValid }?.let(::addTarget)
-                    CameraRequestControls.apply(cameraManager, config.cameraId, config, this)
-                    dynamicFpsRange(config.cameraId)?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
-                }.build()
-                activeSession.setRepeatingRequest(request, captureCallback, cameraHandler)
-            }.onFailure { onNotice("实时参数更新失败: ${it.message}") }
+            submitRepeatingRequest("实时参数更新失败")
         }
+    }
+
+    private fun submitRepeatingRequest(failurePrefix: String = "preview request update failed") {
+        val device = camera ?: return
+        val activeSession = session ?: return
+        val recordSurface = cameraInputSurface() ?: return
+        runCatching {
+            val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                addTarget(recordSurface)
+                requestPreviewSurface()?.let(::addTarget)
+                CameraRequestControls.apply(cameraManager, config.cameraId, config, this)
+                dynamicFpsRange(config.cameraId)?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+            }.build()
+            activeSession.setRepeatingRequest(request, captureCallback, cameraHandler)
+        }.onFailure { onNotice("$failurePrefix: ${it.message}") }
     }
 
     override fun stop(onComplete: () -> Unit) {
@@ -631,6 +673,7 @@ class MediaCodecRecorderEngine(
     }
 
     private fun releaseCodecs() {
+        runCatching { permanentPreviewRenderer?.release() }; permanentPreviewRenderer = null
         runCatching { transformRenderer?.release() }; transformRenderer = null
         runCatching { videoCodec?.stop() }; runCatching { videoCodec?.release() }; videoCodec = null
         runCatching { audioCodec?.stop() }; runCatching { audioCodec?.release() }; audioCodec = null
@@ -642,6 +685,15 @@ class MediaCodecRecorderEngine(
 
     private fun cameraInputSurface(): Surface? =
         (transformRenderer?.inputSurface ?: encoderSurface)?.takeIf { it.isValid }
+
+    private fun sessionPreviewSurface(): Surface? =
+        permanentPreviewRenderer?.inputSurface?.takeIf { it.isValid }
+            ?: previewSurface?.takeIf { it.isValid }
+
+    private fun requestPreviewSurface(): Surface? = if (previewEnabled) {
+        permanentPreviewRenderer?.inputSurface?.takeIf { it.isValid }
+            ?: previewSurface?.takeIf { it.isValid }
+    } else null
 
     private fun releaseCameraBlocking() {
         val latch = CountDownLatch(1)
