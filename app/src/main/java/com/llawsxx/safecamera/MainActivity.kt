@@ -203,6 +203,9 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
     val idlePreview = remember { IdlePreviewCamera(context.applicationContext) }
     val recording = state is RecorderState.Recording || state is RecorderState.Starting || state is RecorderState.Stopping
     val selectedCamera = cameras.firstOrNull { it.id == config.cameraId }
+    val previewRotationDegrees = normalizedQuarterTurn(
+        (selectedCamera?.sensorOrientation ?: 0) - currentDisplayRotation,
+    )
 
     fun saveCameraMode() {
         CameraModePreferences.save(context, config.cameraId, config)
@@ -262,10 +265,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         view.keepScreenOn = recording
         onDispose { view.keepScreenOn = false }
     }
-
-    val userRotation = config.previewRotationDegrees
-    val sensorRotation = selectedCamera?.sensorOrientation ?: 0
-    val displayRotation = currentDisplayRotation
 
     val onPreviewSurface: (Surface?) -> Unit = { surface ->
         Log.d("PreviewDebug","surface is null = ${if (surface == null) "true" else "false"}")
@@ -618,10 +617,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             cameras = cameras,
             camera = selectedCamera,
             liveExposure = liveExposure?.takeIf { it.cameraId == config.cameraId },
-            sensorRotation = sensorRotation,
-            displayRotation = displayRotation,
-            userRotation = userRotation,
-            previewMirror = config.previewMirror,
+            previewRotationDegrees = previewRotationDegrees,
             previewResumeEpoch = previewResumeEpoch,
             visible = config.previewMode == PreviewMode.FULL,
             onConfigChange = { config = it },
@@ -651,9 +647,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             cameras = cameras,
             camera = selectedCamera,
             liveExposure = liveExposure?.takeIf { it.cameraId == config.cameraId },
-            sensorRotation = sensorRotation,
-            displayRotation = displayRotation,
-            userRotation = userRotation,
+            previewRotationDegrees = previewRotationDegrees,
             previewResumeEpoch = previewResumeEpoch,
             permissionError = permissionError,
             onConfigChange = { config = it },
@@ -1439,9 +1433,7 @@ private fun MainRecorderScreen(
     cameras: List<CameraInfo>,
     camera: CameraInfo?,
     liveExposure: CameraExposureState?,
-    sensorRotation: Int,
-    displayRotation: Int,
-    userRotation: Int,
+    previewRotationDegrees: Int,
     previewResumeEpoch: Int,
     permissionError: String?,
     onConfigChange: (RecordingConfig) -> Unit,
@@ -1463,9 +1455,7 @@ private fun MainRecorderScreen(
             cameras = cameras,
             camera = camera,
             liveExposure = liveExposure,
-            sensorRotation = sensorRotation,
-            displayRotation = displayRotation,
-            userRotation = userRotation,
+            previewRotationDegrees = previewRotationDegrees,
             previewResumeEpoch = previewResumeEpoch,
             permissionError = permissionError,
             recording = recording,
@@ -1531,9 +1521,7 @@ private fun MainRecorderScreen(
                 RemainingSpacePreview(
                     config = config,
                     camera = camera,
-                    sensorRotation = sensorRotation,
-                    displayRotation = displayRotation,
-                    userRotation = userRotation,
+                    previewRotationDegrees = previewRotationDegrees,
                     previewResumeEpoch = previewResumeEpoch,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                     onSurface = onSurface,
@@ -1558,9 +1546,7 @@ private fun LandscapeMainRecorderScreen(
     cameras: List<CameraInfo>,
     camera: CameraInfo,
     liveExposure: CameraExposureState?,
-    sensorRotation: Int,
-    displayRotation: Int,
-    userRotation: Int,
+    previewRotationDegrees: Int,
     previewResumeEpoch: Int,
     permissionError: String?,
     recording: Boolean,
@@ -1620,9 +1606,7 @@ private fun LandscapeMainRecorderScreen(
             RemainingSpacePreview(
                 config = config,
                 camera = camera,
-                sensorRotation = sensorRotation,
-                displayRotation = displayRotation,
-                userRotation = userRotation,
+                previewRotationDegrees = previewRotationDegrees,
                 previewResumeEpoch = previewResumeEpoch,
                 modifier = Modifier.weight(1f).fillMaxHeight(),
                 onSurface = onSurface,
@@ -1646,9 +1630,7 @@ private fun LandscapeMainRecorderScreen(
 private fun RemainingSpacePreview(
     config: RecordingConfig,
     camera: CameraInfo,
-    sensorRotation: Int,
-    displayRotation: Int,
-    userRotation: Int,
+    previewRotationDegrees: Int,
     previewResumeEpoch: Int,
     modifier: Modifier,
     onSurface: (Surface?) -> Unit,
@@ -1664,10 +1646,7 @@ private fun RemainingSpacePreview(
             hasVideo = true,
             bufferWidth = previewBuffer.first,
             bufferHeight = previewBuffer.second,
-            sensorRotation = sensorRotation,
-            displayRotation = displayRotation,
-            userRotation = userRotation,
-            mirror = config.previewMirror,
+            previewRotationDegrees = previewRotationDegrees,
             resumeEpoch = previewResumeEpoch,
             modifier = previewModifier,
             onSurface = onSurface,
@@ -1696,12 +1675,7 @@ private fun RemainingSpacePreview(
             }
         }
         if (config.mfAssistMagnification > 1) {
-            val overviewCenter = sourcePointToDisplay(
-                x = config.mfAssistCenterX,
-                y = config.mfAssistCenterY,
-                rotationDegrees = sensorRotation - displayRotation + userRotation,
-                mirrored = config.previewMirror,
-            )
+            val overviewCenter = config.mfAssistCenterX to config.mfAssistCenterY
             Box(
                 Modifier.align(Alignment.BottomEnd).padding(8.dp).size(74.dp)
                     .background(Color(0xAA111416), RectangleShape)
@@ -1747,12 +1721,6 @@ private fun PreviewToolbar(
             checked = config.previewMode == PreviewMode.FULL,
             modifier = Modifier.width(76.dp),
         ) { onConfigChange(config.copy(previewMode = if (it) PreviewMode.FULL else PreviewMode.OFF)) }
-        CompactToggle("镜像", config.previewMirror, Modifier.width(76.dp)) {
-            onConfigChange(config.copy(previewMirror = it))
-        }
-        CompactChoice("旋转", listOf(0, 90, 180, 270), config.previewRotationDegrees, { "$it°" }, true, Modifier.width(88.dp)) {
-            onConfigChange(config.copy(previewRotationDegrees = it))
-        }
     }
     if (singleLine) {
         Row(
@@ -1839,10 +1807,7 @@ private fun FullscreenRecorder(
     cameras: List<CameraInfo>,
     camera: CameraInfo?,
     liveExposure: CameraExposureState?,
-    sensorRotation: Int,
-    displayRotation: Int,
-    userRotation: Int,
-    previewMirror: Boolean,
+    previewRotationDegrees: Int,
     previewResumeEpoch: Int,
     visible: Boolean,
     onConfigChange: (RecordingConfig) -> Unit,
@@ -1864,10 +1829,7 @@ private fun FullscreenRecorder(
             hasVideo = true,
             bufferWidth = previewBuffer.first,
             bufferHeight = previewBuffer.second,
-            sensorRotation = sensorRotation,
-            displayRotation = displayRotation,
-            userRotation = userRotation,
-            mirror = previewMirror,
+            previewRotationDegrees = previewRotationDegrees,
             resumeEpoch = previewResumeEpoch,
             modifier = fullscreenPreviewModifier,
             onSurface = onSurface,
@@ -1980,12 +1942,7 @@ private fun FullscreenRecorder(
             }
         }
         if (controlsVisible && config.mfAssistMagnification > 1) {
-            val overviewCenter = sourcePointToDisplay(
-                x = config.mfAssistCenterX,
-                y = config.mfAssistCenterY,
-                rotationDegrees = sensorRotation - displayRotation + userRotation,
-                mirrored = previewMirror,
-            )
+            val overviewCenter = config.mfAssistCenterX to config.mfAssistCenterY
             Box(
                 Modifier.align(Alignment.BottomEnd).padding(12.dp).size(74.dp)
                     .background(Color(0xAA111416), RectangleShape)
@@ -2026,10 +1983,7 @@ private fun PreviewPanel(
     hasVideo: Boolean,
     bufferWidth: Int,
     bufferHeight: Int,
-    sensorRotation: Int,
-    displayRotation: Int,
-    userRotation: Int,
-    mirror: Boolean,
+    previewRotationDegrees: Int,
     resumeEpoch: Int,
     modifier: Modifier,
     onSurface: (Surface?) -> Unit,
@@ -2061,10 +2015,7 @@ private fun PreviewPanel(
                         view.configure(
                             width = bufferWidth,
                             height = bufferHeight,
-                            sensorRotation = sensorRotation,
-                            displayRotation = displayRotation,
-                            userRotation = userRotation,
-                            mirror = mirror,
+                            previewRotationDegrees = previewRotationDegrees,
                             resumeEpoch = resumeEpoch,
                             assistZoom = assistZoom,
                             cropFrameWidthFraction = cropFrameWidthFraction,
@@ -3664,6 +3615,8 @@ private fun displayRotationDegrees(rotation: Int): Int = when (rotation) {
     Surface.ROTATION_270 -> 270
     else -> 0
 }
+
+private fun normalizedQuarterTurn(degrees: Int): Int = ((degrees % 360) + 360) % 360
 
 private fun cropFrameFractions(config: RecordingConfig): Pair<Float?, Float?> {
     if (!config.cropEnabled || !config.cropSizeValid) return null to null

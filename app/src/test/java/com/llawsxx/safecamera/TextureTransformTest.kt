@@ -6,13 +6,19 @@ import com.llawsxx.safecamera.recording.applyTextureRotation
 import com.llawsxx.safecamera.recording.rotatedDimensions
 import com.llawsxx.safecamera.recording.manualWhiteBalanceGains
 import com.llawsxx.safecamera.screenDragToSource
-import com.llawsxx.safecamera.sourcePointToDisplay
 import com.llawsxx.safecamera.boundedPreviewTranslation
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TextureTransformTest {
+    @Test
+    fun previewAspectSwapsDimensionsForQuarterTurns() {
+        assertTrue(previewAspect(1920, 1080, 0) == 1920f / 1080f)
+        assertTrue(previewAspect(1920, 1080, 90) == 1080f / 1920f)
+        assertTrue(previewAspect(1920, 1080, 270) == 1080f / 1920f)
+    }
+
     @Test
     fun quarterTurnSwapsEncodedDimensions() {
         assertTrue(rotatedDimensions(1080, 1920, 90) == (1920 to 1080))
@@ -21,28 +27,17 @@ class TextureTransformTest {
     }
 
     @Test
-    fun dragDirectionTracksRotationAndMirror() {
-        assertArrayEquals(floatArrayOf(0.05f, 0f), screenDragToSource(10f, 0f, 100, 100, 2f, 0, false).toFloatArray(), 0.0001f)
-        assertArrayEquals(floatArrayOf(-0.05f, 0f), screenDragToSource(10f, 0f, 100, 100, 2f, 0, true).toFloatArray(), 0.0001f)
-        assertArrayEquals(floatArrayOf(0f, -0.05f), screenDragToSource(10f, 0f, 100, 100, 2f, 90, false).toFloatArray(), 0.0001f)
-        assertArrayEquals(floatArrayOf(0f, 0.05f), screenDragToSource(10f, 0f, 100, 100, 2f, 270, false).toFloatArray(), 0.0001f)
+    fun dragDirectionTracksDirectSurfacePreview() {
+        assertArrayEquals(floatArrayOf(0.05f, 0f), screenDragToSource(10f, 0f, 100, 100, 2f).toFloatArray(), 0.0001f)
     }
 
     @Test
     fun dragUsesUnscaledDisplayedContentSize() {
         assertArrayEquals(
             floatArrayOf(0.05f, 0.05f),
-            screenDragToSource(96f, 54f, 960, 540, 2f, 0, false).toFloatArray(),
+            screenDragToSource(96f, 54f, 960, 540, 2f).toFloatArray(),
             0.0001f,
         )
-    }
-
-    @Test
-    fun assistOverviewTracksSourceRotationAndMirror() {
-        assertArrayEquals(floatArrayOf(0.75f, 0.5f), sourcePointToDisplay(0.75f, 0.5f, 0, false).toFloatArray(), 0.0001f)
-        assertArrayEquals(floatArrayOf(0.5f, 0.75f), sourcePointToDisplay(0.75f, 0.5f, 90, false).toFloatArray(), 0.0001f)
-        assertArrayEquals(floatArrayOf(0.25f, 0.5f), sourcePointToDisplay(0.75f, 0.5f, 0, true).toFloatArray(), 0.0001f)
-        assertArrayEquals(floatArrayOf(0.5f, 0.25f), sourcePointToDisplay(0.75f, 0.5f, 270, false).toFloatArray(), 0.0001f)
     }
 
     @Test
@@ -203,6 +198,7 @@ class TextureTransformTest {
             0.0001f,
         )
     }
+
 }
 
 private fun Pair<Float, Float>.toFloatArray() = floatArrayOf(first, second)

@@ -163,8 +163,6 @@ data class RecordingConfig(
     val rotateImagePixels: Boolean = false,
     val previewMode: PreviewMode = PreviewMode.FULL,
     val previewLayout: PreviewLayout = PreviewLayout.STACKED,
-    val previewRotationDegrees: Int = 0,
-    val previewMirror: Boolean = false,
     val manualExposure: Boolean = false,
     val iso: Int = 400,
     val exposureNs: Long = 10_000_000L,

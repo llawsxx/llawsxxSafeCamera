@@ -73,8 +73,6 @@ object ConfigPreferences {
             rotateImagePixels = p.getBoolean("rotateImagePixels", false),
             previewMode = enumValue(p.getString("previewMode", null), PreviewMode.FULL),
             previewLayout = enumValue(p.getString("previewLayout", null), PreviewLayout.STACKED),
-            previewRotationDegrees = p.getInt("previewRotationDegrees", 0).let { ((it % 360) + 360) % 360 },
-            previewMirror = p.getBoolean("previewMirror", false),
             manualExposure = p.getBoolean("manualExposure", false),
             iso = p.getInt("iso", 400),
             exposureNs = p.getLong("exposureNs", 10_000_000L),
@@ -157,8 +155,6 @@ object ConfigPreferences {
             .putBoolean("rotateImagePixels", c.rotateImagePixels)
             .putString("previewMode", c.previewMode.name)
             .putString("previewLayout", c.previewLayout.name)
-            .putInt("previewRotationDegrees", c.previewRotationDegrees)
-            .putBoolean("previewMirror", c.previewMirror)
             .putBoolean("manualExposure", c.manualExposure)
             .putInt("iso", c.iso)
             .putLong("exposureNs", c.exposureNs)

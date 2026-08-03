@@ -4,27 +4,23 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.SurfaceTexture
 import android.util.Log
 import android.view.Surface
-import android.view.TextureView
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
 import android.view.MotionEvent
 import android.widget.FrameLayout
 
-internal class CameraPreviewView(context: Context) : FrameLayout(context), TextureView.SurfaceTextureListener {
-    private val textureView = TextureView(context)
+internal class CameraPreviewView(context: Context) : FrameLayout(context), SurfaceHolder.Callback {
+    private val surfaceView = SurfaceView(context)
     private val cropFrameView = CropFrameView(context)
-    private val transformLayer = RotationLayout(context, textureView, cropFrameView)
-    private var outputSurface: Surface? = null
+    private val transformLayer = PreviewLayout(context, surfaceView, cropFrameView)
     private var surfaceCallback: ((Surface?) -> Unit)? = null
     private var bufferReadyCallback: ((Int) -> Unit)? = null
     private var bufferWidth = 1
     private var bufferHeight = 1
-    private var rotationDegrees = 0
-    private var sourceToDisplayRotation = 0
-    private var mirrorHorizontally = false
     private var resumeEpoch = 0
     private var reportedReadyEpoch = Int.MIN_VALUE
     private var assistZoom = 1f
@@ -37,17 +33,14 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Textu
 
     init {
         clipChildren = true
-        textureView.surfaceTextureListener = this
+        surfaceView.holder.addCallback(this)
         addView(transformLayer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
     }
 
     fun configure(
         width: Int,
         height: Int,
-        sensorRotation: Int,
-        displayRotation: Int,
-        userRotation: Int,
-        mirror: Boolean,
+        previewRotationDegrees: Int,
         resumeEpoch: Int,
         assistZoom: Int = 1,
         cropFrameWidthFraction: Float? = null,
@@ -64,19 +57,13 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Textu
         val epochChanged = this.resumeEpoch != resumeEpoch
         bufferWidth = requestedWidth
         bufferHeight = requestedHeight
-        rotationDegrees = normalizedQuarterTurn(-displayRotation + userRotation)
-        mirrorHorizontally = mirror
-        sourceToDisplayRotation = normalizedQuarterTurn(sensorRotation - displayRotation + userRotation)
-        transformLayer.displayAspect = capturePreviewAspect(bufferWidth, bufferHeight, sourceToDisplayRotation)
+        transformLayer.displayAspect = previewAspect(bufferWidth, bufferHeight, previewRotationDegrees)
         this.resumeEpoch = resumeEpoch
         this.assistZoom = assistZoom.coerceAtLeast(1).toFloat()
-        val swapCrop = sourceToDisplayRotation == 90 || sourceToDisplayRotation == 270
-        val cropFrameWidthFractionReal = if (swapCrop) cropFrameHeightFraction else cropFrameWidthFraction
-        val cropFrameHeightFractionReal = if (swapCrop) cropFrameWidthFraction  else cropFrameHeightFraction
-
+        val swapsDimensions = normalizedQuarterTurn(previewRotationDegrees) in setOf(90, 270)
         cropFrameView.setFractions(
-            cropFrameWidthFractionReal,
-            cropFrameHeightFractionReal
+            if (swapsDimensions) cropFrameHeightFraction else cropFrameWidthFraction,
+            if (swapsDimensions) cropFrameWidthFraction else cropFrameHeightFraction,
         )
 
         if (this.assistZoom <= 1f) {
@@ -91,11 +78,10 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Textu
         if (epochChanged) reportedReadyEpoch = Int.MIN_VALUE
         surfaceCallback = callback
         bufferReadyCallback = onBufferReady
-        applyBufferSize(textureView.surfaceTexture)
-        ensureOutputSurface()
+        applyBufferSize()
         updateLayout()
-        if (textureView.isAvailable) {
-            surfaceCallback?.invoke(outputSurface)
+        availableSurface()?.let {
+            surfaceCallback?.invoke(it)
             reportBufferReadyIfFocused()
         }
 
@@ -118,8 +104,6 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Textu
                         contentWidth = transformLayer.displayedContentWidth,
                         contentHeight = transformLayer.displayedContentHeight,
                         zoom = assistZoom,
-                        rotationDegrees = sourceToDisplayRotation,
-                        mirrored = mirrorHorizontally,
                     )
                     panCallback?.invoke(-sourceDx, -sourceDy)
                 } else {
@@ -152,59 +136,45 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Textu
         }
     }
 
-    override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
-        applyBufferSize(texture)
-        ensureOutputSurface()
+    override fun surfaceCreated(holder: SurfaceHolder) {
+        applyBufferSize()
         updateLayout()
-        surfaceCallback?.invoke(outputSurface)
+    }
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        updateLayout()
+        availableSurface()?.let(surfaceCallback ?: {})
         reportBufferReadyIfFocused()
     }
 
-    override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
-        applyBufferSize(texture)
-        updateLayout()
-    }
-
-    override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
         reportedReadyEpoch = Int.MIN_VALUE
-        outputSurface?.release()
-        outputSurface = null
-        surfaceCallback?.invoke(null)
-        return true
+        post { surfaceCallback?.invoke(null) }
     }
 
-    override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {
-       return
-    }
-
-    private fun applyBufferSize(texture: SurfaceTexture?) {
+    private fun applyBufferSize() {
         Log.d("PreviewDebug", "configure buffer=$bufferWidth x $bufferHeight view=$width x $height")
-        texture?.setDefaultBufferSize(bufferWidth, bufferHeight)
+        surfaceView.holder.setFixedSize(bufferWidth, bufferHeight)
     }
 
     private fun reportBufferReadyIfFocused() {
-        if (!hasWindowFocus() || !textureView.isAvailable || reportedReadyEpoch == resumeEpoch) return
+        if (!hasWindowFocus() || availableSurface() == null || reportedReadyEpoch == resumeEpoch) return
         reportedReadyEpoch = resumeEpoch
         bufferReadyCallback?.invoke(resumeEpoch)
     }
 
     private fun scheduleBufferCorrection() {
-        applyBufferSize(textureView.surfaceTexture)
+        applyBufferSize()
         updateLayout()
     }
 
-    private fun ensureOutputSurface() {
-        if (outputSurface == null) textureView.surfaceTexture?.let { outputSurface = Surface(it) }
-    }
+    private fun availableSurface(): Surface? = surfaceView.holder.surface.takeIf { it.isValid }
 
     private fun updateLayout() {
         if (width == 0 || height == 0) return
-        transformLayer.rotationDegrees = rotationDegrees
-        transformLayer.mirrorHorizontally = mirrorHorizontally
         transformLayer.assistZoom = assistZoom
         transformLayer.sourceCenterX = centerX
         transformLayer.sourceCenterY = centerY
-        transformLayer.sourceToDisplayRotation = sourceToDisplayRotation
         transformLayer.pivotX = width / 2f
         transformLayer.pivotY = height / 2f
         transformLayer.scaleX = 1f
@@ -249,30 +219,15 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Textu
         }
     }
 
-    private inner class RotationLayout(context: Context, private val content: View, private val overlay: View) : ViewGroup(context) {
+    private inner class PreviewLayout(context: Context, private val content: View, private val overlay: View) : ViewGroup(context) {
         var displayAspect: Float = 1f
             set(value) { field = value.coerceAtLeast(0.0001f); requestLayout() }
-        var rotationDegrees: Int = 0
-            set(value) {
-                if (field == value) return
-                field = value
-                requestLayout()
-            }
-
-        var mirrorHorizontally: Boolean = false
-            set(value) {
-                if (field == value) return
-                field = value
-                requestLayout()
-            }
         var assistZoom: Float = 1f
             set(value) { field = value.coerceAtLeast(1f); invalidate() }
         var sourceCenterX: Float = 0.5f
             set(value) { field = value.coerceIn(0f, 1f); invalidate() }
         var sourceCenterY: Float = 0.5f
             set(value) { field = value.coerceIn(0f, 1f); invalidate() }
-        var sourceToDisplayRotation: Int = 0
-            set(value) { field = normalizedQuarterTurn(value); invalidate() }
         val displayedContentWidth: Int
             get() = overlay.measuredWidth.coerceAtLeast(1)
         val displayedContentHeight: Int
@@ -286,7 +241,6 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Textu
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
             val measuredWidth = MeasureSpec.getSize(widthMeasureSpec)
             val measuredHeight = MeasureSpec.getSize(heightMeasureSpec)
-            val swapsDimensions = rotationDegrees == 90 || rotationDegrees == 270
             val containerAspect = measuredWidth.toFloat() / measuredHeight.coerceAtLeast(1)
             val displayedWidth: Int
             val displayedHeight: Int
@@ -297,11 +251,9 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Textu
                 displayedHeight = measuredHeight
                 displayedWidth = kotlin.math.floor(displayedHeight * displayAspect).toInt()
             }
-            val childWidth = if (swapsDimensions) displayedHeight else displayedWidth
-            val childHeight = if (swapsDimensions) displayedWidth else displayedHeight
             content.measure(
-                MeasureSpec.makeMeasureSpec(childWidth, MeasureSpec.EXACTLY),
-                MeasureSpec.makeMeasureSpec(childHeight, MeasureSpec.EXACTLY),
+                MeasureSpec.makeMeasureSpec(displayedWidth, MeasureSpec.EXACTLY),
+                MeasureSpec.makeMeasureSpec(displayedHeight, MeasureSpec.EXACTLY),
             )
             overlay.measure(
                 MeasureSpec.makeMeasureSpec(displayedWidth, MeasureSpec.EXACTLY),
@@ -322,27 +274,15 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Textu
 
         override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
             layoutOneView(content)
-            content.scaleX = if (mirrorHorizontally) -1f else 1f
-            content.scaleY = 1f
-            content.rotation = rotationDegrees.toFloat()
             layoutOneView(overlay)
-            overlay.scaleX = 1f
-            overlay.scaleY = 1f
-            overlay.rotation = 0f
 
             pivotX = width / 2f
             pivotY = height / 2f
             scaleX = assistZoom
             scaleY = assistZoom
-            val (displayCenterX, displayCenterY) = sourcePointToDisplay(
-                sourceCenterX,
-                sourceCenterY,
-                sourceToDisplayRotation,
-                mirrorHorizontally,
-            )
             val (screenOffsetX, screenOffsetY) = boundedPreviewTranslation(
-                displayCenterX = displayCenterX,
-                displayCenterY = displayCenterY,
+                displayCenterX = sourceCenterX,
+                displayCenterY = sourceCenterY,
                 contentWidth = overlay.measuredWidth,
                 contentHeight = overlay.measuredHeight,
                 viewportWidth = width,
@@ -355,11 +295,17 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Textu
     }
 }
 
-private fun capturePreviewAspect(width: Int, height: Int, rotation: Int): Float {
+internal fun previewAspect(width: Int, height: Int, rotationDegrees: Int): Float {
     val safeWidth = width.coerceAtLeast(1).toFloat()
     val safeHeight = height.coerceAtLeast(1).toFloat()
-    return if (rotation == 90 || rotation == 270) safeHeight / safeWidth else safeWidth / safeHeight
+    return if (normalizedQuarterTurn(rotationDegrees) in setOf(90, 270)) {
+        safeHeight / safeWidth
+    } else {
+        safeWidth / safeHeight
+    }
 }
+
+private fun normalizedQuarterTurn(degrees: Int): Int = ((degrees % 360) + 360) % 360
 
 internal fun screenDragToSource(
     dx: Float,
@@ -367,28 +313,11 @@ internal fun screenDragToSource(
     contentWidth: Int,
     contentHeight: Int,
     zoom: Float,
-    rotationDegrees: Int,
-    mirrored: Boolean,
 ): Pair<Float, Float> {
     val safeZoom = zoom.coerceAtLeast(1f)
-    val normalizedX = (if (mirrored) -dx else dx) / safeZoom / contentWidth.coerceAtLeast(1)
+    val normalizedX = dx / safeZoom / contentWidth.coerceAtLeast(1)
     val normalizedY = dy / safeZoom / contentHeight.coerceAtLeast(1)
-    return when (normalizedQuarterTurn(rotationDegrees)) {
-        90 -> normalizedY to -normalizedX
-        180 -> -normalizedX to -normalizedY
-        270 -> -normalizedY to normalizedX
-        else -> normalizedX to normalizedY
-    }
-}
-
-internal fun sourcePointToDisplay(
-    x: Float,
-    y: Float,
-    rotationDegrees: Int,
-    mirrored: Boolean,
-): Pair<Float, Float> {
-    val (rotatedX, rotatedY) = rotateVector(x - 0.5f, y - 0.5f, rotationDegrees)
-    return (0.5f + if (mirrored) -rotatedX else rotatedX) to (0.5f + rotatedY)
+    return normalizedX to normalizedY
 }
 
 internal fun boundedPreviewTranslation(
@@ -407,13 +336,3 @@ internal fun boundedPreviewTranslation(
     val maxY = ((contentHeight * safeZoom - viewportHeight) / 2f).coerceAtLeast(0f)
     return requestedX.coerceIn(-maxX, maxX) to requestedY.coerceIn(-maxY, maxY)
 }
-
-private fun normalizedQuarterTurn(degrees: Int): Int = ((degrees % 360) + 360) % 360
-
-private fun rotateVector(x: Float, y: Float, degrees: Int): Pair<Float, Float> =
-    when (normalizedQuarterTurn(degrees)) {
-        90 -> -y to x
-        180 -> -x to -y
-        270 -> y to -x
-        else -> x to y
-    }
