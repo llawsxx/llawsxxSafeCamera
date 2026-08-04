@@ -60,13 +60,17 @@ object CameraRequestControls {
 
         if (config.manualExposure) {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-            characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)?.let {
-                builder.set(CaptureRequest.SENSOR_SENSITIVITY, config.iso.coerceIn(it.lower, it.upper))
+            val sensitivityRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+            val requestedIso = if (config.unrestrictedIso) config.iso else sensitivityRange?.let {
+                config.iso.coerceIn(it.lower, it.upper)
             }
-            characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)?.let {
+            requestedIso?.let { builder.set(CaptureRequest.SENSOR_SENSITIVITY, it) }
+            val exposureRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+            val requestedExposure = if (config.unrestrictedExposure) config.exposureNs else exposureRange?.let {
                 val maximum = minOf(it.upper, config.maximumExposureNs).coerceAtLeast(it.lower)
-                builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, config.exposureNs.coerceIn(it.lower, maximum))
+                config.exposureNs.coerceIn(it.lower, maximum)
             }
+            requestedExposure?.let { builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, it) }
             val apertures = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES) ?: floatArrayOf()
             config.aperture?.takeIf { aperture -> apertures.any { it == aperture } }
                 ?.let { builder.set(CaptureRequest.LENS_APERTURE, it) }
@@ -113,13 +117,18 @@ object CameraRequestControls {
         }
         val afModes = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
         val minimumFocusDistance = characteristics.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
-        if (config.focusMode == FocusMode.MANUAL && minimumFocusDistance > 0f &&
-            afModes.contains(CaptureRequest.CONTROL_AF_MODE_OFF)
+        if (config.focusMode == FocusMode.MANUAL && (
+                config.unrestrictedFocus || (
+                    minimumFocusDistance > 0f && afModes.contains(CaptureRequest.CONTROL_AF_MODE_OFF)
+                )
+            )
         ) {
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
             builder.set(
                 CaptureRequest.LENS_FOCUS_DISTANCE,
-                config.focusDistanceDiopters.coerceIn(0f, minimumFocusDistance),
+                if (config.unrestrictedFocus) config.focusDistanceDiopters else {
+                    config.focusDistanceDiopters.coerceIn(0f, minimumFocusDistance)
+                },
             )
         } else {
             val automaticMode = when {

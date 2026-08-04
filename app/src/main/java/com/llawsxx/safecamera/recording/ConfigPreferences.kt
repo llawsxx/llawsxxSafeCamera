@@ -93,6 +93,18 @@ object ConfigPreferences {
             whiteBalanceBlueGain = p.getFloat("whiteBalanceBlueGain", 1f).coerceIn(1f, 8f),
             focusMode = enumValue(p.getString("focusMode", null), FocusMode.CONTINUOUS),
             focusDistanceDiopters = p.getFloat("focusDistanceDiopters", 0f).coerceAtLeast(0f),
+            isoPresets = p.getString("isoPresets", null)
+                ?.split(',')?.mapNotNull(String::toIntOrNull)?.filter { it > 0 }?.distinct()
+                ?: emptyList(),
+            shutterPresets = p.getString("shutterPresets", null)
+                ?.split(',')?.map(String::trim)?.filter { parseShutterExposureNs(it) != null }?.distinct()
+                ?: emptyList(),
+            focusDistancePresets = p.getString("focusDistancePresets", null)
+                ?.split(',')?.mapNotNull(::decodeFocusDistancePreset)?.distinct()
+                ?: emptyList(),
+            unrestrictedIso = p.getBoolean("unrestrictedIso", false),
+            unrestrictedExposure = p.getBoolean("unrestrictedExposure", false),
+            unrestrictedFocus = p.getBoolean("unrestrictedFocus", false),
             mfAssistMagnifications = p.getString("mfAssistMagnifications", null)
                 ?.split(',')?.mapNotNull { it.toIntOrNull() }?.filter { it >= 2 }?.distinct()
                 ?.sorted() ?: listOf(2, 4, 8),
@@ -178,6 +190,15 @@ object ConfigPreferences {
             .putFloat("whiteBalanceBlueGain", c.whiteBalanceBlueGain)
             .putString("focusMode", c.focusMode.name)
             .putFloat("focusDistanceDiopters", c.focusDistanceDiopters)
+            .putString("isoPresets", c.isoPresets.joinToString(","))
+            .putString("shutterPresets", c.shutterPresets.joinToString(","))
+            .putString(
+                "focusDistancePresets",
+                c.focusDistancePresets.joinToString(",") { "${it.valueText}:${it.unit.name}" },
+            )
+            .putBoolean("unrestrictedIso", c.unrestrictedIso)
+            .putBoolean("unrestrictedExposure", c.unrestrictedExposure)
+            .putBoolean("unrestrictedFocus", c.unrestrictedFocus)
             .putString("mfAssistMagnifications", c.mfAssistMagnifications.joinToString(","))
             .putInt("mfAssistMagnification", c.mfAssistMagnification)
             .putFloat("mfAssistCenterX", c.mfAssistCenterX)
@@ -198,5 +219,15 @@ object ConfigPreferences {
     private fun videoColorTransfer(value: String?): VideoColorTransfer = when (value) {
         "SDR" -> VideoColorTransfer.BT601
         else -> enumValue(value, VideoColorTransfer.DEFAULT)
+    }
+
+    private fun decodeFocusDistancePreset(value: String): FocusDistancePreset? {
+        val separator = value.lastIndexOf(':')
+        if (separator <= 0) return null
+        val text = value.substring(0, separator).trim()
+        val unit = enumValue(value.substring(separator + 1), FocusDistanceUnit.M)
+        return FocusDistancePreset(text, unit).takeIf {
+            parseFocusDistanceDiopters(it.valueText, it.unit) != null
+        }
     }
 }

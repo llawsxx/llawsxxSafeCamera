@@ -18,6 +18,7 @@ import android.util.Log
 import android.view.Surface
 import android.os.StatFs
 import android.os.Environment
+import android.widget.Button
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -95,6 +96,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.ButtonColors
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -116,6 +118,8 @@ import com.llawsxx.safecamera.recording.ConfigPresetPreferences
 import com.llawsxx.safecamera.recording.ConfigPreferences
 import com.llawsxx.safecamera.recording.IdlePreviewCamera
 import com.llawsxx.safecamera.recording.FocusMode
+import com.llawsxx.safecamera.recording.FocusDistancePreset
+import com.llawsxx.safecamera.recording.FocusDistanceUnit
 import com.llawsxx.safecamera.recording.OrientationMode
 import com.llawsxx.safecamera.recording.PreviewLayout
 import com.llawsxx.safecamera.recording.PreviewMode
@@ -134,6 +138,8 @@ import com.llawsxx.safecamera.recording.VideoColorTransfer
 import com.llawsxx.safecamera.recording.VideoScalingAlgorithm
 import com.llawsxx.safecamera.recording.awbLabel
 import com.llawsxx.safecamera.recording.manualWhiteBalanceGains
+import com.llawsxx.safecamera.recording.parseFocusDistanceDiopters
+import com.llawsxx.safecamera.recording.parseShutterExposureNs
 import com.llawsxx.safecamera.recording.recordingOrientationHint
 import com.llawsxx.safecamera.recording.rotatedDimensions
 import com.llawsxx.safecamera.ui.theme.LlawsxxSafeCameraTheme
@@ -334,8 +340,10 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 width = size.first,
                 height = size.second,
                 fps = if (savedFpsSupported) config.fps else preferredFps(camera),
-                iso = camera.isoRange?.let { config.iso.coerceIn(it.lower, it.upper) } ?: config.iso,
-                exposureNs = camera.exposureRange?.let { config.exposureNs.coerceIn(it.lower, it.upper) } ?: config.exposureNs,
+            iso = camera.isoRange?.takeUnless { config.unrestrictedIso }
+                ?.let { config.iso.coerceIn(it.lower, it.upper) } ?: config.iso,
+            exposureNs = camera.exposureRange?.takeUnless { config.unrestrictedExposure }
+                ?.let { config.exposureNs.coerceIn(it.lower, it.upper) } ?: config.exposureNs,
                 aperture = config.aperture?.takeIf(camera.apertures::contains) ?: camera.apertures.firstOrNull(),
                 exposureCompensation = camera.exposureCompensationRange?.let {
                     config.exposureCompensation.coerceIn(it.lower, it.upper)
@@ -430,7 +438,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         }
     }
     LaunchedEffect(config.fps, config.cameraId, cameras) {
-        selectedCamera?.exposureRange?.let { range ->
+        selectedCamera?.exposureRange?.takeUnless { config.unrestrictedExposure }?.let { range ->
             val maximum = minOf(range.upper, config.maximumExposureNs).coerceAtLeast(range.lower)
             val exposure = config.exposureNs.coerceIn(range.lower, maximum)
             if (exposure != config.exposureNs) config = config.copy(exposureNs = exposure)
@@ -444,6 +452,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.manualExposure,
         config.iso,
         config.exposureNs,
+        config.unrestrictedIso,
+        config.unrestrictedExposure,
         config.aperture,
         config.exposureCompensation,
         config.awbMode,
@@ -458,6 +468,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.whiteBalanceBlueGain,
         config.focusMode,
         config.focusDistanceDiopters,
+        config.unrestrictedFocus,
         config.opticalStabilization,
         config.noiseReductionMode,
         config.edgeMode,
@@ -504,6 +515,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.manualExposure,
         config.iso,
         config.exposureNs,
+        config.unrestrictedIso,
+        config.unrestrictedExposure,
         config.aperture,
         config.exposureCompensation,
         config.awbMode,
@@ -518,6 +531,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.whiteBalanceBlueGain,
         config.focusMode,
         config.focusDistanceDiopters,
+        config.unrestrictedFocus,
         config.opticalStabilization,
         config.noiseReductionMode,
         config.edgeMode,
@@ -1229,6 +1243,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                         CameraProcessingControls(camera, config, state !is RecorderState.Starting && state !is RecorderState.Stopping) {
                             config = it
                         }
+                        CameraValuePresetSettings(config, recording) { config = it }
                         MfassistSettings(config, recording) { config = it }
                         Section("编码器颜色元数据") {
                             Labeled("Range") {
@@ -1471,6 +1486,7 @@ private fun MainRecorderScreen(
     onBufferReady: (Int) -> Unit,
 ) {
     val context = LocalContext.current
+    var presetControl by remember { mutableStateOf<CameraPresetControl?>(null) }
     val recording = state is RecorderState.Recording || state is RecorderState.Starting || state is RecorderState.Stopping
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     if (isLandscape && config.hasVideo && camera != null) {
@@ -1492,6 +1508,8 @@ private fun MainRecorderScreen(
             onExitApp = onExitApp,
             onSurface = onSurface,
             onBufferReady = onBufferReady,
+            presetControl = presetControl,
+            onPresetControlChange = { presetControl = it },
         )
         DisposableEffect(Unit) { onDispose { onSurface(null) } }
         return
@@ -1537,6 +1555,8 @@ private fun MainRecorderScreen(
                     liveExposure = liveExposure,
                     enabled = state !is RecorderState.Starting && state !is RecorderState.Stopping && !config.highSpeedMode,
                     onChange = onConfigChange,
+                    presetControl = presetControl,
+                    onPresetControlChange = { presetControl = it },
                 )
             }
             Row(
@@ -1552,6 +1572,7 @@ private fun MainRecorderScreen(
                     onSurface = onSurface,
                     onBufferReady = onBufferReady,
                     onConfigChange = onConfigChange,
+                    presetControl = presetControl,
                 )
             }
         } else {
@@ -1583,6 +1604,8 @@ private fun LandscapeMainRecorderScreen(
     onExitApp: () -> Unit,
     onSurface: (Surface?) -> Unit,
     onBufferReady: (Int) -> Unit,
+    presetControl: CameraPresetControl?,
+    onPresetControlChange: (CameraPresetControl?) -> Unit,
 ) {
     Column(
         Modifier.fillMaxSize().statusBarsPadding().padding(vertical = 4.dp),
@@ -1626,6 +1649,8 @@ private fun LandscapeMainRecorderScreen(
                 liveExposure = liveExposure,
                 enabled = state !is RecorderState.Starting && state !is RecorderState.Stopping && !config.highSpeedMode,
                 onChange = onConfigChange,
+                presetControl = presetControl,
+                onPresetControlChange = onPresetControlChange,
                 modifier = Modifier.width(356.dp).fillMaxHeight(),
             )
             RemainingSpacePreview(
@@ -1638,6 +1663,7 @@ private fun LandscapeMainRecorderScreen(
                 onBufferReady = onBufferReady,
                 onConfigChange = onConfigChange,
                 showZoomControls = false,
+                presetControl = presetControl,
             )
             ZoomControls(
                 config = config,
@@ -1662,6 +1688,7 @@ private fun RemainingSpacePreview(
     onBufferReady: (Int) -> Unit,
     onConfigChange: (RecordingConfig) -> Unit,
     showZoomControls: Boolean = true,
+    presetControl: CameraPresetControl? = null,
 ) {
     val previewBuffer = previewBufferSize(camera, config)
     Box(modifier, contentAlignment = Alignment.Center) {
@@ -1685,6 +1712,9 @@ private fun RemainingSpacePreview(
                 mfAssistCenterX = boundedAssistCenter(config.mfAssistCenterX + dx, config.mfAssistMagnification),
                 mfAssistCenterY = boundedAssistCenter(config.mfAssistCenterY + dy, config.mfAssistMagnification),
             )) },
+            presetControl = presetControl,
+            config = config,
+            onConfigChange = onConfigChange,
         )
         if (showZoomControls) {
             Row(
@@ -1860,6 +1890,7 @@ private fun FullscreenRecorder(
     val context = LocalContext.current
     val previewBuffer = previewBufferSize(camera, config)
     var controlsVisible by remember { mutableStateOf(true) }
+    var presetControl by remember { mutableStateOf<CameraPresetControl?>(null) }
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
         val fullscreenPreviewModifier = Modifier.fillMaxSize()
@@ -1882,7 +1913,10 @@ private fun FullscreenRecorder(
                 mfAssistCenterX = boundedAssistCenter(config.mfAssistCenterX + dx, config.mfAssistMagnification),
                 mfAssistCenterY = boundedAssistCenter(config.mfAssistCenterY + dy, config.mfAssistMagnification),
             )) },
-            onTap = { controlsVisible = !controlsVisible },
+            onTap = {
+                controlsVisible = !controlsVisible
+                if (!controlsVisible) presetControl = null
+            },
         )
         if (isLandscape) {
             Row(
@@ -1942,19 +1976,32 @@ private fun FullscreenRecorder(
         }
         if (controlsVisible) camera?.let {
             if (isLandscape) {
-                LandscapeCameraControls(
-                    camera = it,
-                    config = config,
-                    liveExposure = liveExposure,
-                    enabled = state !is RecorderState.Starting && state !is RecorderState.Stopping && !config.highSpeedMode,
-                    onChange = onConfigChange,
-                    overlay = true,
+                Row(
                     modifier = Modifier
                         .align(Alignment.CenterStart)
                         .padding(start = 8.dp, top = 48.dp, bottom = 54.dp)
-                        .width(356.dp)
                         .fillMaxHeight(),
-                )
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    LandscapeCameraControls(
+                        camera = it,
+                        config = config,
+                        liveExposure = liveExposure,
+                        enabled = state !is RecorderState.Starting && state !is RecorderState.Stopping && !config.highSpeedMode,
+                        onChange = onConfigChange,
+                        presetControl = presetControl,
+                        onPresetControlChange = { presetControl = it },
+                        overlay = true,
+                        modifier = Modifier.width(356.dp).fillMaxHeight(),
+                    )
+                    presetControl?.let { control ->
+                        CameraPresetOverlay(
+                            control = control,
+                            config = config,
+                            onConfigChange = onConfigChange,
+                        )
+                    }
+                }
                 ZoomControls(
                     config = config,
                     onChange = onConfigChange,
@@ -1962,21 +2009,33 @@ private fun FullscreenRecorder(
                     modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp),
                 )
             } else {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0x22000000)),
+                Column(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .padding(top = 76.dp)
-                        .fillMaxWidth()
-                        .heightIn(max = 250.dp),
+                        .fillMaxWidth(),
                 ) {
-                    FullscreenCameraControls(
-                        camera = it,
-                        config = config,
-                        liveExposure = liveExposure,
-                        enabled = state !is RecorderState.Starting && state !is RecorderState.Stopping && !config.highSpeedMode,
-                        onChange = onConfigChange,
-                    )
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0x22000000)),
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 250.dp),
+                    ) {
+                        FullscreenCameraControls(
+                            camera = it,
+                            config = config,
+                            liveExposure = liveExposure,
+                            enabled = state !is RecorderState.Starting && state !is RecorderState.Stopping && !config.highSpeedMode,
+                            onChange = onConfigChange,
+                            presetControl = presetControl,
+                            onPresetControlChange = { presetControl = it },
+                        )
+                    }
+                    presetControl?.let { control ->
+                        CameraPresetOverlay(
+                            control = control,
+                            config = config,
+                            onConfigChange = onConfigChange,
+                        )
+                    }
                 }
             }
         }
@@ -2057,6 +2116,9 @@ private fun PreviewPanel(
     centerX: Float = 0.5f,
     centerY: Float = 0.5f,
     onPan: ((Float, Float) -> Unit)? = null,
+    presetControl: CameraPresetControl? = null,
+    config: RecordingConfig? = null,
+    onConfigChange: ((RecordingConfig) -> Unit)? = null,
 ) {
     val panelModifier = modifier.let {
         if (onTap != null) it.clickable(onClick = onTap) else it
@@ -2105,6 +2167,84 @@ private fun PreviewPanel(
                         },
                         color = Color(0xFFCBD0D3),
                     )
+                }
+            }
+            if (presetControl != null && config != null && onConfigChange != null) {
+                CameraPresetOverlay(
+                    control = presetControl,
+                    config = config,
+                    onConfigChange = onConfigChange,
+                    modifier = Modifier.align(Alignment.TopStart),
+                )
+            }
+        }
+    }
+}
+
+private enum class CameraPresetControl { ISO, SHUTTER, FOCUS }
+
+@Composable
+private fun CameraPresetOverlay(
+    control: CameraPresetControl,
+    config: RecordingConfig,
+    onConfigChange: (RecordingConfig) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val entries: List<Pair<String, () -> Unit>> = when (control) {
+        CameraPresetControl.ISO -> config.isoPresets.takeIf { config.manualExposure }.orEmpty().map { iso ->
+            "ISO $iso" to {
+                onConfigChange(
+                    config.copy(manualExposure = true, iso = iso, unrestrictedIso = true)
+                )
+            }
+        }
+        CameraPresetControl.SHUTTER -> config.shutterPresets.takeIf { config.manualExposure }.orEmpty().mapNotNull { text ->
+            parseShutterExposureNs(text)?.let { exposureNs ->
+                "$text s" to {
+                    onConfigChange(
+                        config.copy(
+                            manualExposure = true,
+                            exposureNs = exposureNs,
+                            unrestrictedExposure = true,
+                        )
+                    )
+                }
+            }
+        }
+        CameraPresetControl.FOCUS -> config.focusDistancePresets
+            .takeIf { config.focusMode == FocusMode.MANUAL }.orEmpty().mapNotNull { preset ->
+            parseFocusDistanceDiopters(preset.valueText, preset.unit)?.let { diopters ->
+                "${preset.valueText} ${preset.unit.label}" to {
+                    onConfigChange(
+                        config.copy(
+                            focusMode = FocusMode.MANUAL,
+                            focusDistanceDiopters = diopters,
+                            unrestrictedFocus = true,
+                        )
+                    )
+                }
+            }
+        }
+    }
+    if (entries.isEmpty()) return
+    Card(
+        modifier = modifier.padding(8.dp).width(148.dp).heightIn(max = 260.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+    ) {
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            entries.forEach { (label, action) ->
+                OutlinedButton(
+                    onClick = action,
+                    modifier = Modifier.fillMaxWidth().height(36.dp),
+                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = Color.Black.copy(alpha = 0.3f)
+                    )
+                ) {
+                    Text(label, color = Color.White, style = MaterialTheme.typography.labelLarge, maxLines = 1)
                 }
             }
         }
@@ -2316,7 +2456,11 @@ private fun CompactExposureControls(
     enabled: Boolean,
     onChange: (RecordingConfig) -> Unit,
 ) {
-    ToggleLine("手动曝光", config.manualExposure, enabled && camera.isoRange != null) {
+    ToggleLine(
+        "手动曝光",
+        config.manualExposure,
+        enabled && (camera.isoRange != null || config.isoPresets.isNotEmpty() || config.shutterPresets.isNotEmpty()),
+    ) {
         onChange(config.copy(manualExposure = it))
     }
     if (config.manualExposure) {
@@ -2326,7 +2470,7 @@ private fun CompactExposureControls(
                     Text("ISO ${config.iso}", style = MaterialTheme.typography.labelMedium)
                     Slider(
                         value = config.iso.coerceIn(range.lower, range.upper).toFloat(),
-                        onValueChange = { onChange(config.copy(iso = it.toInt())) },
+                        onValueChange = { onChange(config.copy(iso = it.toInt(), unrestrictedIso = false)) },
                         valueRange = range.lower.toFloat()..range.upper.toFloat(),
                         enabled = enabled,
                     )
@@ -2339,7 +2483,7 @@ private fun CompactExposureControls(
                     Text("快门 ${formatShutter(config.exposureNs)}", style = MaterialTheme.typography.labelMedium)
                     Slider(
                         value = (config.exposureNs / 1_000f).coerceIn(minUs, maxUs),
-                        onValueChange = { onChange(config.copy(exposureNs = (it * 1_000).toLong())) },
+                        onValueChange = { onChange(config.copy(exposureNs = (it * 1_000).toLong(), unrestrictedExposure = false)) },
                         valueRange = minUs..maxUs,
                         enabled = enabled,
                     )
@@ -2517,6 +2661,8 @@ private fun LandscapeCameraControls(
     liveExposure: CameraExposureState?,
     enabled: Boolean,
     onChange: (RecordingConfig) -> Unit,
+    presetControl: CameraPresetControl?,
+    onPresetControlChange: (CameraPresetControl?) -> Unit,
     modifier: Modifier = Modifier,
     overlay: Boolean = false,
 ) {
@@ -2526,8 +2672,9 @@ private fun LandscapeCameraControls(
     val displayedIso = if (config.manualExposure) config.iso else liveExposure?.iso ?: config.iso
     val displayedExposureNs = if (config.manualExposure) config.exposureNs else liveExposure?.exposureNs ?: config.exposureNs
     val displayedAperture = if (config.manualExposure) config.aperture else liveExposure?.aperture ?: config.aperture
-    val supportsManualFocus = camera.minimumFocusDistance > 0f &&
-        camera.afModes.contains(CameraCharacteristics.CONTROL_AF_MODE_OFF)
+    val supportsManualFocus = (
+        camera.minimumFocusDistance > 0f && camera.afModes.contains(CameraCharacteristics.CONTROL_AF_MODE_OFF)
+        ) || config.focusDistancePresets.isNotEmpty()
     val foreground = if (overlay) Color.White else Color.Unspecified
     Card(
         modifier = modifier,
@@ -2552,16 +2699,21 @@ private fun LandscapeCameraControls(
                     Switch(
                         checked = config.manualExposure,
                         onCheckedChange = { manual ->
+                            onPresetControlChange(null)
                             onChange(
                                 if (manual) config.copy(
                                     manualExposure = true,
                                     iso = liveExposure?.iso ?: config.iso,
                                     exposureNs = liveExposure?.exposureNs ?: config.exposureNs,
                                     aperture = liveExposure?.aperture ?: config.aperture,
+                                    unrestrictedIso = false,
+                                    unrestrictedExposure = false,
                                 ) else config.copy(manualExposure = false),
                             )
                         },
-                        enabled = enabled && camera.isoRange != null,
+                        enabled = enabled && (
+                            camera.isoRange != null || config.isoPresets.isNotEmpty() || config.shutterPresets.isNotEmpty()
+                            ),
                         modifier = Modifier.size(30.dp).scale(0.65f),
                     )
                 }
@@ -2575,27 +2727,55 @@ private fun LandscapeCameraControls(
                                 OutlinedButton(
                                     onClick = {
                                         when (control) {
-                                            FullscreenControl.WB -> { selected = control; whiteBalanceExpanded = true }
-                                            FullscreenControl.APERTURE -> { selected = control; apertureExpanded = true }
+                                            FullscreenControl.ISO -> {
+                                                selected = control
+                                                onPresetControlChange(
+                                                    CameraPresetControl.ISO.takeIf {
+                                                        config.manualExposure && config.isoPresets.isNotEmpty() &&
+                                                            presetControl != CameraPresetControl.ISO
+                                                    }
+                                                )
+                                            }
+                                            FullscreenControl.SHUTTER -> {
+                                                selected = control
+                                                onPresetControlChange(
+                                                    CameraPresetControl.SHUTTER.takeIf {
+                                                        config.manualExposure && config.shutterPresets.isNotEmpty() &&
+                                                            presetControl != CameraPresetControl.SHUTTER
+                                                    }
+                                                )
+                                            }
+                                            FullscreenControl.WB -> { selected = control; onPresetControlChange(null); whiteBalanceExpanded = true }
+                                            FullscreenControl.APERTURE -> { selected = control; onPresetControlChange(null); apertureExpanded = true }
                                             FullscreenControl.FOCUS -> if (supportsManualFocus) {
-                                                if (config.focusMode == FocusMode.MANUAL && selected != control) {
-                                                    selected = control
+                                                if (config.focusMode == FocusMode.MANUAL) {
+                                                    if (config.focusDistancePresets.isNotEmpty() &&
+                                                        presetControl != CameraPresetControl.FOCUS
+                                                    ) {
+                                                        selected = control
+                                                        onPresetControlChange(CameraPresetControl.FOCUS)
+                                                    } else {
+                                                        onPresetControlChange(null)
+                                                        onChange(config.copy(focusMode = FocusMode.CONTINUOUS))
+                                                    }
                                                 } else {
                                                     selected = control
-                                                    val nextManual = config.focusMode != FocusMode.MANUAL
+                                                    onPresetControlChange(
+                                                        CameraPresetControl.FOCUS.takeIf { config.focusDistancePresets.isNotEmpty() }
+                                                    )
                                                     onChange(
                                                         config.copy(
-                                                            focusMode = if (nextManual) FocusMode.MANUAL else FocusMode.CONTINUOUS,
-                                                            focusDistanceDiopters = if (nextManual) {
+                                                            focusMode = FocusMode.MANUAL,
+                                                            focusDistanceDiopters =
                                                                 liveExposure?.focusDistanceDiopters
                                                                     ?.coerceIn(0f, camera.minimumFocusDistance)
-                                                                    ?: config.focusDistanceDiopters
-                                                            } else config.focusDistanceDiopters,
+                                                                    ?: config.focusDistanceDiopters,
+                                                            unrestrictedFocus = false,
                                                         ),
                                                     )
                                                 }
                                             }
-                                            else -> selected = control
+                                            else -> { selected = control; onPresetControlChange(null) }
                                         }
                                     },
                                     enabled = enabled && when (control) {
@@ -2674,7 +2854,7 @@ private fun LandscapeCameraControls(
                                 label = "ISO",
                                 valueText = displayedIso.toString(),
                                 value = displayedIso.coerceIn(range.lower, range.upper).toFloat(),
-                                onValueChange = { onChange(config.copy(manualExposure = true, iso = it.toInt())) },
+                                onValueChange = { onChange(config.copy(manualExposure = true, iso = it.toInt(), unrestrictedIso = false)) },
                                 valueRange = range.lower.toFloat()..range.upper.toFloat(),
                                 enabled = enabled && config.manualExposure,
                                 lightText = overlay,
@@ -2689,7 +2869,7 @@ private fun LandscapeCameraControls(
                                 label = "快门",
                                 valueText = formatShutter(displayedExposureNs),
                                 value = (displayedExposureNs / 1_000f).coerceIn(range.lower / 1_000f, maximum / 1_000f),
-                                onValueChange = { onChange(config.copy(manualExposure = true, exposureNs = (it * 1_000).toLong())) },
+                                onValueChange = { onChange(config.copy(manualExposure = true, exposureNs = (it * 1_000).toLong(), unrestrictedExposure = false)) },
                                 valueRange = range.lower / 1_000f..maximum / 1_000f,
                                 enabled = enabled && config.manualExposure,
                                 lightText = overlay,
@@ -2714,17 +2894,21 @@ private fun LandscapeCameraControls(
                     }
                     FullscreenControl.WB -> LandscapeWhiteBalanceSliders(config, enabled, overlay, onChange)
                     FullscreenControl.FOCUS -> if (config.focusMode == FocusMode.MANUAL && supportsManualFocus) {
-                        LandscapeSliderColumns {
-                            VerticalValueSlider(
-                                label = "对焦",
-                                valueText = focusDistanceLabel(config.focusDistanceDiopters.coerceIn(0f, camera.minimumFocusDistance)),
-                                value = config.focusDistanceDiopters.coerceIn(0f, camera.minimumFocusDistance),
-                                onValueChange = { onChange(config.copy(focusDistanceDiopters = it)) },
-                                valueRange = 0f..camera.minimumFocusDistance,
-                                enabled = enabled,
-                                lightText = overlay,
-                                tickLabel = ::focusDistanceLabel,
-                            )
+                        if (camera.minimumFocusDistance > 0f) {
+                            LandscapeSliderColumns {
+                                VerticalValueSlider(
+                                    label = "对焦",
+                                    valueText = focusDistanceLabel(config.focusDistanceDiopters.coerceIn(0f, camera.minimumFocusDistance)),
+                                    value = config.focusDistanceDiopters.coerceIn(0f, camera.minimumFocusDistance),
+                                    onValueChange = { onChange(config.copy(focusDistanceDiopters = it, unrestrictedFocus = false)) },
+                                    valueRange = 0f..camera.minimumFocusDistance,
+                                    enabled = enabled,
+                                    lightText = overlay,
+                                    tickLabel = ::focusDistanceLabel,
+                                )
+                            }
+                        } else {
+                            Text("使用右侧对焦预设", color = foreground, modifier = Modifier.align(Alignment.Center))
                         }
                     }
                     FullscreenControl.APERTURE -> Text(
@@ -3056,9 +3240,20 @@ private fun FullscreenCameraControls(
     liveExposure: CameraExposureState?,
     enabled: Boolean,
     onChange: (RecordingConfig) -> Unit,
+    presetControl: CameraPresetControl?,
+    onPresetControlChange: (CameraPresetControl?) -> Unit,
 ) {
     Column(Modifier.fillMaxWidth()) {
-        QuickCameraControls(camera, config, liveExposure, enabled, onChange, lightText = true)
+        QuickCameraControls(
+            camera,
+            config,
+            liveExposure,
+            enabled,
+            onChange,
+            lightText = true,
+            presetControl = presetControl,
+            onPresetControlChange = onPresetControlChange,
+        )
         Row(
             Modifier.fillMaxWidth().padding(end = 6.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -3085,6 +3280,8 @@ private fun QuickCameraControls(
     enabled: Boolean,
     onChange: (RecordingConfig) -> Unit,
     lightText: Boolean = false,
+    presetControl: CameraPresetControl? = null,
+    onPresetControlChange: (CameraPresetControl?) -> Unit = {},
 ) {
     var selected by remember { mutableStateOf(FullscreenControl.ISO) }
     var whiteBalanceExpanded by remember { mutableStateOf(false) }
@@ -3092,8 +3289,9 @@ private fun QuickCameraControls(
     val displayedIso = if (config.manualExposure) config.iso else liveExposure?.iso ?: config.iso
     val displayedExposureNs = if (config.manualExposure) config.exposureNs else liveExposure?.exposureNs ?: config.exposureNs
     val displayedAperture = if (config.manualExposure) config.aperture else liveExposure?.aperture ?: config.aperture
-    val supportsManualFocus = camera.minimumFocusDistance > 0f &&
-        camera.afModes.contains(CameraCharacteristics.CONTROL_AF_MODE_OFF)
+    val supportsManualFocus = (
+        camera.minimumFocusDistance > 0f && camera.afModes.contains(CameraCharacteristics.CONTROL_AF_MODE_OFF)
+        ) || config.focusDistancePresets.isNotEmpty()
     val adjustmentRows = when (selected) {
         FullscreenControl.WB -> when {
             !config.manualWhiteBalance -> 1
@@ -3126,16 +3324,21 @@ private fun QuickCameraControls(
                 Switch(
                     checked = config.manualExposure,
                     onCheckedChange = { manual ->
+                        onPresetControlChange(null)
                         onChange(
                             if (manual) config.copy(
                                 manualExposure = true,
                                 iso = liveExposure?.iso ?: config.iso,
                                 exposureNs = liveExposure?.exposureNs ?: config.exposureNs,
                                 aperture = liveExposure?.aperture ?: config.aperture,
+                                unrestrictedIso = false,
+                                unrestrictedExposure = false,
                             ) else config.copy(manualExposure = false)
                         )
                     },
-                    enabled = enabled && camera.isoRange != null,
+                    enabled = enabled && (
+                        camera.isoRange != null || config.isoPresets.isNotEmpty() || config.shutterPresets.isNotEmpty()
+                        ),
                     modifier = Modifier.size(32.dp).scale(0.68f),
                 )
             }
@@ -3144,27 +3347,55 @@ private fun QuickCameraControls(
                     OutlinedButton(
                         onClick = {
                             when (control) {
-                                FullscreenControl.WB -> { selected = control; whiteBalanceExpanded = true }
-                                FullscreenControl.APERTURE -> { selected = control; apertureExpanded = true }
+                                FullscreenControl.ISO -> {
+                                    selected = control
+                                    onPresetControlChange(
+                                        CameraPresetControl.ISO.takeIf {
+                                            config.manualExposure && config.isoPresets.isNotEmpty() &&
+                                                presetControl != CameraPresetControl.ISO
+                                        }
+                                    )
+                                }
+                                FullscreenControl.SHUTTER -> {
+                                    selected = control
+                                    onPresetControlChange(
+                                        CameraPresetControl.SHUTTER.takeIf {
+                                            config.manualExposure && config.shutterPresets.isNotEmpty() &&
+                                                presetControl != CameraPresetControl.SHUTTER
+                                        }
+                                    )
+                                }
+                                FullscreenControl.WB -> { selected = control; onPresetControlChange(null); whiteBalanceExpanded = true }
+                                FullscreenControl.APERTURE -> { selected = control; onPresetControlChange(null); apertureExpanded = true }
                                 FullscreenControl.FOCUS -> if (supportsManualFocus) {
-                                    if (config.focusMode == FocusMode.MANUAL && selected != control) {
-                                        selected = control
+                                    if (config.focusMode == FocusMode.MANUAL) {
+                                        if (config.focusDistancePresets.isNotEmpty() &&
+                                            presetControl != CameraPresetControl.FOCUS
+                                        ) {
+                                            selected = control
+                                            onPresetControlChange(CameraPresetControl.FOCUS)
+                                        } else {
+                                            onPresetControlChange(null)
+                                            onChange(config.copy(focusMode = FocusMode.CONTINUOUS))
+                                        }
                                     } else {
                                         selected = control
-                                        val nextManual = config.focusMode != FocusMode.MANUAL
+                                        onPresetControlChange(
+                                            CameraPresetControl.FOCUS.takeIf { config.focusDistancePresets.isNotEmpty() }
+                                        )
                                         onChange(
                                             config.copy(
-                                                focusMode = if (nextManual) FocusMode.MANUAL else FocusMode.CONTINUOUS,
-                                                focusDistanceDiopters = if (nextManual) {
+                                                focusMode = FocusMode.MANUAL,
+                                                focusDistanceDiopters =
                                                     liveExposure?.focusDistanceDiopters
                                                         ?.coerceIn(0f, camera.minimumFocusDistance)
-                                                        ?: config.focusDistanceDiopters
-                                                } else config.focusDistanceDiopters,
+                                                        ?: config.focusDistanceDiopters,
+                                                unrestrictedFocus = false,
                                             ),
                                         )
                                     }
                                 }
-                                else -> selected = control
+                                else -> { selected = control; onPresetControlChange(null) }
                             }
                         },
                         enabled = enabled && when (control) {
@@ -3252,20 +3483,22 @@ private fun QuickCameraControls(
                 FullscreenControl.ISO -> camera.isoRange?.let { range ->
                     CompactValueSlider(
                         value = displayedIso.coerceIn(range.lower, range.upper).toFloat(),
-                        onValueChange = { onChange(config.copy(manualExposure = true, iso = it.toInt())) },
+                        onValueChange = { onChange(config.copy(manualExposure = true, iso = it.toInt(), unrestrictedIso = false)) },
                         valueRange = range.lower.toFloat()..range.upper.toFloat(),
                         enabled = enabled && config.manualExposure,
                         valueLabel = { "ISO ${it.toInt()}" },
+                        currentValueLabel = "ISO $displayedIso",
                     )
                 }
                 FullscreenControl.SHUTTER -> camera.exposureRange?.let { range ->
                     val maximum = minOf(range.upper, config.maximumExposureNs).coerceAtLeast(range.lower)
                     CompactValueSlider(
                         value = (displayedExposureNs / 1_000f).coerceIn(range.lower / 1_000f, maximum / 1_000f),
-                        onValueChange = { onChange(config.copy(manualExposure = true, exposureNs = (it * 1_000).toLong())) },
+                        onValueChange = { onChange(config.copy(manualExposure = true, exposureNs = (it * 1_000).toLong(), unrestrictedExposure = false)) },
                         valueRange = range.lower / 1_000f..maximum / 1_000f,
                         enabled = enabled && config.manualExposure,
                         valueLabel = { formatShutter((it * 1_000).toLong()) },
+                        currentValueLabel = formatShutter(displayedExposureNs),
                     )
                 }
                 FullscreenControl.EV -> camera.exposureCompensationRange?.let { range ->
@@ -3290,6 +3523,7 @@ private fun QuickCameraControls(
                     compact = true,
                     lightText = lightText,
                     liveFocusDistanceDiopters = liveExposure?.focusDistanceDiopters,
+                    presetLocationText = "使用下方对焦预设",
                 )
             }
         }
@@ -3491,9 +3725,11 @@ private fun FocusControls(
     compact: Boolean = false,
     lightText: Boolean = false,
     liveFocusDistanceDiopters: Float? = null,
+    presetLocationText: String = "使用预览左上角的对焦预设",
 ) {
-    val supportsManual = camera.minimumFocusDistance > 0f &&
-        camera.afModes.contains(CameraCharacteristics.CONTROL_AF_MODE_OFF)
+    val supportsManual = (
+        camera.minimumFocusDistance > 0f && camera.afModes.contains(CameraCharacteristics.CONTROL_AF_MODE_OFF)
+        ) || config.focusDistancePresets.isNotEmpty()
     val textColor = if (lightText) Color.White else Color.Unspecified
     if (!compact) {
         OutlinedButton(
@@ -3518,6 +3754,10 @@ private fun FocusControls(
         }
     }
     if (config.focusMode == FocusMode.MANUAL && supportsManual) {
+        if (camera.minimumFocusDistance <= 0f) {
+            Text(presetLocationText, color = textColor, style = MaterialTheme.typography.bodySmall)
+            return
+        }
         if (!compact) Text(
             "对焦 ${focusDistanceLabel(config.focusDistanceDiopters.coerceIn(0f, camera.minimumFocusDistance))}",
             color = textColor, style = MaterialTheme.typography.labelSmall,
@@ -3525,15 +3765,16 @@ private fun FocusControls(
         if (compact) {
             CompactValueSlider(
                 value = config.focusDistanceDiopters.coerceIn(0f, camera.minimumFocusDistance),
-                onValueChange = { onChange(config.copy(focusDistanceDiopters = it)) },
+                onValueChange = { onChange(config.copy(focusDistanceDiopters = it, unrestrictedFocus = false)) },
                 valueRange = 0f..camera.minimumFocusDistance,
                 enabled = enabled,
                 valueLabel = { focusDistanceLabel(it) },
+                currentValueLabel = focusDistanceLabel(config.focusDistanceDiopters),
             )
         } else {
             Slider(
                 value = config.focusDistanceDiopters.coerceIn(0f, camera.minimumFocusDistance),
-                onValueChange = { onChange(config.copy(focusDistanceDiopters = it)) },
+                onValueChange = { onChange(config.copy(focusDistanceDiopters = it, unrestrictedFocus = false)) },
                 valueRange = 0f..camera.minimumFocusDistance,
                 enabled = enabled,
                 modifier = Modifier.fillMaxWidth(),
@@ -3552,6 +3793,7 @@ private fun CompactValueSlider(
     enabled: Boolean,
     valueLabel: (Float) -> String,
     steps: Int = 0,
+    currentValueLabel: String = valueLabel(value),
 ) {
     Box(Modifier.fillMaxWidth().height(44.dp), contentAlignment = Alignment.Center) {
         CameraRuler(
@@ -3565,7 +3807,7 @@ private fun CompactValueSlider(
             modifier = Modifier.fillMaxSize(),
         )
         Text(
-            text = valueLabel(value),
+            text = currentValueLabel,
             color = MaterialTheme.colorScheme.inverseOnSurface,
             style = MaterialTheme.typography.labelSmall,
             modifier = Modifier
@@ -3618,6 +3860,174 @@ private fun MfassistSettings(config: RecordingConfig, recording: Boolean, onChan
             }
         }
         Text("当前预览倍率：${config.mfAssistMagnification}x", style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+@Composable
+private fun CameraValuePresetSettings(
+    config: RecordingConfig,
+    recording: Boolean,
+    onChange: (RecordingConfig) -> Unit,
+) {
+    Section("ISO / 快门 / 对焦预设") {
+        Text(
+            "预设值会原样提交给 Camera2，不按相机声明范围裁剪；设备仍可能拒绝或自行修正。",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        IsoPresetEditor(config, !recording, onChange)
+        ShutterPresetEditor(config, !recording, onChange)
+        FocusPresetEditor(config, !recording, onChange)
+    }
+}
+
+@Composable
+private fun IsoPresetEditor(
+    config: RecordingConfig,
+    enabled: Boolean,
+    onChange: (RecordingConfig) -> Unit,
+) {
+    var text by remember { mutableStateOf("") }
+    val value = text.toIntOrNull()?.takeIf { it > 0 }
+    Labeled("ISO 预设") {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it.filter(Char::isDigit) },
+                label = { Text("整数 ISO") },
+                singleLine = true,
+                enabled = enabled,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedButton(
+                onClick = {
+                    value?.let { onChange(config.copy(isoPresets = (config.isoPresets + it).distinct())) }
+                    text = ""
+                },
+                enabled = enabled && value != null,
+                modifier = Modifier.align(Alignment.CenterVertically),
+            ) { Text("添加") }
+        }
+        PresetChipRows(config.isoPresets.map { "ISO $it" }) { index ->
+            onChange(config.copy(isoPresets = config.isoPresets.filterIndexed { i, _ -> i != index }))
+        }
+    }
+}
+
+@Composable
+private fun ShutterPresetEditor(
+    config: RecordingConfig,
+    enabled: Boolean,
+    onChange: (RecordingConfig) -> Unit,
+) {
+    var text by remember { mutableStateOf("") }
+    val exposureNs = parseShutterExposureNs(text)
+    Labeled("快门预设") {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { value -> text = value.filter { it.isDigit() || it == '.' || it == '/' } },
+                label = { Text("秒，例如 0.12、1.5、1/60.34") },
+                singleLine = true,
+                enabled = enabled,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedButton(
+                onClick = {
+                    val normalized = text.trim()
+                    if (parseShutterExposureNs(normalized) != null) {
+                        onChange(config.copy(shutterPresets = (config.shutterPresets + normalized).distinct()))
+                        text = ""
+                    }
+                },
+                enabled = enabled && exposureNs != null,
+                modifier = Modifier.align(Alignment.CenterVertically),
+            ) { Text("添加") }
+        }
+        Text(
+            "曝光时间：${exposureNs?.let { "$it ns" } ?: "—"}",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        PresetChipRows(config.shutterPresets.mapNotNull { preset ->
+            parseShutterExposureNs(preset)?.let { "$preset s · $it ns" }
+        }) { index ->
+            onChange(config.copy(shutterPresets = config.shutterPresets.filterIndexed { i, _ -> i != index }))
+        }
+    }
+}
+
+@Composable
+private fun FocusPresetEditor(
+    config: RecordingConfig,
+    enabled: Boolean,
+    onChange: (RecordingConfig) -> Unit,
+) {
+    var text by remember { mutableStateOf("") }
+    var unit by remember { mutableStateOf(FocusDistanceUnit.CM) }
+    val diopters = parseFocusDistanceDiopters(text, unit)
+    Labeled("对焦距离预设") {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { value -> text = value.filter { it.isDigit() || it == '.' } },
+                label = { Text("距离，例如 12.34") },
+                singleLine = true,
+                enabled = enabled,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.weight(1f),
+            )
+            ChoiceRow(FocusDistanceUnit.entries, unit, { it.label }, enabled) { unit = it }
+            OutlinedButton(
+                onClick = {
+                    val normalized = text.trim()
+                    val preset = FocusDistancePreset(normalized, unit)
+                    if (parseFocusDistanceDiopters(normalized, unit) != null) {
+                        onChange(
+                            config.copy(
+                                focusDistancePresets = (config.focusDistancePresets + preset).distinct()
+                            )
+                        )
+                        text = ""
+                    }
+                },
+                enabled = enabled && diopters != null,
+                modifier = Modifier.align(Alignment.CenterVertically),
+            ) { Text("添加") }
+        }
+        Text(
+            "屈光度：${diopters?.let { String.format(Locale.US, "%.8f D", it) } ?: "—"}",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        PresetChipRows(config.focusDistancePresets.mapNotNull { preset ->
+            parseFocusDistanceDiopters(preset.valueText, preset.unit)?.let {
+                "${preset.valueText} ${preset.unit.label} · ${String.format(Locale.US, "%.8f D", it)}"
+            }
+        }) { index ->
+            onChange(
+                config.copy(
+                    focusDistancePresets = config.focusDistancePresets.filterIndexed { i, _ -> i != index }
+                )
+            )
+        }
+    }
+}
+
+@Composable
+private fun PresetChipRows(labels: List<String>, onRemove: (Int) -> Unit) {
+    labels.forEachIndexed { index, label ->
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+            OutlinedButton(
+                onClick = { onRemove(index) },
+                modifier = Modifier.height(32.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+            ) { Text("删除", style = MaterialTheme.typography.labelSmall) }
+        }
     }
 }
 
