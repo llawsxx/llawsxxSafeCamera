@@ -16,6 +16,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.Surface
+import android.widget.Toast
 import android.os.StatFs
 import android.os.Environment
 import android.widget.Button
@@ -124,6 +125,7 @@ import com.llawsxx.safecamera.recording.OrientationMode
 import com.llawsxx.safecamera.recording.PreviewLayout
 import com.llawsxx.safecamera.recording.PreviewMode
 import com.llawsxx.safecamera.recording.RecorderController
+import com.llawsxx.safecamera.recording.RecorderMessage
 import com.llawsxx.safecamera.recording.RecorderState
 import com.llawsxx.safecamera.recording.RecordingConfig
 import com.llawsxx.safecamera.recording.RecordingMode
@@ -213,6 +215,18 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
     val previewRotationDegrees = normalizedQuarterTurn(
         (selectedCamera?.sensorOrientation ?: 0) - currentDisplayRotation,
     )
+
+    LaunchedEffect(context, appInForeground) {
+        if (appInForeground) {
+            RecorderController.messages.collect { message ->
+                Toast.makeText(
+                    context,
+                    message.message,
+                    if (message is RecorderMessage.Error) Toast.LENGTH_LONG else Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
 
     fun saveCameraMode() {
         CameraModePreferences.save(context, config.cameraId, config)

@@ -91,7 +91,7 @@ class RecordingService : Service() {
         val outputStore = RecordingOutputStore(this, config.outputTreeUri)
         val generation = ++callbackGeneration
         val onStarted: (String) -> Unit = { path -> mainHandler.post {
-            if (stopping || engine == null || generation != callbackGeneration) return@post
+                if (stopping || engine == null || generation != callbackGeneration) return@post
                 notificationStartedAtElapsedMs = android.os.SystemClock.elapsedRealtime()
                 RecorderController.update(
                     RecorderState.Recording(RecordingStats(segment = 1, outputPath = path))
@@ -105,6 +105,7 @@ class RecordingService : Service() {
         } }
         val onNotice: (String) -> Unit = { message -> mainHandler.post {
             if (!stopping && engine != null && generation == callbackGeneration) {
+                RecorderController.notice(message)
                 updateNotification("录制继续 · $message")
             }
         } }
