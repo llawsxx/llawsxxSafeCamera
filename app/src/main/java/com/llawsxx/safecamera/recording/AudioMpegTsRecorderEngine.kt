@@ -31,14 +31,20 @@ class AudioMpegTsRecorderEngine(
     private val thread = HandlerThread("native-ts-audio").apply { start() }
     private val handler = Handler(thread.looper)
     private var config = initialConfig
-    private var record: AudioRecord? = null
+    @Volatile private var record: AudioRecord? = null
     private var automaticGainControl: AutomaticGainControl? = null
-    private var codec: MediaCodec? = null
-    private var mux: NativeTsMuxCoordinator? = null
-    private var output: NativeTsOutput? = null
+    @Volatile private var codec: MediaCodec? = null
+    @Volatile private var mux: NativeTsMuxCoordinator? = null
+    @Volatile private var output: NativeTsOutput? = null
     private var running = AtomicBoolean(false)
     private var stopStarted = AtomicBoolean(false)
+    private val audioRecordLock = Any()
+    private var audioStopRequested = false
+    private var audioRecordingStarted = false
+    private val finalizationGate = FinalizationGate()
+    private val preparing = AtomicBoolean(false)
     private var audioThread: Thread? = null
+    @Volatile private var finalizationThread: Thread? = null
     private var startedAtMs = 0L
     private var samples = 0L
     private val encodedBytes = AtomicLong(0L)
@@ -47,7 +53,12 @@ class AudioMpegTsRecorderEngine(
     @Volatile private var levelDb = -60f
 
     override fun start(preview: Surface?, previewEnabled: Boolean, previewRotationDegrees: Int) {
-        handler.post { runCatching { prepare() }.onFailure { onError("无法启动 native MPEG-TS 音频录制: ${it.message}") } }
+        handler.post {
+            if (stopStarted.get()) return@post
+            preparing.set(true)
+            runCatching { prepare() }.onFailure { onError("无法启动 native MPEG-TS 音频录制: ${it.message}") }
+            preparing.set(false)
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -127,7 +138,7 @@ class AudioMpegTsRecorderEngine(
         val info = MediaCodec.BufferInfo()
         var inputEnded = false
         try {
-            record.startRecording()
+            if (!startAudioRecording(record)) return
             while (true) {
                 if (running.get() && !inputEnded) {
                     val inputIndex = codec.dequeueInputBuffer(10_000)
@@ -167,34 +178,22 @@ class AudioMpegTsRecorderEngine(
             }
         } catch (t: Throwable) {
             if (running.get()) onError("音频编码失败: ${t.message}")
-        } finally { runCatching { record.stop() } }
+        } finally { requestAudioStop() }
     }
 
     override fun stop(onComplete: () -> Unit) {
         if (!stopStarted.compareAndSet(false, true)) return
-        handler.post {
-            running.set(false)
-            runCatching { record?.stop() }
-            audioThread?.join(5_000)
-            runCatching { codec?.stop() }; runCatching { codec?.release() }; codec = null
-            releaseAutomaticGainControl()
-            runCatching { record?.release() }; record = null
-            mux?.finish(); mux = null
-            output?.close(); output = null
-            thread.quitSafely(); onComplete()
-        }
+        running.set(false)
+        startFinalizationWhenPrepared(onComplete)
     }
 
     override fun forceRelease() {
         running.set(false)
-        runCatching { record?.stop() }
-        audioThread?.join(1_000)
-        runCatching { codec?.stop() }; runCatching { codec?.release() }; codec = null
-        releaseAutomaticGainControl()
-        runCatching { record?.release() }; record = null
-        runCatching { mux?.finish() }; mux = null
-        runCatching { output?.close() }; output = null
-        thread.quitSafely()
+        handler.removeCallbacks(statsTick)
+        // Stopping AudioRecord unblocks the audio loop. The finalization thread
+        // remains the sole owner that releases codec, muxer and output objects.
+        requestAudioStop()
+        startFinalizationWhenPrepared({})
     }
     override fun updatePreview(surface: Surface?, enabled: Boolean, previewRotationDegrees: Int) = Unit
     override fun switchCamera(cameraId: String) = Unit
@@ -204,6 +203,51 @@ class AudioMpegTsRecorderEngine(
         runCatching { automaticGainControl?.enabled = false }
         runCatching { automaticGainControl?.release() }
         automaticGainControl = null
+    }
+
+    private fun requestAudioStop() {
+        synchronized(audioRecordLock) {
+            audioStopRequested = true
+            if (audioRecordingStarted) {
+                runCatching { record?.stop() }
+                audioRecordingStarted = false
+            }
+        }
+    }
+
+    private fun startAudioRecording(audioRecord: AudioRecord): Boolean = synchronized(audioRecordLock) {
+        if (audioStopRequested) return@synchronized false
+        audioRecord.startRecording()
+        audioRecordingStarted = true
+        true
+    }
+
+    private fun startFinalization(onComplete: () -> Unit) {
+        if (!finalizationGate.tryClaim()) return
+        handler.removeCallbacks(statsTick)
+        finalizationThread = Thread({
+            requestAudioStop()
+            audioThread?.join()
+            runCatching { codec?.stop() }; runCatching { codec?.release() }; codec = null
+            releaseAutomaticGainControl()
+            runCatching { record?.release() }; record = null
+            runCatching { mux?.finish() }; mux = null
+            runCatching { output?.close() }; output = null
+            thread.quitSafely()
+            finalizationThread = null
+            onComplete()
+        }, "native-ts-audio-finalize").apply { isDaemon = true; start() }
+    }
+
+    private fun startFinalizationWhenPrepared(onComplete: () -> Unit) {
+        if (preparing.get()) {
+            Thread({
+                while (preparing.get()) Thread.sleep(10)
+                startFinalization(onComplete)
+            }, "native-ts-audio-finalize-wait").apply { isDaemon = true; start() }
+        } else {
+            startFinalization(onComplete)
+        }
     }
 
     private val statsTick = object : Runnable {

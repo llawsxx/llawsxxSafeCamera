@@ -37,18 +37,18 @@ class CameraRecorderEngine(
     private val handler = Handler(thread.looper)
     private val manager = context.getSystemService(CameraManager::class.java)
     private var config = initialConfig
-    private var recorder: MediaRecorder? = null
-    private var camera: CameraDevice? = null
-    private var session: CameraCaptureSession? = null
+    @Volatile private var recorder: MediaRecorder? = null
+    @Volatile private var camera: CameraDevice? = null
+    @Volatile private var session: CameraCaptureSession? = null
     private var recorderSurface: Surface? = null
     private var previewSurface: Surface? = null
     private var previewEnabled = false
-    private var permanentPreviewRenderer: PermanentPreviewRenderer? = null
+    @Volatile private var permanentPreviewRenderer: PermanentPreviewRenderer? = null
     private var outputPath: String? = null
-    private var currentOutput: OutputHandle? = null
-    private var nextOutput: OutputHandle? = null
+    @Volatile private var currentOutput: OutputHandle? = null
+    @Volatile private var nextOutput: OutputHandle? = null
     private var baseName = ""
-    private var tsSink: StreamingTsSink? = null
+    @Volatile private var tsSink: StreamingTsSink? = null
     private var startedAtMs = 0L
     private var lastFrameNs = 0L
     private val fpsWindow = EventRateWindow(STATS_WINDOW_NS, 1_000_000_000L)
@@ -60,6 +60,8 @@ class CameraRecorderEngine(
     private var stopped = false
     private var sessionGeneration = 0
     private val stopStarted = AtomicBoolean(false)
+    private val finalizationGate = FinalizationGate()
+    private val preparing = AtomicBoolean(false)
     private val outputLock = Any()
     @Volatile private var finalizingRecorder: MediaRecorder? = null
     @Volatile private var finalizingSession: CameraCaptureSession? = null
@@ -68,8 +70,10 @@ class CameraRecorderEngine(
     private val lastStatsAt = AtomicLong(0L)
 
     override fun start(preview: Surface?, previewEnabled: Boolean, previewRotationDegrees: Int) { handler.post {
+        if (stopStarted.get()) return@post
         previewSurface = preview?.takeIf { it.isValid }
         this.previewEnabled = previewEnabled && (config.permanentPreviewSurface || previewSurface != null)
+        preparing.set(true)
         runCatching {
             if (config.permanentPreviewSurface) {
                 permanentPreviewRenderer = PermanentPreviewRenderer(
@@ -81,6 +85,7 @@ class CameraRecorderEngine(
             prepareRecorder()
         }
             .onFailure { fail("无法准备录制器: ${it.message}") }
+        preparing.set(false)
     } }
 
     private fun validateVideoConfig() {
@@ -123,67 +128,14 @@ class CameraRecorderEngine(
 
     override fun stop(onComplete: () -> Unit) {
         if (!stopStarted.compareAndSet(false, true)) return
+        stopped = true
         handler.post {
-            stopped = true
-            sessionGeneration++
-            handler.removeCallbacks(statsTick)
-            handler.removeCallbacks(audioMeterTick)
-            val activeRecorder = recorder
-            val activeSession = session
-            val activeCamera = camera
-            val activeSink = tsSink
-            val activePreviewRenderer = permanentPreviewRenderer
-            finalizingRecorder = activeRecorder
-            finalizingSession = activeSession
-            finalizingCamera = activeCamera
-            recorder = null
-            session = null
-            camera = null
-            tsSink = null
-            permanentPreviewRenderer = null
-            runCatching { activeSession?.stopRepeating() }
-
-            val unblockRecorder = Runnable {
-                runCatching { activeSession?.close() }
-                runCatching { activeCamera?.close() }
-            }
-            handler.postDelayed(unblockRecorder, 3_000)
-            finalizationThread = Thread({
-                try {
-                    runCatching { activeRecorder?.stop() }
-                    handler.removeCallbacks(unblockRecorder)
-                    runCatching { activeSession?.close() }
-                    runCatching { activeCamera?.close() }
-                    runCatching { activePreviewRenderer?.release() }
-                    runCatching { activeRecorder?.reset() }
-                    runCatching { activeRecorder?.release() }
-                    recorderSurface = null
-                    activeSink?.close()
-                    synchronized(outputLock) {
-                        currentOutput?.closeAndPublish()
-                        nextOutput?.discard()
-                        currentOutput = null
-                        nextOutput = null
-                    }
-                } finally {
-                    finalizingRecorder = null
-                    finalizingSession = null
-                    finalizingCamera = null
-                    finalizationThread = null
-                    thread.quitSafely()
-                    onComplete()
-                }
-            }, "safe-recorder-finalize").apply {
-                isDaemon = true
-                start()
-            }
+            startFinalization(onComplete)
         }
     }
 
     override fun forceRelease() {
         stopped = true
-        sessionGeneration++
-        val finalizerIsRunning = finalizationThread != null
         runCatching { finalizingSession?.close() }
         runCatching { finalizingCamera?.close() }
         // Do not release a MediaRecorder from this timeout thread while another
@@ -191,31 +143,73 @@ class CameraRecorderEngine(
         // implementations are not safe for that concurrent use and may abort
         // the whole process. Closing the camera/session above is sufficient to
         // unblock the finalizer; it will release the recorder in one thread.
-        finalizingSession = null
-        finalizingCamera = null
-        if (finalizerIsRunning) {
-            // The finalizer owns MediaRecorder and all output descriptors until
-            // stop() returns. Closing those here would reintroduce a native race.
-            return
+        if (preparing.get()) {
+            Thread({
+                while (preparing.get()) Thread.sleep(10)
+                startFinalization({})
+                runCatching { finalizingSession?.close() }
+                runCatching { finalizingCamera?.close() }
+            }, "safe-recorder-force-wait").apply { isDaemon = true; start() }
+        } else {
+            startFinalization({})
+            runCatching { finalizingSession?.close() }
+            runCatching { finalizingCamera?.close() }
         }
-        finalizingRecorder = null
-        handler.post {
-            handler.removeCallbacksAndMessages(null)
-            closeCamera()
-            runCatching { permanentPreviewRenderer?.release() }
-            permanentPreviewRenderer = null
-            runCatching { recorder?.release() }
-            recorder = null
-            recorderSurface = null
-            tsSink?.close()
-            tsSink = null
-            synchronized(outputLock) {
-                currentOutput?.closeAndPublish()
-                nextOutput?.discard()
-                currentOutput = null
-                nextOutput = null
+    }
+
+    private fun startFinalization(onComplete: () -> Unit) {
+        if (!finalizationGate.tryClaim()) return
+        sessionGeneration++
+        handler.removeCallbacks(statsTick)
+        handler.removeCallbacks(audioMeterTick)
+        val activeRecorder = recorder
+        val activeSession = session
+        val activeCamera = camera
+        val activeSink = tsSink
+        val activePreviewRenderer = permanentPreviewRenderer
+        finalizingRecorder = activeRecorder
+        finalizingSession = activeSession
+        finalizingCamera = activeCamera
+        recorder = null
+        session = null
+        camera = null
+        tsSink = null
+        permanentPreviewRenderer = null
+        runCatching { activeSession?.stopRepeating() }
+
+        val unblockRecorder = Runnable {
+            runCatching { activeSession?.close() }
+            runCatching { activeCamera?.close() }
+        }
+        handler.postDelayed(unblockRecorder, 3_000)
+        finalizationThread = Thread({
+            try {
+                runCatching { activeRecorder?.stop() }
+                handler.removeCallbacks(unblockRecorder)
+                runCatching { activeSession?.close() }
+                runCatching { activeCamera?.close() }
+                runCatching { activePreviewRenderer?.release() }
+                runCatching { activeRecorder?.reset() }
+                runCatching { activeRecorder?.release() }
+                recorderSurface = null
+                activeSink?.close()
+                synchronized(outputLock) {
+                    currentOutput?.closeAndPublish()
+                    nextOutput?.discard()
+                    currentOutput = null
+                    nextOutput = null
+                }
+            } finally {
+                finalizingRecorder = null
+                finalizingSession = null
+                finalizingCamera = null
+                finalizationThread = null
+                thread.quitSafely()
+                onComplete()
             }
-            thread.quitSafely()
+        }, "safe-recorder-finalize").apply {
+            isDaemon = true
+            start()
         }
     }
 

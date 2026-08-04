@@ -2131,8 +2131,8 @@ private fun RecordButton(
         Text(
             when {
                 state is RecorderState.Stopping -> "正在保存"
-                active -> "停止"
-                else -> "开始"
+                active -> "停止录制"
+                else -> "开始录制"
             }
         )
     }

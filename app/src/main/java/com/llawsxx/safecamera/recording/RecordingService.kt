@@ -17,7 +17,6 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.llawsxx.safecamera.MainActivity
 import com.llawsxx.safecamera.R
-import java.util.concurrent.atomic.AtomicBoolean
 
 class RecordingService : Service() {
     private var engine: RecorderEngine? = null
@@ -25,6 +24,11 @@ class RecordingService : Service() {
     private var currentConfig: RecordingConfig? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private var stopping = false
+    private var stoppingEngine: RecorderEngine? = null
+    private var stopErrorMessage: String? = null
+    private var stopForced = false
+    private var stopGeneration = 0L
+    private var callbackGeneration = 0L
     private var notificationStartedAtElapsedMs: Long? = null
 
     override fun onCreate() {
@@ -58,7 +62,7 @@ class RecordingService : Service() {
     }
 
     private fun startRecording(config: RecordingConfig) {
-        if (engine != null) return
+        if (engine != null || stopping) return
         currentConfig = config
         startAsForeground("正在准备录制", config)
         acquireWakeLock()
@@ -85,16 +89,28 @@ class RecordingService : Service() {
             }
         }
         val outputStore = RecordingOutputStore(this, config.outputTreeUri)
-        val onStarted: (String) -> Unit = { path ->
+        val generation = ++callbackGeneration
+        val onStarted: (String) -> Unit = { path -> mainHandler.post {
+            if (stopping || engine == null || generation != callbackGeneration) return@post
                 notificationStartedAtElapsedMs = android.os.SystemClock.elapsedRealtime()
                 RecorderController.update(
                     RecorderState.Recording(RecordingStats(segment = 1, outputPath = path))
                 )
                 updateNotification("录制中 · ${path.substringAfterLast('/')}")
+            } }
+        val onStats: (RecordingStats) -> Unit = { stats -> mainHandler.post {
+            if (!stopping && engine != null && generation == callbackGeneration) {
+                RecorderController.update(RecorderState.Recording(stats))
             }
-        val onStats: (RecordingStats) -> Unit = { stats -> RecorderController.update(RecorderState.Recording(stats)) }
-        val onNotice: (String) -> Unit = { message -> updateNotification("录制继续 · $message") }
-        val onError: (String) -> Unit = { message -> finishWithError(message) }
+        } }
+        val onNotice: (String) -> Unit = { message -> mainHandler.post {
+            if (!stopping && engine != null && generation == callbackGeneration) {
+                updateNotification("录制继续 · $message")
+            }
+        } }
+        val onError: (String) -> Unit = { message -> mainHandler.post {
+            if (generation == callbackGeneration) finishWithError(message)
+        } }
         val useNativeAudioTs = config.container == ContainerFormat.MPEG_TS && !config.hasVideo
         val useMediaCodecEngine = (config.mediaCodecEngineRequested || config.container == ContainerFormat.MPEG_TS) &&
             config.hasVideo && !config.highSpeedMode
@@ -142,56 +158,86 @@ class RecordingService : Service() {
     }
 
     private fun stopRecording() {
-        if (stopping) return
-        if (engine == null) {
-            stopSelf()
+        beginStopping(null)
+    }
+
+    private fun beginStopping(errorMessage: String?) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { beginStopping(errorMessage) }
             return
         }
-        RecorderController.update(RecorderState.Stopping())
-        stopping = true
+        if (stopping) {
+            if (errorMessage != null) {
+                stopErrorMessage = errorMessage
+                RecorderController.update(RecorderState.Error(errorMessage))
+            }
+            return
+        }
         val oldEngine = engine
+        if (oldEngine == null) {
+            finishService(errorMessage)
+            return
+        }
+        stopping = true
+        callbackGeneration++
+        stoppingEngine = oldEngine
+        stopErrorMessage = errorMessage
+        stopForced = false
+        val generation = ++stopGeneration
         engine = null
         RecorderController.previewUpdater = null
-        val finished = AtomicBoolean(false)
-        val finishNormally = {
-            if (!finished.compareAndSet(false, true)) Unit else {
-                mainHandler.removeCallbacksAndMessages(STOP_TIMEOUT_TOKEN)
-                stopping = false
-                releaseWakeLock()
-                RecorderController.update(RecorderState.Idle)
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+        RecorderController.update(
+            errorMessage?.let(RecorderState::Error) ?: RecorderState.Stopping()
+        )
+        runCatching {
+            oldEngine.stop {
+                mainHandler.post { completeStopping(generation) }
             }
-        }
-        oldEngine?.stop {
-            mainHandler.post { finishNormally() }
+        }.onFailure {
+            requestForcedStop(generation, oldEngine)
         }
         mainHandler.postAtTime({
-            if (finished.compareAndSet(false, true)) {
-                oldEngine?.forceRelease()
-                stopping = false
-                releaseWakeLock()
-                RecorderController.update(RecorderState.Error("保存超时，已强制结束；请检查最后一个文件是否可播放"))
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-            }
+            requestForcedStop(generation, oldEngine)
         }, STOP_TIMEOUT_TOKEN, android.os.SystemClock.uptimeMillis() + 12_000)
     }
 
     private fun finishWithError(message: String) {
-        RecorderController.update(RecorderState.Error(message))
-        val oldEngine = engine
-        engine = null
-        RecorderController.previewUpdater = null
-        oldEngine?.stop {
-            releaseWakeLock()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-        } ?: run {
-            releaseWakeLock()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+        beginStopping(message)
+    }
+
+    private fun requestForcedStop(generation: Long, oldEngine: RecorderEngine) {
+        if (!stopping || generation != stopGeneration || stoppingEngine !== oldEngine || stopForced) return
+        stopForced = true
+        stopErrorMessage = stopErrorMessage?.let { "$it；资源清理超时，已请求强制结束" }
+            ?: "保存超时，已请求强制结束；请检查最后一个文件是否可播放"
+        RecorderController.update(RecorderState.Error(checkNotNull(stopErrorMessage)))
+        Thread({ runCatching { oldEngine.forceRelease() } }, "recording-force-stop").apply {
+            isDaemon = true
+            start()
         }
+        mainHandler.postAtTime(
+            { completeStopping(generation) },
+            STOP_TIMEOUT_TOKEN,
+            android.os.SystemClock.uptimeMillis() + FORCE_STOP_GRACE_MS,
+        )
+    }
+
+    private fun completeStopping(generation: Long) {
+        if (!stopping || generation != stopGeneration) return
+        mainHandler.removeCallbacksAndMessages(STOP_TIMEOUT_TOKEN)
+        val message = stopErrorMessage
+        stopping = false
+        stoppingEngine = null
+        stopErrorMessage = null
+        stopForced = false
+        finishService(message)
+    }
+
+    private fun finishService(errorMessage: String?) {
+        releaseWakeLock()
+        RecorderController.update(errorMessage?.let(RecorderState::Error) ?: RecorderState.Idle)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     private fun acquireWakeLock() {
@@ -257,7 +303,8 @@ class RecordingService : Service() {
     }
 
     override fun onDestroy() {
-        if (engine != null) stopRecording() else releaseWakeLock()
+        if (engine != null && !stopping) stopRecording()
+        if (engine == null && !stopping) releaseWakeLock()
         super.onDestroy()
     }
 
@@ -272,6 +319,7 @@ class RecordingService : Service() {
         const val EXTRA_CAMERA_ID = "camera_id"
         private const val CHANNEL_ID = "safe_recording"
         private const val NOTIFICATION_ID = 4102
+        private const val FORCE_STOP_GRACE_MS = 3_000L
         private val STOP_TIMEOUT_TOKEN = Any()
     }
 }

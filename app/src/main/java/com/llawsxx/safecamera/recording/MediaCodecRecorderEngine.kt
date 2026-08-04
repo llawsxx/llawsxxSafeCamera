@@ -50,20 +50,20 @@ class MediaCodecRecorderEngine(
     private val cameraHandler = Handler(cameraThread.looper)
     private val cameraManager = context.getSystemService(CameraManager::class.java)
     private var config = initialConfig
-    private var camera: CameraDevice? = null
-    private var session: CameraCaptureSession? = null
+    @Volatile private var camera: CameraDevice? = null
+    @Volatile private var session: CameraCaptureSession? = null
     private var previewSurface: Surface? = null
     private var previewEnabled = false
-    private var permanentPreviewRenderer: PermanentPreviewRenderer? = null
-    private var encoderSurface: Surface? = null
-    private var transformRenderer: GlVideoTransformRenderer? = null
-    private var videoCodec: MediaCodec? = null
-    private var audioCodec: MediaCodec? = null
-    private var audioRecord: AudioRecord? = null
+    @Volatile private var permanentPreviewRenderer: PermanentPreviewRenderer? = null
+    @Volatile private var encoderSurface: Surface? = null
+    @Volatile private var transformRenderer: GlVideoTransformRenderer? = null
+    @Volatile private var videoCodec: MediaCodec? = null
+    @Volatile private var audioCodec: MediaCodec? = null
+    @Volatile private var audioRecord: AudioRecord? = null
     private var automaticGainControl: AutomaticGainControl? = null
-    private var output: OutputHandle? = null
-    private var mux: EncodedMuxCoordinator? = null
-    private var tsOutput: NativeTsOutput? = null
+    @Volatile private var output: OutputHandle? = null
+    @Volatile private var mux: EncodedMuxCoordinator? = null
+    @Volatile private var tsOutput: NativeTsOutput? = null
     private var segmentIndex = 1
     private var outputPath: String? = null
     private var sessionGeneration = 0
@@ -78,8 +78,14 @@ class MediaCodecRecorderEngine(
     private val bitrateWindow = CounterRateWindow(STATS_WINDOW_MS)
     private val running = AtomicBoolean(false)
     private val stopStarted = AtomicBoolean(false)
+    private val audioRecordLock = Any()
+    private var audioStopRequested = false
+    private var audioRecordingStarted = false
+    private val finalizationGate = FinalizationGate()
+    private val preparing = AtomicBoolean(false)
     private var videoDrainThread: Thread? = null
     private var audioThread: Thread? = null
+    @Volatile private var finalizationThread: Thread? = null
     private val firstVideoFrame = CountDownLatch(1)
     private var firstVideoPtsUs = Long.MIN_VALUE
     private var pixelRotationDegrees = 0
@@ -88,8 +94,10 @@ class MediaCodecRecorderEngine(
 
     override fun start(preview: Surface?, previewEnabled: Boolean, previewRotationDegrees: Int) {
         cameraHandler.post {
+            if (stopStarted.get()) return@post
             previewSurface = preview?.takeIf { it.isValid }
             this.previewEnabled = previewEnabled && (config.permanentPreviewSurface || previewSurface != null)
+            preparing.set(true)
             runCatching {
                 if (config.permanentPreviewSurface) {
                     permanentPreviewRenderer = PermanentPreviewRenderer(
@@ -100,6 +108,7 @@ class MediaCodecRecorderEngine(
                 }
                 prepare()
             }.onFailure { fail("无法启动 MediaCodec 录制: ${it.message}") }
+            preparing.set(false)
         }
     }
 
@@ -338,7 +347,7 @@ class MediaCodecRecorderEngine(
             var inputEnded = false
             try {
                 check(firstVideoFrame.await(5, TimeUnit.SECONDS)) { "等待相机首帧超时" }
-                record.startRecording()
+                if (!startAudioRecording(record)) return@Thread
                 var eosReceived = false
                 val stopDeadline = AtomicLong(Long.MAX_VALUE)
                 while (!eosReceived) {
@@ -387,7 +396,7 @@ class MediaCodecRecorderEngine(
             } catch (t: Throwable) {
                 if (running.get()) fail("音频编码失败: ${t.message}")
             } finally {
-                runCatching { record.stop() }
+                requestAudioStop()
             }
         }, "media-codec-audio").apply { start() }
     }
@@ -631,45 +640,62 @@ class MediaCodecRecorderEngine(
 
     override fun stop(onComplete: () -> Unit) {
         if (!stopStarted.compareAndSet(false, true)) return
+        running.set(false)
         cameraHandler.post {
-            running.set(false)
-            cameraHandler.removeCallbacks(statsTick)
+            startFinalization(onComplete, force = false)
+        }
+    }
+
+    override fun forceRelease() {
+        running.set(false)
+        cameraHandler.removeCallbacks(statsTick)
+        if (preparing.get()) {
+            Thread({
+                while (preparing.get()) Thread.sleep(10)
+                forceFinalize()
+            }, "exact-force-wait").apply { isDaemon = true; start() }
+        } else {
+            forceFinalize()
+        }
+    }
+
+    private fun forceFinalize() {
+        requestAudioStop()
+        runCatching { videoCodec?.signalEndOfInputStream() }
+        runCatching { session?.close() }
+        session = null
+        runCatching { camera?.close() }
+        camera = null
+        startFinalization({}, force = true)
+    }
+
+    private fun startFinalization(onComplete: () -> Unit, force: Boolean) {
+        if (!finalizationGate.tryClaim()) return
+        cameraHandler.removeCallbacks(statsTick)
+        if (!force) {
             runCatching { session?.stopRepeating() }
             runCatching { session?.close() }
             session = null
             runCatching { transformRenderer?.release() }
             transformRenderer = null
             runCatching { videoCodec?.signalEndOfInputStream() }
-            Thread({
-                runCatching { audioRecord?.stop() }
-                videoDrainThread?.join(5_000)
-                audioThread?.join(5_000)
-                releaseCameraBlocking()
-                releaseCodecs()
-                mux?.finish()
-                mux = null
-                tsOutput?.close()
-                tsOutput = null
-                output?.closeAndPublish()
-                output = null
-                cameraThread.quitSafely()
-                onComplete()
-            }, "exact-finalize").apply { isDaemon = true; start() }
         }
-    }
-
-    override fun forceRelease() {
-        running.set(false)
-        runCatching { audioRecord?.stop() }
-        releaseCameraBlocking()
-        releaseCodecs()
-        runCatching { mux?.finish() }
-        mux = null
-        runCatching { tsOutput?.close() }
-        tsOutput = null
-        output?.closeAndPublish()
-        output = null
-        cameraThread.quitSafely()
+        finalizationThread = Thread({
+            requestAudioStop()
+            videoDrainThread?.join()
+            audioThread?.join()
+            releaseCameraBlocking()
+            releaseCodecs()
+            runCatching { mux?.finish() }
+            mux = null
+            runCatching { tsOutput?.close() }
+            tsOutput = null
+            runCatching { output?.closeAndPublish() }
+            output = null
+            cameraThread.quitSafely()
+            finalizationThread = null
+            onComplete()
+        }, "exact-finalize").apply { isDaemon = true; start() }
     }
 
     private fun releaseCodecs() {
@@ -681,6 +707,23 @@ class MediaCodecRecorderEngine(
         runCatching { automaticGainControl?.release() }; automaticGainControl = null
         runCatching { audioRecord?.release() }; audioRecord = null
         runCatching { encoderSurface?.release() }; encoderSurface = null
+    }
+
+    private fun requestAudioStop() {
+        synchronized(audioRecordLock) {
+            audioStopRequested = true
+            if (audioRecordingStarted) {
+                runCatching { audioRecord?.stop() }
+                audioRecordingStarted = false
+            }
+        }
+    }
+
+    private fun startAudioRecording(record: AudioRecord): Boolean = synchronized(audioRecordLock) {
+        if (audioStopRequested) return@synchronized false
+        record.startRecording()
+        audioRecordingStarted = true
+        true
     }
 
     private fun cameraInputSurface(): Surface? =
