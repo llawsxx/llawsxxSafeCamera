@@ -73,9 +73,9 @@ class MediaCodecRecorderEngine(
     private var capturedFrames = 0L
     private var droppedFrames = 0L
     @Volatile private var audioLevelDb = -60f
-    private val videoSamples = AtomicLong(0L)
-    private var firstEncodedPtsUs = Long.MIN_VALUE
-    private var lastEncodedPtsUs = Long.MIN_VALUE
+    private val encodedBytes = AtomicLong(0L)
+    private val fpsWindow = EventRateWindow(STATS_WINDOW_US, 1_000_000L)
+    private val bitrateWindow = CounterRateWindow(STATS_WINDOW_MS)
     private val running = AtomicBoolean(false)
     private val stopStarted = AtomicBoolean(false)
     private var videoDrainThread: Thread? = null
@@ -310,9 +310,8 @@ class MediaCodecRecorderEngine(
                                     set(info.offset, info.size, (info.presentationTimeUs - firstVideoPtsUs).coerceAtLeast(0L), info.flags)
                                 }
                                 codec.getOutputBuffer(index)?.let { coordinator.writeVideo(it, rebasedInfo) }
-                                if (firstEncodedPtsUs == Long.MIN_VALUE) firstEncodedPtsUs = rebasedInfo.presentationTimeUs
-                                lastEncodedPtsUs = rebasedInfo.presentationTimeUs
-                                videoSamples.incrementAndGet()
+                                encodedBytes.addAndGet(info.size.toLong())
+                                fpsWindow.add(rebasedInfo.presentationTimeUs)
                             }
                             codec.releaseOutputBuffer(index, false)
                             if (eos) break
@@ -372,6 +371,7 @@ class MediaCodecRecorderEngine(
                                 val eos = outputInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                                 if (outputInfo.size > 0 && outputInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
                                     codec.getOutputBuffer(outputIndex)?.let { coordinator.writeAudio(it, outputInfo) }
+                                    encodedBytes.addAndGet(outputInfo.size.toLong())
                                 }
                                 codec.releaseOutputBuffer(outputIndex, false)
                                 if (eos) eosReceived = true
@@ -708,13 +708,14 @@ class MediaCodecRecorderEngine(
         override fun run() {
             if (!running.get() || startedAtMs == 0L) return
             val elapsed = SystemClock.elapsedRealtime() - startedAtMs
-            val encodedSeconds = if (lastEncodedPtsUs > firstEncodedPtsUs) {
-                (lastEncodedPtsUs - firstEncodedPtsUs) / 1_000_000.0
-            } else 0.0
             onStats(
                 RecordingStats(
                     elapsedMs = elapsed,
-                    averageFps = if (encodedSeconds > 0) (videoSamples.get() - 1) / encodedSeconds else 0.0,
+                    averageFps = fpsWindow.rate(),
+                    averageBitrateBitsPerSecond = bitrateWindow.ratePerSecond(
+                        SystemClock.elapsedRealtime(),
+                        encodedBytes.get(),
+                    ) * 8.0,
                     droppedFrames = droppedFrames,
                     segment = segmentIndex,
                     outputPath = outputPath,

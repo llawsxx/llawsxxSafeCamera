@@ -26,6 +26,7 @@ internal class NativeTsOutput(
     private var segmentStartPtsUs = Long.MIN_VALUE
     private var closed = false
     val bytesStreamed = AtomicLong(0L)
+    val bytesWritten = AtomicLong(0L)
 
     fun start(): String {
         check(!closed)
@@ -43,6 +44,7 @@ internal class NativeTsOutput(
             segmentStartPtsUs = ptsUs
         }
         checkNotNull(output).write(data)
+        bytesWritten.addAndGet(data.size.toLong())
         sendDatagrams(data)
     }
 

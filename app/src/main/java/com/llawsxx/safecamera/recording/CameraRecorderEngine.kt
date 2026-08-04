@@ -50,9 +50,10 @@ class CameraRecorderEngine(
     private var baseName = ""
     private var tsSink: StreamingTsSink? = null
     private var startedAtMs = 0L
-    private var firstFrameNs = 0L
     private var lastFrameNs = 0L
-    private var frameCount = 0L
+    private val fpsWindow = EventRateWindow(STATS_WINDOW_NS, 1_000_000_000L)
+    private val bitrateWindow = CounterRateWindow(STATS_WINDOW_MS)
+    private var completedOutputBytes = 0L
     private var droppedFrames = 0L
     @Volatile private var audioLevelDb = -60f
     private var segmentIndex = 1
@@ -400,6 +401,7 @@ class CameraRecorderEngine(
                         MediaRecorder.MEDIA_RECORDER_INFO_NEXT_OUTPUT_FILE_STARTED -> {
                             synchronized(outputLock) {
                                 if (stopped) return@setOnInfoListener
+                                completedOutputBytes += currentOutput?.currentSize() ?: 0L
                                 currentOutput?.closeAndPublish()
                                 currentOutput = nextOutput
                                 nextOutput = null
@@ -519,14 +521,13 @@ class CameraRecorderEngine(
                 whiteBalanceBlueGain = whiteBalanceGains?.blue,
             )
             val timestamp = result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP) ?: return
-            if (firstFrameNs == 0L) firstFrameNs = timestamp
             if (lastFrameNs > 0L) {
                 val expected = 1_000_000_000.0 / config.fps
                 val interval = timestamp - lastFrameNs
                 if (interval > expected * 1.5) droppedFrames += max(0, (interval / expected).toLong() - 1L)
             }
             lastFrameNs = timestamp
-            frameCount++
+            fpsWindow.add(timestamp)
             emitStats()
         }
     }
@@ -580,12 +581,14 @@ class CameraRecorderEngine(
         val now = System.currentTimeMillis()
         if (!force && now - lastStatsAt.get() < 1_000) return
         lastStatsAt.set(now)
-        val frameDuration = if (lastFrameNs > firstFrameNs) (lastFrameNs - firstFrameNs) / 1_000_000_000.0 else 0.0
-        val average = if (frameDuration > 0) (frameCount - 1) / frameDuration else 0.0
+        val totalBytes = tsSink?.bytesWritten ?: synchronized(outputLock) {
+            completedOutputBytes + (currentOutput?.currentSize() ?: 0L)
+        }
         onStats(
             RecordingStats(
                 elapsedMs = (now - startedAtMs).coerceAtLeast(0),
-                averageFps = average,
+                averageFps = fpsWindow.rate(),
+                averageBitrateBitsPerSecond = bitrateWindow.ratePerSecond(now, totalBytes) * 8.0,
                 droppedFrames = droppedFrames,
                 segment = segmentIndex,
                 outputPath = outputPath,

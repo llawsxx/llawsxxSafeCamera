@@ -18,12 +18,14 @@ class StreamingTsSink(
 ) {
     private val pipe = ParcelFileDescriptor.createPipe()
     private val bytes = AtomicLong(0L)
+    private val writtenBytes = AtomicLong(0L)
     private val ready = CountDownLatch(1)
     @Volatile private var startupError: Throwable? = null
     private val thread = Thread(::copyLoop, "ts-file-network-sink")
 
     val writeDescriptor: ParcelFileDescriptor get() = pipe[1]
     val bytesStreamed: Long get() = bytes.get()
+    val bytesWritten: Long get() = writtenBytes.get()
 
     fun start() {
         thread.start()
@@ -70,6 +72,7 @@ class StreamingTsSink(
                     onSegment(index, handle.displayPath)
                 }
                 output.write(buffer, 0, count)
+                writtenBytes.addAndGet(count.toLong())
                 if (socket != null) {
                     runCatching { socket.send(DatagramPacket(buffer, count, address, streamPort)) }
                     bytes.addAndGet(count.toLong())

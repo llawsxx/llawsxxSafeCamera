@@ -1645,7 +1645,7 @@ private fun LandscapeMainRecorderScreen(
                 modifier = Modifier.width(46.dp).align(Alignment.CenterVertically),
             )
         }
-        CompactRecordingDashboard(state, config)
+        CompactRecordingDashboard(state, config, bitrateOnSameLine = true)
         if (config.hasAudio) AudioLevelMeter((state as? RecorderState.Recording)?.stats?.audioLevelDb ?: -60f)
         permissionError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
     }
@@ -1899,12 +1899,6 @@ private fun FullscreenRecorder(
                     state !is RecorderState.Starting && state !is RecorderState.Stopping,
                     Modifier.width(116.dp),
                 ) { onCameraSelect(it) }
-                PreviewSizeChoice(
-                    camera,
-                    config,
-                    onConfigChange,
-                    state !is RecorderState.Starting && state !is RecorderState.Stopping && state !is RecorderState.Recording,
-                )
                 CompactRecordingDashboard(state, config, lightText = true, modifier = Modifier.weight(1f))
                 CompactChoice(
                     "方向",
@@ -2171,6 +2165,7 @@ private fun RecordingDashboard(state: RecorderState) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Metric("时长", formatDuration(s.elapsedMs))
                 Metric("平均 FPS", if (s.averageFps > 0) s.averageFps.format1() else "—")
+                Metric("实时码率", formatBitrate(s.averageBitrateBitsPerSecond))
                 Metric("估算丢帧", s.droppedFrames.toString())
                 Metric("分段", s.segment.toString())
             }
@@ -2185,6 +2180,7 @@ private fun CompactRecordingDashboard(
     state: RecorderState,
     config: RecordingConfig,
     lightText: Boolean = false,
+    bitrateOnSameLine: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var availableBytes by remember(config.outputTreeUri) { mutableStateOf<Long?>(null) }
@@ -2205,17 +2201,32 @@ private fun CompactRecordingDashboard(
         is RecorderState.Error -> "错误"
         is RecorderState.Recording -> "REC"
     }
-    Row(
-        modifier,
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(status, color = if (state is RecorderState.Recording) Color(0xFFFF5252) else color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
-        Text(formatDuration(stats?.elapsedMs ?: 0L), color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
-        Text("FPS ${stats?.averageFps?.takeIf { it > 0 }?.format1() ?: "—"}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
-        Text("丢帧 ${stats?.droppedFrames ?: 0}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
-        Text("剩余 ${availableBytes?.let(::formatStorageBytes) ?: "—"}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+    val bitrateText = "码率 ${formatBitrate(stats?.averageBitrateBitsPerSecond ?: 0.0)}"
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(status, color = if (state is RecorderState.Recording) Color(0xFFFF5252) else color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            Text(formatDuration(stats?.elapsedMs ?: 0L), color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            Text("FPS ${stats?.averageFps?.takeIf { it > 0 }?.format1() ?: "—"}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            Text("丢帧 ${stats?.droppedFrames ?: 0}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            Text("剩余 ${availableBytes?.let(::formatStorageBytes) ?: "—"}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            if (bitrateOnSameLine) {
+                Text(bitrateText, color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            }
+        }
+        if (!bitrateOnSameLine) {
+            Text(bitrateText, color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+        }
     }
+}
+
+private fun formatBitrate(bitsPerSecond: Double): String = when {
+    bitsPerSecond <= 0.0 -> "—"
+    bitsPerSecond >= 1_000_000.0 -> "${(bitsPerSecond / 1_000_000.0).format1()} Mbps"
+    else -> "${(bitsPerSecond / 1_000.0).format1()} kbps"
 }
 
 private fun formatStorageBytes(bytes: Long): String = when {

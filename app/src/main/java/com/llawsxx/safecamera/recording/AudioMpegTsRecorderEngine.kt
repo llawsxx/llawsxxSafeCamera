@@ -41,6 +41,8 @@ class AudioMpegTsRecorderEngine(
     private var audioThread: Thread? = null
     private var startedAtMs = 0L
     private var samples = 0L
+    private val encodedBytes = AtomicLong(0L)
+    private val bitrateWindow = CounterRateWindow(STATS_WINDOW_MS)
     private var segment = 1
     @Volatile private var levelDb = -60f
 
@@ -150,7 +152,10 @@ class AudioMpegTsRecorderEngine(
                     when {
                         index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> mux.setAudioFormat(codec.outputFormat)
                         index >= 0 -> {
-                            if (info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) codec.getOutputBuffer(index)?.let { mux.writeAudio(it, info) }
+                            if (info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
+                                codec.getOutputBuffer(index)?.let { mux.writeAudio(it, info) }
+                                encodedBytes.addAndGet(info.size.toLong())
+                            }
                             eos = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                             codec.releaseOutputBuffer(index, false)
                             if (eos) break
@@ -205,8 +210,20 @@ class AudioMpegTsRecorderEngine(
         override fun run() {
             if (!running.get() || startedAtMs == 0L) return
             val elapsed = SystemClock.elapsedRealtime() - startedAtMs
-            onStats(RecordingStats(elapsedMs = elapsed, segment = segment, outputPath = currentPath, bytesStreamed = output?.bytesStreamed?.get() ?: 0L, audioLevelDb = levelDb))
-            handler.postDelayed(this, 1_000)
+            onStats(
+                RecordingStats(
+                    elapsedMs = elapsed,
+                    averageBitrateBitsPerSecond = bitrateWindow.ratePerSecond(
+                        SystemClock.elapsedRealtime(),
+                        encodedBytes.get(),
+                    ) * 8.0,
+                    segment = segment,
+                    outputPath = currentPath,
+                    bytesStreamed = output?.bytesStreamed?.get() ?: 0L,
+                    audioLevelDb = levelDb,
+                )
+            )
+            handler.postDelayed(this, 100)
         }
     }
 

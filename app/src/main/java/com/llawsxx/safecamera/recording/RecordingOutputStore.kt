@@ -98,6 +98,10 @@ class OutputHandle internal constructor(
     fun descriptor(): ParcelFileDescriptor = descriptor ?: openDescriptor().also { descriptor = it }
     fun outputStream(): OutputStream = openStream()
 
+    fun currentSize(): Long = runCatching {
+        descriptor?.statSize?.takeIf { it >= 0L } ?: file?.length() ?: 0L
+    }.getOrDefault(0L)
+
     fun closeAndPublish() {
         runCatching { descriptor?.close() }
         descriptor = null
