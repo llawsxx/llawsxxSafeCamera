@@ -289,6 +289,7 @@ class CameraRecorderEngine(
             focusDistanceDiopters = updated.focusDistanceDiopters,
             unrestrictedFocus = updated.unrestrictedFocus,
             opticalStabilization = updated.opticalStabilization,
+            antibandingMode = updated.antibandingMode,
             noiseReductionMode = updated.noiseReductionMode,
             edgeMode = updated.edgeMode,
         )

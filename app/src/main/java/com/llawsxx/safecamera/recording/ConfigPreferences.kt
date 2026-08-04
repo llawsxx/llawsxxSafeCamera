@@ -81,6 +81,10 @@ object ConfigPreferences {
             exposureNs = p.getLong("exposureNs", 10_000_000L),
             aperture = p.getString("aperture", null)?.toFloatOrNull(),
             exposureCompensation = p.getInt("exposureCompensation", 0),
+            antibandingMode = p.getInt(
+                "antibandingMode",
+                android.hardware.camera2.CameraCharacteristics.CONTROL_AE_ANTIBANDING_MODE_AUTO,
+            ),
             awbMode = p.getInt("awbMode", android.hardware.camera2.CameraCharacteristics.CONTROL_AWB_MODE_AUTO),
             manualWhiteBalance = p.getBoolean("manualWhiteBalance", false),
             whiteBalanceTemperature = p.getInt("whiteBalanceTemperature", 5_500).coerceIn(2_000, 10_000),
@@ -178,6 +182,7 @@ object ConfigPreferences {
             .putLong("exposureNs", c.exposureNs)
             .putString("aperture", c.aperture?.toString())
             .putInt("exposureCompensation", c.exposureCompensation)
+            .putInt("antibandingMode", c.antibandingMode)
             .putInt("awbMode", c.awbMode)
             .putBoolean("manualWhiteBalance", c.manualWhiteBalance)
             .putInt("whiteBalanceTemperature", c.whiteBalanceTemperature)

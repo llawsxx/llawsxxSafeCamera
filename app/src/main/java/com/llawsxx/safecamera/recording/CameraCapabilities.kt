@@ -116,6 +116,8 @@ object CameraCapabilities {
                     exposureCompensationRange = c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
                         ?.takeUnless { it.lower == 0 && it.upper == 0 },
                     exposureCompensationStep = c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP),
+                    antibandingModes = c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_ANTIBANDING_MODES)
+                        ?.toList().orEmpty(),
                     awbModes = awbModes,
                     supportsManualWhiteBalance = CameraCharacteristics.CONTROL_AWB_MODE_OFF in awbModes &&
                         CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING in capabilities,

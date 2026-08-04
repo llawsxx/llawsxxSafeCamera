@@ -57,6 +57,14 @@ object CameraRequestControls {
             ?: Range(targetFps, targetFps).takeIf { config.experimentalUnadvertisedFps && !config.highSpeedMode }
             ?: availableFps.minByOrNull { kotlin.math.abs(it.upper - targetFps) }
         fpsRange?.let { builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+        val antibandingModes = characteristics.get(
+            CameraCharacteristics.CONTROL_AE_AVAILABLE_ANTIBANDING_MODES,
+        ) ?: intArrayOf()
+        (config.antibandingMode.takeIf(antibandingModes::contains)
+            ?: CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO.takeIf(antibandingModes::contains)
+            ?: antibandingModes.firstOrNull())?.let {
+            builder.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, it)
+        }
 
         if (config.manualExposure) {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)

@@ -241,6 +241,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             highSpeedMode = highSpeedUsable,
             aperture = config.aperture?.takeIf(camera.apertures::contains) ?: camera.apertures.firstOrNull(),
             opticalStabilization = config.opticalStabilization && camera.oisAvailable,
+            antibandingMode = supportedAntibandingMode(camera, config.antibandingMode),
         )
     }
 
@@ -349,6 +350,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     config.exposureCompensation.coerceIn(it.lower, it.upper)
                 } ?: 0,
                 opticalStabilization = config.opticalStabilization && camera.oisAvailable,
+                antibandingMode = supportedAntibandingMode(camera, config.antibandingMode),
                 highSpeedMode = config.highSpeedMode && camera.highSpeedModes.any {
                     it.width == size.first && it.height == size.second && config.fps in it.minFps..it.maxFps
                 },
@@ -437,6 +439,11 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             )
         }
     }
+    LaunchedEffect(config.cameraId, selectedCamera?.antibandingModes) {
+        val camera = selectedCamera ?: return@LaunchedEffect
+        val supported = supportedAntibandingMode(camera, config.antibandingMode)
+        if (supported != config.antibandingMode) config = config.copy(antibandingMode = supported)
+    }
     LaunchedEffect(config.fps, config.cameraId, cameras) {
         selectedCamera?.exposureRange?.takeUnless { config.unrestrictedExposure }?.let { range ->
             val maximum = minOf(range.upper, config.maximumExposureNs).coerceAtLeast(range.lower)
@@ -470,6 +477,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.focusDistanceDiopters,
         config.unrestrictedFocus,
         config.opticalStabilization,
+        config.antibandingMode,
         config.noiseReductionMode,
         config.edgeMode,
     ) {
@@ -533,6 +541,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.focusDistanceDiopters,
         config.unrestrictedFocus,
         config.opticalStabilization,
+        config.antibandingMode,
         config.noiseReductionMode,
         config.edgeMode,
         config.previewMode,
@@ -3830,6 +3839,16 @@ private fun CameraProcessingControls(
     ToggleLine("光学防抖", config.opticalStabilization, enabled && camera.oisAvailable) {
         onChange(config.copy(opticalStabilization = it))
     }
+    Labeled("抗闪烁") {
+        ChoiceRow(
+            camera.antibandingModes,
+            config.antibandingMode,
+            ::antibandingModeLabel,
+            enabled,
+        ) {
+            onChange(config.copy(antibandingMode = it))
+        }
+    }
     Labeled("降噪") {
         ChoiceRow(camera.noiseReductionModes, config.noiseReductionMode, ::processingModeLabel, enabled) {
             onChange(config.copy(noiseReductionMode = it))
@@ -4070,6 +4089,21 @@ private fun processingModeLabel(mode: Int): String = when (mode) {
     4 -> "零快门延迟"
     else -> "模式 $mode"
 }
+
+private fun antibandingModeLabel(mode: Int): String = when (mode) {
+    CameraCharacteristics.CONTROL_AE_ANTIBANDING_MODE_OFF -> "关闭"
+    CameraCharacteristics.CONTROL_AE_ANTIBANDING_MODE_50HZ -> "50Hz"
+    CameraCharacteristics.CONTROL_AE_ANTIBANDING_MODE_60HZ -> "60Hz"
+    CameraCharacteristics.CONTROL_AE_ANTIBANDING_MODE_AUTO -> "自动"
+    else -> "模式 $mode"
+}
+
+private fun supportedAntibandingMode(camera: CameraInfo, requested: Int): Int =
+    requested.takeIf(camera.antibandingModes::contains)
+        ?: CameraCharacteristics.CONTROL_AE_ANTIBANDING_MODE_AUTO
+            .takeIf(camera.antibandingModes::contains)
+        ?: camera.antibandingModes.firstOrNull()
+        ?: requested
 
 private fun preferredSize(camera: CameraInfo): Pair<Int, Int> {
     val size = camera.sizes.firstOrNull { it.width == 1920 && it.height == 1080 }
