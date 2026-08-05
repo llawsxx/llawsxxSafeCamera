@@ -29,11 +29,14 @@ class IdlePreviewCamera(context: Context) {
     private var opening = false
     private var configuring = false
     private var generation = 0
+    private var cameraLifecycleCount = 0
+    private val closeCallbacks = mutableListOf<() -> Unit>()
     private var submittedCameraRequestKey: List<Any?>? = null
     private var cameraRequestPending = false
 
     fun show(config: RecordingConfig, surface: Surface, rotationDegrees: Int = 0) = handler.post {
         Log.d("PreviewDebug", "show")
+        if (closeCallbacks.isNotEmpty()) return@post
         if (!surface.isValid || !config.hasVideo) return@post
         val sameTarget = activeCameraId == config.cameraId && activeSurface === surface &&
             activeConfig?.rawProcessingEnabled == config.rawProcessingEnabled
@@ -80,8 +83,9 @@ class IdlePreviewCamera(context: Context) {
 
     fun hide(onClosed: (() -> Unit)? = null) = handler.post {
         Log.d("PreviewDebug", "hide")
+        onClosed?.let(closeCallbacks::add)
         closeInternal()
-        onClosed?.invoke()
+        dispatchCloseCallbacksIfIdle()
     }
 
     fun release() = handler.post {
@@ -93,6 +97,7 @@ class IdlePreviewCamera(context: Context) {
     private fun open(cameraId: String, surface: Surface) {
         val currentGeneration = ++generation
         opening = true
+        cameraLifecycleCount++
         val callback = object : CameraDevice.StateCallback() {
             override fun onOpened(device: CameraDevice) {
                 Log.d("PreviewDebug", "camera opened")
@@ -126,10 +131,18 @@ class IdlePreviewCamera(context: Context) {
                 if (wasActive) camera = null
                 handleFailure(cameraId, surface, if (wasActive) generation else currentGeneration, "open error $error")
             }
+
+            override fun onClosed(device: CameraDevice) {
+                if (camera === device) camera = null
+                cameraLifecycleCount = (cameraLifecycleCount - 1).coerceAtLeast(0)
+                dispatchCloseCallbacksIfIdle()
+            }
         }
         runCatching { manager.openCamera(cameraId, callback, handler) }
             .onFailure {
                 opening = false
+                cameraLifecycleCount = (cameraLifecycleCount - 1).coerceAtLeast(0)
+                dispatchCloseCallbacksIfIdle()
                 handleFailure(cameraId, surface, currentGeneration, "open failed", it)
             }
     }
@@ -320,6 +333,13 @@ class IdlePreviewCamera(context: Context) {
         rawThreeAAuxiliaryFallback = false
         runCatching { permanentPreviewRenderer?.release() }
         permanentPreviewRenderer = null
+    }
+
+    private fun dispatchCloseCallbacksIfIdle() {
+        if (cameraLifecycleCount != 0 || closeCallbacks.isEmpty()) return
+        val callbacks = closeCallbacks.toList()
+        closeCallbacks.clear()
+        callbacks.forEach { callback -> runCatching(callback) }
     }
 
     private fun cancelPendingCameraRequest() {
