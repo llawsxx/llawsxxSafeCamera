@@ -119,6 +119,7 @@ object CameraCapabilities {
                         ).count { key -> c.get(key) != null },
                     )
                 }
+                val shadingModes = c.get(CameraCharacteristics.SHADING_AVAILABLE_MODES)?.toList().orEmpty()
                 val surfaceViewSizes = streamMap
                     ?.getOutputSizes(SurfaceHolder::class.java)
                     ?.sortedWith(compareByDescending<Size> { it.width.toLong() * it.height }.thenBy { it.width })
@@ -186,6 +187,7 @@ object CameraCapabilities {
                     noiseReductionModes = c.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)
                         ?.toList().orEmpty(),
                     edgeModes = c.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)?.toList().orEmpty(),
+                    shadingModes = shadingModes,
                     afModes = c.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)?.toList().orEmpty(),
                     minimumFocusDistance = c.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f,
                     sensorOrientation = c.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0,

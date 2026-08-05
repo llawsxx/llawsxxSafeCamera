@@ -743,6 +743,7 @@ class MediaCodecRecorderEngine(
                 noiseReductionMode = updated.noiseReductionMode,
                 edgeMode = updated.edgeMode,
                 rawLensShadingCorrectionEnabled = updated.rawLensShadingCorrectionEnabled,
+                cameraShadingMode = updated.cameraShadingMode,
                 rawSharpeningEnabled = updated.rawSharpeningEnabled,
                 rawSharpeningStrength = updated.rawSharpeningStrength,
                 rawColorStyle = updated.rawColorStyle,

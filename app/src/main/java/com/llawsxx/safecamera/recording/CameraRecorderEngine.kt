@@ -297,6 +297,7 @@ class CameraRecorderEngine(
             antibandingMode = updated.antibandingMode,
             noiseReductionMode = updated.noiseReductionMode,
             edgeMode = updated.edgeMode,
+            cameraShadingMode = updated.cameraShadingMode,
         )
         if (previousConfig.cameraRequestControlsKey() != config.cameraRequestControlsKey()) {
             cameraControlsPending = config.cameraRequestControlsKey() != submittedCameraControlsKey

@@ -29,16 +29,10 @@ object CameraRequestControls {
                     CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON,
                 )
             }
-            val shadingModes = characteristics.get(CameraCharacteristics.SHADING_AVAILABLE_MODES) ?: intArrayOf()
-            if (CaptureRequest.SHADING_MODE_OFF in shadingModes) {
-                builder.set(CaptureRequest.SHADING_MODE, CaptureRequest.SHADING_MODE_OFF)
-            }
         }
-        characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)?.let { activeArray ->
-            builder.set(
-                CaptureRequest.SCALER_CROP_REGION,
-                centeredAspectCrop(activeArray, config.width, config.height),
-            )
+        val shadingModes = characteristics.get(CameraCharacteristics.SHADING_AVAILABLE_MODES) ?: intArrayOf()
+        config.cameraShadingMode.takeIf(shadingModes::contains)?.let {
+            builder.set(CaptureRequest.SHADING_MODE, it)
         }
         val videoStabilizationModes = characteristics.get(
             CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES,
@@ -179,24 +173,6 @@ object CameraRequestControls {
             builder.set(CaptureRequest.EDGE_MODE, it)
         }
     }
-
-    private fun centeredAspectCrop(active: Rect, outputWidth: Int, outputHeight: Int): Rect {
-        if (outputWidth <= 0 || outputHeight <= 0 || active.width() <= 0 || active.height() <= 0) return Rect(active)
-        val targetAspect = outputWidth.toDouble() / outputHeight
-        val sensorAspect = active.width().toDouble() / active.height()
-        var cropWidth = active.width()
-        var cropHeight = active.height()
-        if (sensorAspect > targetAspect) {
-            cropWidth = (cropHeight * targetAspect).toInt().coerceAtMost(active.width())
-        } else if (sensorAspect < targetAspect) {
-            cropHeight = (cropWidth / targetAspect).toInt().coerceAtMost(active.height())
-        }
-        cropWidth = cropWidth.coerceAtLeast(2).and(-2)
-        cropHeight = cropHeight.coerceAtLeast(2).and(-2)
-        val left = active.left + (active.width() - cropWidth) / 2
-        val top = active.top + (active.height() - cropHeight) / 2
-        return Rect(left, top, left + cropWidth, top + cropHeight)
-    }
 }
 
 internal fun RecordingConfig.cameraRequestControlsKey(): List<Any?> = listOf(
@@ -208,6 +184,7 @@ internal fun RecordingConfig.cameraRequestControlsKey(): List<Any?> = listOf(
     highSpeedMode,
     rawProcessingEnabled,
     rawLensShadingCorrectionEnabled,
+    cameraShadingMode,
     manualExposure,
     iso,
     exposureNs,

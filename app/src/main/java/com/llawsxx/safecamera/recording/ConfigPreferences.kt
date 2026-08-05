@@ -2,6 +2,7 @@ package com.llawsxx.safecamera.recording
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.hardware.camera2.CameraCharacteristics
 
 object ConfigPreferences {
     private const val NAME = "recording_config"
@@ -35,6 +36,12 @@ object ConfigPreferences {
             rawHeight = p.getInt("rawHeight", 0).coerceAtLeast(0),
             rawThreeAAuxiliaryYuvEnabled = p.getBoolean("rawThreeAAuxiliaryYuvEnabled", true),
             rawLensShadingCorrectionEnabled = p.getBoolean("rawLensShadingCorrectionEnabled", true),
+            cameraShadingMode = p.getInt(
+                "cameraShadingMode",
+                if (p.getBoolean("cameraShadingEnabled", false)) {
+                    CameraCharacteristics.SHADING_MODE_HIGH_QUALITY
+                } else CameraCharacteristics.SHADING_MODE_OFF,
+            ),
             rawSharpeningEnabled = p.getBoolean("rawSharpeningEnabled", false),
             rawSharpeningStrength = p.getFloat("rawSharpeningStrength", 0.32f).coerceIn(0f, 1f),
             rawColorStyle = enumValue(p.getString("rawColorStyle", null), RawColorStyle.STANDARD_DIRECT),
@@ -164,6 +171,7 @@ object ConfigPreferences {
             .putInt("rawHeight", c.rawHeight)
             .putBoolean("rawThreeAAuxiliaryYuvEnabled", c.rawThreeAAuxiliaryYuvEnabled)
             .putBoolean("rawLensShadingCorrectionEnabled", c.rawLensShadingCorrectionEnabled)
+            .putInt("cameraShadingMode", c.cameraShadingMode)
             .putBoolean("rawSharpeningEnabled", c.rawSharpeningEnabled)
             .putFloat("rawSharpeningStrength", c.effectiveRawSharpeningStrength)
             .putString("rawColorStyle", c.rawColorStyle.name)

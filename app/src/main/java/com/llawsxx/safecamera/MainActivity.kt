@@ -511,6 +511,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.edgeMode,
         config.rawThreeAAuxiliaryYuvEnabled,
         config.rawLensShadingCorrectionEnabled,
+        config.cameraShadingMode,
         config.rawSharpeningEnabled,
         config.rawSharpeningStrength,
         config.rawColorStyle,
@@ -585,6 +586,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.rawHeight,
         config.rawThreeAAuxiliaryYuvEnabled,
         config.rawLensShadingCorrectionEnabled,
+        config.cameraShadingMode,
         config.rawSharpeningEnabled,
         config.rawSharpeningStrength,
         config.rawColorStyle,
@@ -1120,14 +1122,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                         !recording,
                                     ) { config = config.copy(colorRange = it) }
                                 }
-                                Text(
-                                    if (camera.rawLensShadingCorrectionAvailable) {
-                                        "RAW_SENSOR 由 GPU 完成去马赛克、颜色转换、色彩风格和可选修正。"
-                                    } else {
-                                        "当前镜头不提供可用的 LensShadingMap，暗角修正不可用。"
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
                             } else if (camera.rawSizes.isEmpty()) {
                                 Text("当前镜头未通过 Camera2 声明 RAW 能力。", style = MaterialTheme.typography.bodySmall)
                             }
@@ -4153,6 +4147,14 @@ private fun CameraProcessingControls(
             onChange(config.copy(edgeMode = it))
         }
     }
+    Labeled("Camera2 暗角修正") {
+        ChoiceRow(
+            camera.shadingModes,
+            config.cameraShadingMode.takeIf(camera.shadingModes::contains),
+            ::shadingModeLabel,
+            enabled,
+        ) { onChange(config.copy(cameraShadingMode = it)) }
+    }
 }
 
 @Composable
@@ -4381,6 +4383,13 @@ private fun processingModeLabel(mode: Int): String = when (mode) {
     2 -> "高质量"
     3 -> "最小"
     4 -> "零快门延迟"
+    else -> "模式 $mode"
+}
+
+private fun shadingModeLabel(mode: Int): String = when (mode) {
+    CameraCharacteristics.SHADING_MODE_OFF -> "OFF（关闭）"
+    CameraCharacteristics.SHADING_MODE_FAST -> "FAST（快速）"
+    CameraCharacteristics.SHADING_MODE_HIGH_QUALITY -> "HIGH_QUALITY（高质量）"
     else -> "模式 $mode"
 }
 
