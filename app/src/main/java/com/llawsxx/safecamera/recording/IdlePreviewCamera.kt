@@ -47,6 +47,7 @@ class IdlePreviewCamera(context: Context) {
             permanentPreviewRenderer?.setOutput(surface, true, rotationDegrees)
             rawRenderer?.updateProcessingParameters(
                 lensShadingCorrectionEnabled = config.rawLensShadingCorrectionEnabled,
+                demosaicAlgorithm = config.rawDemosaicAlgorithm,
                 sharpeningEnabled = config.rawSharpeningEnabled,
                 sharpeningStrength = config.effectiveRawSharpeningStrength,
                 contrast = config.effectiveRawContrast,
@@ -384,6 +385,8 @@ class IdlePreviewCamera(context: Context) {
                 outputWidth = processingWidth,
                 outputHeight = processingHeight,
                 lensShadingCorrectionEnabled = config.rawLensShadingCorrectionEnabled,
+                scalingQuality = config.rawScalingQuality,
+                demosaicAlgorithm = config.rawDemosaicAlgorithm,
                 sharpeningEnabled = config.rawSharpeningEnabled,
                 sharpeningStrength = config.effectiveRawSharpeningStrength,
                 contrast = config.effectiveRawContrast,
@@ -426,6 +429,7 @@ private fun previousPipelineKey(config: RecordingConfig?): String? = config?.run
         rawProcessingEnabled,
         rawWidth,
         rawHeight,
+        rawScalingQuality,
         rawThreeAAuxiliaryYuvEnabled,
         effectiveRawColorStandard,
         effectiveRawColorTransfer,

@@ -131,6 +131,8 @@ import com.llawsxx.safecamera.recording.RecordingConfig
 import com.llawsxx.safecamera.recording.RecordingMode
 import com.llawsxx.safecamera.recording.RawOutputPreset
 import com.llawsxx.safecamera.recording.RawColorStyle
+import com.llawsxx.safecamera.recording.RawDemosaicAlgorithm
+import com.llawsxx.safecamera.recording.RawScalingQuality
 import com.llawsxx.safecamera.recording.RawSensorInfo
 import com.llawsxx.safecamera.recording.AudioAacProfile
 import com.llawsxx.safecamera.recording.VideoBitrateMode
@@ -584,6 +586,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.rawProcessingEnabled,
         config.rawWidth,
         config.rawHeight,
+        config.rawScalingQuality,
+        config.rawDemosaicAlgorithm,
         config.rawThreeAAuxiliaryYuvEnabled,
         config.rawLensShadingCorrectionEnabled,
         config.cameraShadingMode,
@@ -1000,6 +1004,22 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                             rawHeight = size.height,
                                         )
                                     }
+                                }
+                                Labeled("RAW 缩放质量") {
+                                    ChoiceRow(
+                                        RawScalingQuality.entries,
+                                        config.rawScalingQuality,
+                                        { it.label },
+                                        !recording,
+                                    ) { config = config.copy(rawScalingQuality = it) }
+                                }
+                                Labeled("RAW 去马赛克算法") {
+                                    ChoiceRow(
+                                        RawDemosaicAlgorithm.entries,
+                                        config.rawDemosaicAlgorithm,
+                                        { it.label },
+                                        !recording,
+                                    ) { config = config.copy(rawDemosaicAlgorithm = it) }
                                 }
                                 ToggleLine(
                                     "RAW 3A 辅助 YUV 流",

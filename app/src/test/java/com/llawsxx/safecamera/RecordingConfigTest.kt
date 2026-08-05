@@ -3,6 +3,8 @@ package com.llawsxx.safecamera
 import com.llawsxx.safecamera.recording.multiplyDivide
 import com.llawsxx.safecamera.recording.RecordingConfig
 import com.llawsxx.safecamera.recording.RawColorStyle
+import com.llawsxx.safecamera.recording.RawDemosaicAlgorithm
+import com.llawsxx.safecamera.recording.RawScalingQuality
 import com.llawsxx.safecamera.recording.VideoColorMatrix
 import com.llawsxx.safecamera.recording.VideoColorRange
 import com.llawsxx.safecamera.recording.VideoColorStandard
@@ -59,6 +61,8 @@ class RecordingConfigTest {
         val defaults = RecordingConfig()
         assertEquals(0.32f, defaults.effectiveRawSharpeningStrength, 0f)
         assertTrue(defaults.rawThreeAAuxiliaryYuvEnabled)
+        assertEquals(RawScalingQuality.HIGH_QUALITY, defaults.rawScalingQuality)
+        assertEquals(RawDemosaicAlgorithm.HIGH_QUALITY, defaults.rawDemosaicAlgorithm)
         assertEquals(RawColorStyle.STANDARD_DIRECT, defaults.rawColorStyle)
         assertEquals(1.08f, defaults.effectiveRawContrast, 0f)
         assertEquals(1.08f, defaults.effectiveRawSaturation, 0f)

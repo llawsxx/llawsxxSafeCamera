@@ -257,6 +257,8 @@ class MediaCodecRecorderEngine(
                 outputWidth = encodedOutputWidth,
                 outputHeight = encodedOutputHeight,
                 lensShadingCorrectionEnabled = config.rawLensShadingCorrectionEnabled,
+                scalingQuality = config.rawScalingQuality,
+                demosaicAlgorithm = config.rawDemosaicAlgorithm,
                 sharpeningEnabled = config.rawSharpeningEnabled,
                 sharpeningStrength = config.effectiveRawSharpeningStrength,
                 contrast = config.effectiveRawContrast,
@@ -743,6 +745,7 @@ class MediaCodecRecorderEngine(
                 noiseReductionMode = updated.noiseReductionMode,
                 edgeMode = updated.edgeMode,
                 rawLensShadingCorrectionEnabled = updated.rawLensShadingCorrectionEnabled,
+                rawDemosaicAlgorithm = updated.rawDemosaicAlgorithm,
                 cameraShadingMode = updated.cameraShadingMode,
                 rawSharpeningEnabled = updated.rawSharpeningEnabled,
                 rawSharpeningStrength = updated.rawSharpeningStrength,
@@ -753,6 +756,7 @@ class MediaCodecRecorderEngine(
             )
             rawRenderer?.updateProcessingParameters(
                 lensShadingCorrectionEnabled = config.rawLensShadingCorrectionEnabled,
+                demosaicAlgorithm = config.rawDemosaicAlgorithm,
                 sharpeningEnabled = config.rawSharpeningEnabled,
                 sharpeningStrength = config.effectiveRawSharpeningStrength,
                 contrast = config.effectiveRawContrast,

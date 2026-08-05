@@ -152,6 +152,16 @@ enum class VideoScalingAlgorithm(val label: String) : Serializable {
     BICUBIC("双三次（更锐利）"),
 }
 
+enum class RawScalingQuality(val label: String) : Serializable {
+    FAST("快速"),
+    HIGH_QUALITY("高质量"),
+}
+
+enum class RawDemosaicAlgorithm(val label: String) : Serializable {
+    FAST("快速（双线性）"),
+    HIGH_QUALITY("高质量（边缘感知）"),
+}
+
 data class RecordingConfig(
     val mode: RecordingMode = RecordingMode.AUDIO_VIDEO,
     val cameraId: String = "",
@@ -171,6 +181,8 @@ data class RecordingConfig(
     val rawProcessingEnabled: Boolean = false,
     val rawWidth: Int = 0,
     val rawHeight: Int = 0,
+    val rawScalingQuality: RawScalingQuality = RawScalingQuality.HIGH_QUALITY,
+    val rawDemosaicAlgorithm: RawDemosaicAlgorithm = RawDemosaicAlgorithm.HIGH_QUALITY,
     val rawThreeAAuxiliaryYuvEnabled: Boolean = true,
     val rawLensShadingCorrectionEnabled: Boolean = true,
     val cameraShadingMode: Int = CameraCharacteristics.SHADING_MODE_FAST,

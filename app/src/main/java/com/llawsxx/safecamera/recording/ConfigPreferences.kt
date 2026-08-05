@@ -34,13 +34,24 @@ object ConfigPreferences {
             rawProcessingEnabled = p.getBoolean("rawProcessingEnabled", false),
             rawWidth = p.getInt("rawWidth", 0).coerceAtLeast(0),
             rawHeight = p.getInt("rawHeight", 0).coerceAtLeast(0),
+            rawScalingQuality = enumValue(
+                p.getString("rawScalingQuality", null),
+                RawScalingQuality.HIGH_QUALITY,
+            ),
+            rawDemosaicAlgorithm = enumValue(
+                p.getString("rawDemosaicAlgorithm", null),
+                RawDemosaicAlgorithm.HIGH_QUALITY,
+            ),
             rawThreeAAuxiliaryYuvEnabled = p.getBoolean("rawThreeAAuxiliaryYuvEnabled", true),
             rawLensShadingCorrectionEnabled = p.getBoolean("rawLensShadingCorrectionEnabled", true),
             cameraShadingMode = p.getInt(
                 "cameraShadingMode",
-                if (p.getBoolean("cameraShadingEnabled", false)) {
-                    CameraCharacteristics.SHADING_MODE_HIGH_QUALITY
-                } else CameraCharacteristics.SHADING_MODE_OFF,
+                when {
+                    p.contains("cameraShadingEnabled") && p.getBoolean("cameraShadingEnabled", false) ->
+                        CameraCharacteristics.SHADING_MODE_HIGH_QUALITY
+                    p.contains("cameraShadingEnabled") -> CameraCharacteristics.SHADING_MODE_OFF
+                    else -> CameraCharacteristics.SHADING_MODE_FAST
+                },
             ),
             rawSharpeningEnabled = p.getBoolean("rawSharpeningEnabled", false),
             rawSharpeningStrength = p.getFloat("rawSharpeningStrength", 0.32f).coerceIn(0f, 1f),
@@ -169,6 +180,8 @@ object ConfigPreferences {
             .putBoolean("rawProcessingEnabled", c.rawProcessingEnabled)
             .putInt("rawWidth", c.rawWidth)
             .putInt("rawHeight", c.rawHeight)
+            .putString("rawScalingQuality", c.rawScalingQuality.name)
+            .putString("rawDemosaicAlgorithm", c.rawDemosaicAlgorithm.name)
             .putBoolean("rawThreeAAuxiliaryYuvEnabled", c.rawThreeAAuxiliaryYuvEnabled)
             .putBoolean("rawLensShadingCorrectionEnabled", c.rawLensShadingCorrectionEnabled)
             .putInt("cameraShadingMode", c.cameraShadingMode)

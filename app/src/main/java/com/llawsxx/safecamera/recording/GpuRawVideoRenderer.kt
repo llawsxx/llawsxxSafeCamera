@@ -32,6 +32,8 @@ internal class GpuRawVideoRenderer(
     private val outputWidth: Int,
     private val outputHeight: Int,
     lensShadingCorrectionEnabled: Boolean,
+    scalingQuality: RawScalingQuality,
+    demosaicAlgorithm: RawDemosaicAlgorithm,
     sharpeningEnabled: Boolean,
     sharpeningStrength: Float,
     contrast: Float,
@@ -54,6 +56,15 @@ internal class GpuRawVideoRenderer(
     private val previewEglSurface: android.opengl.EGLSurface
     private val hasEncoderOutput = encoderSurface != null
     private var lensShadingCorrectionEnabled = lensShadingCorrectionEnabled
+    private val scalingQuality = scalingQuality
+    private var demosaicAlgorithm = demosaicAlgorithm
+    private val rawCrop = centeredCrop(rawWidth, rawHeight, outputWidth, outputHeight)
+    private val intermediateWidth = if (scalingQuality == RawScalingQuality.HIGH_QUALITY) {
+        rawCrop.second.first
+    } else outputWidth
+    private val intermediateHeight = if (scalingQuality == RawScalingQuality.HIGH_QUALITY) {
+        rawCrop.second.second
+    } else outputHeight
     private var sharpeningEnabled = sharpeningEnabled
     private var sharpeningStrength = sharpeningStrength.coerceIn(0f, 1f)
     private var contrast = contrast.coerceIn(0.7f, 1.3f)
@@ -84,6 +95,7 @@ internal class GpuRawVideoRenderer(
     private val cropOriginLocation: Int
     private val cropSizeLocation: Int
     private val lensShadingEnabledLocation: Int
+    private val highQualityDemosaicLocation: Int
     private val sharpeningEnabledLocation: Int
     private val sharpeningStrengthLocation: Int
     private val outputProgram: Int
@@ -94,6 +106,8 @@ internal class GpuRawVideoRenderer(
     private val outputContrastLocation: Int
     private val outputSaturationLocation: Int
     private val outputHighlightCompressionLocation: Int
+    private val outputImageSizeLocation: Int
+    private val outputHighQualityScalingLocation: Int
     private val rawVertices = floatBuffer(
         -1f, -1f, 0f, 1f,
          1f, -1f, 1f, 1f,
@@ -189,6 +203,15 @@ internal class GpuRawVideoRenderer(
             GLES30.glGetIntegerv(GLES30.GL_RED_BITS, redBits, 0)
             check(redBits[0] >= 10) { "HDR RAW output requires a recordable 10-bit EGL surface" }
         }
+        val maximumTextureSize = IntArray(1)
+        GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, maximumTextureSize, 0)
+        check(rawWidth <= maximumTextureSize[0] && rawHeight <= maximumTextureSize[0]) {
+            "RAW ${rawWidth}x$rawHeight exceeds the GPU texture limit ${maximumTextureSize[0]}"
+        }
+        check(intermediateWidth <= maximumTextureSize[0] && intermediateHeight <= maximumTextureSize[0]) {
+            "High-quality RAW intermediate ${intermediateWidth}x$intermediateHeight exceeds " +
+                "the GPU texture limit ${maximumTextureSize[0]}; select fast RAW scaling"
+        }
 
         rawTexture = IntArray(1).also { GLES30.glGenTextures(1, it, 0) }[0]
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, rawTexture)
@@ -231,6 +254,7 @@ internal class GpuRawVideoRenderer(
         cropOriginLocation = GLES30.glGetUniformLocation(rawProgram, "uCropOrigin")
         cropSizeLocation = GLES30.glGetUniformLocation(rawProgram, "uCropSize")
         lensShadingEnabledLocation = GLES30.glGetUniformLocation(rawProgram, "uLensShadingEnabled")
+        highQualityDemosaicLocation = GLES30.glGetUniformLocation(rawProgram, "uHighQualityDemosaic")
         sharpeningEnabledLocation = GLES30.glGetUniformLocation(rawProgram, "uSharpeningEnabled")
         sharpeningStrengthLocation = GLES30.glGetUniformLocation(rawProgram, "uSharpeningStrength")
         GLES30.glUseProgram(rawProgram)
@@ -245,6 +269,8 @@ internal class GpuRawVideoRenderer(
         outputContrastLocation = GLES30.glGetUniformLocation(outputProgram, "uContrast")
         outputSaturationLocation = GLES30.glGetUniformLocation(outputProgram, "uSaturation")
         outputHighlightCompressionLocation = GLES30.glGetUniformLocation(outputProgram, "uHighlightCompression")
+        outputImageSizeLocation = GLES30.glGetUniformLocation(outputProgram, "uLinearImageSize")
+        outputHighQualityScalingLocation = GLES30.glGetUniformLocation(outputProgram, "uHighQualityScaling")
         GLES30.glUseProgram(outputProgram)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(outputProgram, "uLinearImage"), 2)
         releaseCurrent()
@@ -281,6 +307,7 @@ internal class GpuRawVideoRenderer(
 
     fun updateProcessingParameters(
         lensShadingCorrectionEnabled: Boolean,
+        demosaicAlgorithm: RawDemosaicAlgorithm,
         sharpeningEnabled: Boolean,
         sharpeningStrength: Float,
         contrast: Float,
@@ -290,6 +317,7 @@ internal class GpuRawVideoRenderer(
         handler.post {
             if (released.get()) return@post
             this.lensShadingCorrectionEnabled = lensShadingCorrectionEnabled
+            this.demosaicAlgorithm = demosaicAlgorithm
             this.sharpeningEnabled = sharpeningEnabled
             this.sharpeningStrength = sharpeningStrength.coerceIn(0f, 1f)
             this.contrast = contrast.coerceIn(0.7f, 1.3f)
@@ -328,7 +356,7 @@ internal class GpuRawVideoRenderer(
         val useLensShading = lensShadingCorrectionEnabled && metadata.lensShadingMap != null
         if (useLensShading) uploadLensShading(checkNotNull(metadata.lensShadingMap))
 
-        val (cropOrigin, cropSize) = centeredCrop(rawWidth, rawHeight, outputWidth, outputHeight)
+        val (cropOrigin, cropSize) = rawCrop
         val siteGains = metadata.gainsByCfaPosition()
         val m = if (outputColorStandard == VideoColorStandard.BT2020) {
             multiply3x3(LINEAR_BT709_TO_BT2020, metadata.transform, outputColorTransform)
@@ -336,7 +364,7 @@ internal class GpuRawVideoRenderer(
             metadata.transform
         }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, intermediateFramebuffer)
-        GLES30.glViewport(0, 0, outputWidth, outputHeight)
+        GLES30.glViewport(0, 0, intermediateWidth, intermediateHeight)
         GLES30.glUseProgram(rawProgram)
         GLES30.glUniform4fv(blackLocation, 1, metadata.blackLevels, 0)
         GLES30.glUniform1f(whiteLevelLocation, metadata.whiteLevel)
@@ -348,6 +376,10 @@ internal class GpuRawVideoRenderer(
         GLES30.glUniform2i(cropOriginLocation, cropOrigin.first, cropOrigin.second)
         GLES30.glUniform2i(cropSizeLocation, cropSize.first, cropSize.second)
         GLES30.glUniform1i(lensShadingEnabledLocation, if (useLensShading) 1 else 0)
+        GLES30.glUniform1i(
+            highQualityDemosaicLocation,
+            if (demosaicAlgorithm == RawDemosaicAlgorithm.HIGH_QUALITY) 1 else 0,
+        )
         GLES30.glUniform1i(sharpeningEnabledLocation, if (sharpeningEnabled) 1 else 0)
         GLES30.glUniform1f(sharpeningStrengthLocation, sharpeningStrength)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
@@ -410,6 +442,13 @@ internal class GpuRawVideoRenderer(
         GLES30.glUniform1f(outputContrastLocation, contrast)
         GLES30.glUniform1f(outputSaturationLocation, saturation)
         GLES30.glUniform1f(outputHighlightCompressionLocation, highlightCompression)
+        GLES30.glUniform2f(outputImageSizeLocation, intermediateWidth.toFloat(), intermediateHeight.toFloat())
+        GLES30.glUniform1i(
+            outputHighQualityScalingLocation,
+            if (scalingQuality == RawScalingQuality.HIGH_QUALITY &&
+                (width != intermediateWidth || height != intermediateHeight)
+            ) 1 else 0,
+        )
         GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, intermediateTexture)
         bindVertices(outputVertices, outputPositionLocation, outputTexCoordLocation)
@@ -434,7 +473,7 @@ internal class GpuRawVideoRenderer(
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, outputWidth, outputHeight, 0,
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, intermediateWidth, intermediateHeight, 0,
             GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null,
         )
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, intermediateFramebuffer)
@@ -624,6 +663,7 @@ internal class GpuRawVideoRenderer(
             uniform ivec2 uCropOrigin;
             uniform ivec2 uCropSize;
             uniform int uLensShadingEnabled;
+            uniform int uHighQualityDemosaic;
             uniform int uSharpeningEnabled;
             uniform float uSharpeningStrength;
 
@@ -679,9 +719,8 @@ internal class GpuRawVideoRenderer(
                 return max(0.0, (horizontal * horizontalWeight + vertical * verticalWeight) /
                     (horizontalWeight + verticalWeight));
             }
-            void main() {
+            vec3 demosaicAt(ivec2 p) {
                 ivec2 sourceSize = textureSize(uRaw, 0);
-                ivec2 p = uCropOrigin + ivec2(vTexCoord * vec2(uCropSize));
                 p = clamp(p, ivec2(2), sourceSize - ivec2(3));
                 vec2 lensUv = (vec2(p) + 0.5) / vec2(sourceSize);
                 vec4 lensGains = texture(uLensShading, lensUv);
@@ -702,6 +741,25 @@ internal class GpuRawVideoRenderer(
                 }
                 int color = colorAt(p);
                 vec3 rgb;
+                if (uHighQualityDemosaic == 0) {
+                    if (color == 1) {
+                        float redBlueHorizontal = 0.5 * (left + right);
+                        float redBlueVertical = 0.5 * (up + down);
+                        if (colorAt(p + ivec2(-1, 0)) == 0) {
+                            return vec3(redBlueHorizontal, center, redBlueVertical);
+                        }
+                        return vec3(redBlueVertical, center, redBlueHorizontal);
+                    }
+                    float green = 0.25 * (left + right + up + down);
+                    float opposite = 0.25 * (
+                        rawAt(p + ivec2(-1, -1), lensGains) +
+                        rawAt(p + ivec2(1, -1), lensGains) +
+                        rawAt(p + ivec2(-1, 1), lensGains) +
+                        rawAt(p + ivec2(1, 1), lensGains)
+                    );
+                    return color == 0 ? vec3(center, green, opposite) :
+                        vec3(opposite, green, center);
+                }
                 if (color == 1) {
                     float horizontal = center + 0.5 * (
                         left - 0.5 * (center + left2) + right - 0.5 * (center + right2));
@@ -721,6 +779,12 @@ internal class GpuRawVideoRenderer(
                     if (color == 0) rgb = vec3(center, green, opposite);
                     else rgb = vec3(opposite, green, center);
                 }
+                return rgb;
+            }
+
+            void main() {
+                ivec2 sourcePosition = uCropOrigin + ivec2(vTexCoord * vec2(uCropSize));
+                vec3 rgb = demosaicAt(sourcePosition);
                 // uColorRow already maps sensor RGB directly into the selected linear output primaries.
                 vec3 corrected = vec3(dot(uColorRow0, rgb), dot(uColorRow1, rgb), dot(uColorRow2, rgb));
                 corrected = max(corrected, vec3(0.0));
@@ -737,6 +801,33 @@ internal class GpuRawVideoRenderer(
             uniform float uContrast;
             uniform float uSaturation;
             uniform float uHighlightCompression;
+            uniform vec2 uLinearImageSize;
+            uniform int uHighQualityScaling;
+
+            vec3 sampleBicubic(vec2 uv) {
+                vec2 pixel = uv * uLinearImageSize - vec2(0.5);
+                vec2 base = floor(pixel);
+                vec2 f = pixel - base;
+                vec2 oneMinusF = vec2(1.0) - f;
+                vec2 w0 = oneMinusF * oneMinusF * oneMinusF / 6.0;
+                vec2 w1 = (vec2(3.0) * f * f * f - vec2(6.0) * f * f + vec2(4.0)) / 6.0;
+                vec2 w2 = (-vec2(3.0) * f * f * f + vec2(3.0) * f * f +
+                    vec2(3.0) * f + vec2(1.0)) / 6.0;
+                vec2 w3 = f * f * f / 6.0;
+                vec2 g0 = w0 + w1;
+                vec2 g1 = w2 + w3;
+                vec2 h0 = (base - vec2(1.0) + w1 / g0 + vec2(0.5)) / uLinearImageSize;
+                vec2 h1 = (base + vec2(1.0) + w3 / g1 + vec2(0.5)) / uLinearImageSize;
+                vec2 minimumUv = vec2(0.5) / uLinearImageSize;
+                vec2 maximumUv = vec2(1.0) - minimumUv;
+                h0 = clamp(h0, minimumUv, maximumUv);
+                h1 = clamp(h1, minimumUv, maximumUv);
+                return
+                    texture(uLinearImage, vec2(h0.x, h0.y)).rgb * g0.x * g0.y +
+                    texture(uLinearImage, vec2(h1.x, h0.y)).rgb * g1.x * g0.y +
+                    texture(uLinearImage, vec2(h0.x, h1.y)).rgb * g0.x * g1.y +
+                    texture(uLinearImage, vec2(h1.x, h1.y)).rgb * g1.x * g1.y;
+            }
 
             float rec709(float value) {
                 value = clamp(value, 0.0, 1.0);
@@ -780,7 +871,8 @@ internal class GpuRawVideoRenderer(
                 return value * (compressedPeak / peak);
             }
             void main() {
-                vec3 linear = texture(uLinearImage, vTexCoord).rgb;
+                vec3 linear = uHighQualityScaling != 0 ?
+                    sampleBicubic(vTexCoord) : texture(uLinearImage, vTexCoord).rgb;
                 linear = compressHighlights(max(linear, vec3(0.0)));
                 if (uPrimariesConversion == 1) linear = bt2020ToBt709(linear);
                 vec3 encoded = encodeTransfer(clamp(linear, 0.0, 1.0));
