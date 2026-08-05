@@ -259,6 +259,7 @@ class MediaCodecRecorderEngine(
                 lensShadingCorrectionEnabled = config.rawLensShadingCorrectionEnabled,
                 scalingQuality = config.rawScalingQuality,
                 demosaicAlgorithm = config.rawDemosaicAlgorithm,
+                rawFrameBufferCapacity = config.rawFrameBufferCapacity,
                 sharpeningEnabled = config.rawSharpeningEnabled,
                 sharpeningStrength = config.effectiveRawSharpeningStrength,
                 contrast = config.effectiveRawContrast,
@@ -954,6 +955,8 @@ class MediaCodecRecorderEngine(
                     outputPath = outputPath,
                     bytesStreamed = tsOutput?.bytesStreamed?.get() ?: 0L,
                     audioLevelDb = audioLevelDb,
+                    rawFrameBufferUsed = rawRenderer?.rawFrameBufferStatus()?.first ?: 0,
+                    rawFrameBufferCapacity = rawRenderer?.rawFrameBufferStatus()?.second ?: 0,
                 )
             )
             cameraHandler.postDelayed(this, if (config.hasAudio) 100 else 1_000)

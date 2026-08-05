@@ -63,6 +63,7 @@ class RecordingConfigTest {
         assertTrue(defaults.rawThreeAAuxiliaryYuvEnabled)
         assertEquals(RawScalingQuality.HIGH_QUALITY, defaults.rawScalingQuality)
         assertEquals(RawDemosaicAlgorithm.HIGH_QUALITY, defaults.rawDemosaicAlgorithm)
+        assertEquals(2, defaults.rawFrameBufferCapacity)
         assertEquals(RawColorStyle.STANDARD_DIRECT, defaults.rawColorStyle)
         assertEquals(1.08f, defaults.effectiveRawContrast, 0f)
         assertEquals(1.08f, defaults.effectiveRawSaturation, 0f)

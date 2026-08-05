@@ -183,6 +183,7 @@ data class RecordingConfig(
     val rawHeight: Int = 0,
     val rawScalingQuality: RawScalingQuality = RawScalingQuality.HIGH_QUALITY,
     val rawDemosaicAlgorithm: RawDemosaicAlgorithm = RawDemosaicAlgorithm.HIGH_QUALITY,
+    val rawFrameBufferCapacity: Int = 2,
     val rawThreeAAuxiliaryYuvEnabled: Boolean = true,
     val rawLensShadingCorrectionEnabled: Boolean = true,
     val cameraShadingMode: Int = CameraCharacteristics.SHADING_MODE_FAST,
@@ -288,12 +289,12 @@ data class RecordingConfig(
     val effectiveRawContrast: Float get() = when (rawColorStyle) {
         RawColorStyle.STANDARD_DIRECT -> 1.08f
         RawColorStyle.FAITHFUL -> 1f
-        RawColorStyle.CUSTOM -> rawCustomContrast.coerceIn(0.7f, 1.3f)
+        RawColorStyle.CUSTOM -> rawCustomContrast.coerceIn(0.5f, 1.5f)
     }
     val effectiveRawSaturation: Float get() = when (rawColorStyle) {
         RawColorStyle.STANDARD_DIRECT -> 1.08f
         RawColorStyle.FAITHFUL -> 1f
-        RawColorStyle.CUSTOM -> rawCustomSaturation.coerceIn(0f, 2f)
+        RawColorStyle.CUSTOM -> rawCustomSaturation.coerceIn(0f, 3f)
     }
     val effectiveRawHighlightCompression: Float get() = when (rawColorStyle) {
         RawColorStyle.STANDARD_DIRECT -> 0.45f
@@ -412,6 +413,8 @@ data class RecordingStats(
     val outputPath: String? = null,
     val bytesStreamed: Long = 0L,
     val audioLevelDb: Float = -60f,
+    val rawFrameBufferUsed: Int = 0,
+    val rawFrameBufferCapacity: Int = 0,
 )
 
 data class CameraExposureState(

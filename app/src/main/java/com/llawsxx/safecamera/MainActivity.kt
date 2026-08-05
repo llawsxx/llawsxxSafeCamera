@@ -588,6 +588,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.rawHeight,
         config.rawScalingQuality,
         config.rawDemosaicAlgorithm,
+        config.rawFrameBufferCapacity,
         config.rawThreeAAuxiliaryYuvEnabled,
         config.rawLensShadingCorrectionEnabled,
         config.cameraShadingMode,
@@ -1021,6 +1022,14 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                         !recording,
                                     ) { config = config.copy(rawDemosaicAlgorithm = it) }
                                 }
+                                Labeled("RAW 帧缓存") {
+                                    ChoiceRow(
+                                        (1..6).toList(),
+                                        config.rawFrameBufferCapacity,
+                                        { "${it} 帧" },
+                                        !recording,
+                                    ) { config = config.copy(rawFrameBufferCapacity = it) }
+                                }
                                 ToggleLine(
                                     "RAW 3A 辅助 YUV 流",
                                     config.rawThreeAAuxiliaryYuvEnabled,
@@ -1065,16 +1074,16 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                     Slider(
                                         value = config.effectiveRawContrast,
                                         onValueChange = { config = config.copy(rawCustomContrast = it) },
-                                        valueRange = 0.7f..1.3f,
-                                        steps = 23,
+                                        valueRange = 0.5f..1.5f,
+                                        steps = 19,
                                         enabled = !recording,
                                     )
                                     Text("饱和度 ${(config.effectiveRawSaturation * 100f).format0()}%")
                                     Slider(
                                         value = config.effectiveRawSaturation,
                                         onValueChange = { config = config.copy(rawCustomSaturation = it) },
-                                        valueRange = 0f..2f,
-                                        steps = 19,
+                                        valueRange = 0f..3f,
+                                        steps = 29,
                                         enabled = !recording,
                                     )
                                     Text("高光压缩 ${(config.effectiveRawHighlightCompression * 100f).format0()}%")
@@ -1463,7 +1472,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                         Slider(
                             value = config.videoBitrate / 1_000_000f,
                             onValueChange = { config = config.copy(videoBitrate = (it * 1_000_000).toInt()) },
-                            valueRange = 1f..80f,
+                            valueRange = 1f..200f,
                             enabled = !recording,
                         )
                         Labeled("码率模式") {
@@ -1637,7 +1646,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     Slider(
                         value = config.audioBitrate / 1000f,
                         onValueChange = { config = config.copy(audioBitrate = (it * 1000).toInt()) },
-                        valueRange = 64f..320f,
+                        valueRange = 64f..512f,
                         enabled = !recording,
                     )
                     val agcPathSupported = config.hasAudio &&
@@ -2605,6 +2614,9 @@ private fun CompactRecordingDashboard(
             Text(formatDuration(stats?.elapsedMs ?: 0L), color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
             Text("FPS ${stats?.averageFps?.takeIf { it > 0 }?.format1() ?: "—"}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
             Text("丢帧 ${stats?.droppedFrames ?: 0}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            if (stats?.rawFrameBufferCapacity ?: 0 > 0) {
+                Text("RAW缓存 ${stats?.rawFrameBufferUsed ?: 0}/${stats?.rawFrameBufferCapacity}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            }
             Text("剩余 ${availableBytes?.let(::formatStorageBytes) ?: "—"}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
             if (bitrateOnSameLine) {
                 Text(bitrateText, color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)

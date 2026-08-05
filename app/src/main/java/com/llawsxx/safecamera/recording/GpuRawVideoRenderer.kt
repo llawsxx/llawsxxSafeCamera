@@ -18,6 +18,7 @@ import android.view.Surface
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
+import java.util.ArrayDeque
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -34,6 +35,7 @@ internal class GpuRawVideoRenderer(
     lensShadingCorrectionEnabled: Boolean,
     scalingQuality: RawScalingQuality,
     demosaicAlgorithm: RawDemosaicAlgorithm,
+    rawFrameBufferCapacity: Int,
     sharpeningEnabled: Boolean,
     sharpeningStrength: Float,
     contrast: Float,
@@ -45,10 +47,19 @@ internal class GpuRawVideoRenderer(
 ) {
     private val thread = HandlerThread("gpu-raw-video-render").apply { start() }
     private val handler = Handler(thread.looper)
+    private val imageReaderThread = HandlerThread("gpu-raw-image-acquire").apply { start() }
+    private val imageReaderHandler = Handler(imageReaderThread.looper)
     private val released = AtomicBoolean(false)
     private val errorReported = AtomicBoolean(false)
+    private val rawFrameQueueCapacity = rawFrameBufferCapacity.coerceIn(1, MAX_RAW_FRAME_BUFFER_CAPACITY)
+    private val rawFrameQueue = ArrayDeque<Image>(rawFrameQueueCapacity)
+    private val rawFrameQueueLock = Any()
+    private var rawFrameDrainPosted = false
     private val baseMetadata = RawFrameMetadata.from(characteristics)
-    private val matcher = TimestampFrameMatcher<RawFrameMetadata, Image>(discardFrame = Image::close)
+    private val matcher = TimestampFrameMatcher<RawFrameMetadata, Image>(
+        maximumEntries = rawFrameQueueCapacity + 1,
+        discardFrame = Image::close,
+    )
     private val display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
     private val primaryContext: android.opengl.EGLContext
     private val primarySurface: android.opengl.EGLSurface
@@ -120,7 +131,12 @@ internal class GpuRawVideoRenderer(
         -1f,  1f, 0f, 1f,
          1f,  1f, 1f, 1f,
     )
-    val imageReader: ImageReader = ImageReader.newInstance(rawWidth, rawHeight, ImageFormat.RAW_SENSOR, 4)
+    val imageReader: ImageReader = ImageReader.newInstance(
+        rawWidth,
+        rawHeight,
+        ImageFormat.RAW_SENSOR,
+        rawFrameQueueCapacity + 2,
+    )
     val inputSurface: Surface get() = imageReader.surface
 
     init {
@@ -276,19 +292,56 @@ internal class GpuRawVideoRenderer(
         releaseCurrent()
 
         imageReader.setOnImageAvailableListener({ reader ->
-            val image = runCatching { reader.acquireLatestImage() }.getOrNull()
+            val image = runCatching { reader.acquireNextImage() }.getOrNull()
                 ?: return@setOnImageAvailableListener
-            if (released.get()) {
-                image.close()
-                return@setOnImageAvailableListener
+            enqueueRawFrame(image)
+        }, imageReaderHandler)
+    }
+
+    private fun enqueueRawFrame(image: Image) {
+        if (released.get()) {
+            image.close()
+            return
+        }
+        var discarded: Image? = null
+        var shouldPostDrain = false
+        synchronized(rawFrameQueueLock) {
+            if (rawFrameQueue.size >= rawFrameQueueCapacity) {
+                discarded = rawFrameQueue.removeFirst()
             }
+            rawFrameQueue.addLast(image)
+            if (!rawFrameDrainPosted) {
+                rawFrameDrainPosted = true
+                shouldPostDrain = true
+            }
+        }
+        discarded?.close()
+        if (shouldPostDrain) handler.post(::drainRawFrame)
+    }
+
+    private fun drainRawFrame() {
+        val image = synchronized(rawFrameQueueLock) {
+            rawFrameQueue.pollFirst().also {
+                if (it == null) rawFrameDrainPosted = false
+            }
+        } ?: return
+        if (!released.get()) {
             val timestampNs = image.timestamp
             matcher.offerFrame(timestampNs, image)?.let { renderMatched(timestampNs, it) }
             handler.postDelayed(
                 { matcher.discardFrame(timestampNs, image) },
                 METADATA_TIMEOUT_MS,
             )
-        }, handler)
+        } else {
+            image.close()
+        }
+        synchronized(rawFrameQueueLock) {
+            if (rawFrameQueue.isNotEmpty()) {
+                handler.post(::drainRawFrame)
+            } else {
+                rawFrameDrainPosted = false
+            }
+        }
     }
 
     fun submitMetadata(
@@ -544,7 +597,12 @@ internal class GpuRawVideoRenderer(
 
     private fun releaseOnThread() {
         matcher.clear()
+        synchronized(rawFrameQueueLock) {
+            while (rawFrameQueue.isNotEmpty()) rawFrameQueue.removeFirst().close()
+            rawFrameDrainPosted = false
+        }
         imageReader.close()
+        imageReaderThread.quitSafely()
         makePrimaryCurrent()
         GLES30.glDeleteProgram(rawProgram)
         GLES30.glDeleteProgram(outputProgram)
@@ -558,6 +616,11 @@ internal class GpuRawVideoRenderer(
         EGL14.eglReleaseThread()
         EGL14.eglTerminate(display)
         thread.quitSafely()
+    }
+
+    fun rawFrameBufferStatus(): Pair<Int, Int> = synchronized(rawFrameQueueLock) {
+        (rawFrameQueue.size + if (rawFrameDrainPosted) 1 else 0).coerceAtMost(rawFrameQueueCapacity) to
+            rawFrameQueueCapacity
     }
 
     private fun makePrimaryCurrent() {
@@ -639,6 +702,7 @@ internal class GpuRawVideoRenderer(
         const val TRANSFER_REC709 = 0
         const val TRANSFER_HLG = 1
         const val TRANSFER_PQ = 2
+        const val MAX_RAW_FRAME_BUFFER_CAPACITY = 6
         const val VERTEX_SHADER = """#version 300 es
             in vec4 aPosition;
             in vec2 aTexCoord;

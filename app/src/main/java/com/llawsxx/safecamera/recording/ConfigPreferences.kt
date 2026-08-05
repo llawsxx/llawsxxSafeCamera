@@ -42,6 +42,7 @@ object ConfigPreferences {
                 p.getString("rawDemosaicAlgorithm", null),
                 RawDemosaicAlgorithm.HIGH_QUALITY,
             ),
+            rawFrameBufferCapacity = p.getInt("rawFrameBufferCapacity", 2).coerceIn(1, 6),
             rawThreeAAuxiliaryYuvEnabled = p.getBoolean("rawThreeAAuxiliaryYuvEnabled", true),
             rawLensShadingCorrectionEnabled = p.getBoolean("rawLensShadingCorrectionEnabled", true),
             cameraShadingMode = p.getInt(
@@ -182,6 +183,7 @@ object ConfigPreferences {
             .putInt("rawHeight", c.rawHeight)
             .putString("rawScalingQuality", c.rawScalingQuality.name)
             .putString("rawDemosaicAlgorithm", c.rawDemosaicAlgorithm.name)
+            .putInt("rawFrameBufferCapacity", c.rawFrameBufferCapacity.coerceIn(1, 6))
             .putBoolean("rawThreeAAuxiliaryYuvEnabled", c.rawThreeAAuxiliaryYuvEnabled)
             .putBoolean("rawLensShadingCorrectionEnabled", c.rawLensShadingCorrectionEnabled)
             .putInt("cameraShadingMode", c.cameraShadingMode)
