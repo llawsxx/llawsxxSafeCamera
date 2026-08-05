@@ -243,6 +243,7 @@ data class RecordingConfig(
     val customRewriteColorMetadata: Boolean get() = rewriteColorRange != VideoColorRange.DEFAULT ||
         rewriteColorStandard != VideoColorStandard.DEFAULT || rewriteColorMatrix != VideoColorMatrix.DEFAULT ||
         rewriteColorTransfer != VideoColorTransfer.DEFAULT
+    val manualSpsVuiRewriteEnabled: Boolean get() = forceSpsVui && customRewriteColorMetadata
     val effectiveRawColorRange: VideoColorRange get() =
         colorRange.takeUnless { it == VideoColorRange.DEFAULT } ?: VideoColorRange.LIMITED
     val effectiveRawColorStandard: VideoColorStandard get() =
@@ -253,6 +254,11 @@ data class RecordingConfig(
         VideoColorStandard.BT2020 -> VideoColorMatrix.BT2020
         else -> VideoColorMatrix.BT709
     }
+    val spsVuiRewriteEnabled: Boolean get() = manualSpsVuiRewriteEnabled
+    val effectiveVuiColorRange: VideoColorRange get() = rewriteColorRange
+    val effectiveVuiColorStandard: VideoColorStandard get() = rewriteColorStandard
+    val effectiveVuiColorMatrix: VideoColorMatrix get() = rewriteColorMatrix
+    val effectiveVuiColorTransfer: VideoColorTransfer get() = rewriteColorTransfer
     val rawHdrOutput: Boolean get() = rawProcessingEnabled &&
         effectiveRawColorTransfer in setOf(VideoColorTransfer.HLG, VideoColorTransfer.ST2084)
     val effectiveRawSharpeningStrength: Float get() = rawSharpeningStrength.coerceIn(0f, 1f)
@@ -277,7 +283,7 @@ data class RecordingConfig(
     val mediaCodecEngineRequested: Boolean get() = mediaCodecMode || customVideoEncoderParameters ||
         (hasVideo && hasAudio && audioAutomaticGainControl) ||
         customColorMetadata || videoTransformEnabled || rawProcessingEnabled ||
-        dynamicRange != VideoDynamicRange.SDR || (forceSpsVui && customRewriteColorMetadata)
+        dynamicRange != VideoDynamicRange.SDR || manualSpsVuiRewriteEnabled
     val transformWidth: Int get() = if (cropEnabled) cropWidth else width
     val transformHeight: Int get() = if (cropEnabled) cropHeight else height
     val outputWidth: Int get() = if (resizeEnabled) recordWidth else transformWidth

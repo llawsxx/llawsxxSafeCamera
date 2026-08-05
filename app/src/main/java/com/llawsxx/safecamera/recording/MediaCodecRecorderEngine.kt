@@ -190,16 +190,15 @@ class MediaCodecRecorderEngine(
             }
             coordinator = MediaMuxCoordinator(mediaMuxer, config.hasAudio) { markMuxStarted() }
         }
-        val rewriteRawColor = config.rawProcessingEnabled
-        mux = if (rewriteRawColor || config.forceSpsVui && config.customRewriteColorMetadata) {
+        mux = if (config.spsVuiRewriteEnabled) {
             VuiRewritingMuxCoordinator(
                 coordinator,
                 H26xVuiRewriter(
                     config.videoCodec,
-                    if (rewriteRawColor) config.effectiveRawColorRange else config.rewriteColorRange,
-                    if (rewriteRawColor) config.effectiveRawColorStandard else config.rewriteColorStandard,
-                    if (rewriteRawColor) config.effectiveRawColorMatrix else config.rewriteColorMatrix,
-                    if (rewriteRawColor) config.effectiveRawColorTransfer else config.rewriteColorTransfer,
+                    config.effectiveVuiColorRange,
+                    config.effectiveVuiColorStandard,
+                    config.effectiveVuiColorMatrix,
+                    config.effectiveVuiColorTransfer,
                 ),
             )
         } else {

@@ -175,6 +175,31 @@ class RecordingConfigTest {
     }
 
     @Test
+    fun rawProcessingDoesNotRequireSpsVuiRewrite() {
+        val raw = RecordingConfig(
+            rawProcessingEnabled = true,
+            colorRange = VideoColorRange.LIMITED,
+            colorStandard = VideoColorStandard.BT2020,
+            colorTransfer = VideoColorTransfer.HLG,
+        )
+        assertTrue(!raw.spsVuiRewriteEnabled)
+
+        val manual = raw.copy(
+            rewriteColorRange = VideoColorRange.FULL,
+            rewriteColorStandard = VideoColorStandard.BT709,
+            rewriteColorMatrix = VideoColorMatrix.BT709,
+            rewriteColorTransfer = VideoColorTransfer.BT709,
+            forceSpsVui = true,
+        )
+        assertTrue(manual.manualSpsVuiRewriteEnabled)
+        assertTrue(manual.spsVuiRewriteEnabled)
+        assertEquals(VideoColorRange.FULL, manual.effectiveVuiColorRange)
+        assertEquals(VideoColorStandard.BT709, manual.effectiveVuiColorStandard)
+        assertEquals(VideoColorMatrix.BT709, manual.effectiveVuiColorMatrix)
+        assertEquals(VideoColorTransfer.BT709, manual.effectiveVuiColorTransfer)
+    }
+
+    @Test
     fun exposureCannotExceedTwoFrameIntervals() {
         assertEquals(66_666_666L, RecordingConfig(fps = 30).maximumExposureNs)
         assertEquals(33_333_333L, RecordingConfig(fps = 60).maximumExposureNs)

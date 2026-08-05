@@ -1464,7 +1464,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
-                        if (!config.rawProcessingEnabled) Section("SPS/VUI 强制重写") {
+                        Section("SPS/VUI 强制重写") {
                             Labeled("Range") {
                                 ChoiceRow(VideoColorRange.entries, config.rewriteColorRange, { it.label }, !recording && !config.highSpeedMode) {
                                     config = config.copy(rewriteColorRange = it)
@@ -1493,7 +1493,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             ) { enabled -> config = config.copy(forceSpsVui = enabled) }
                             Text(
                                 if (config.forceSpsVui) {
-                                    "将按上面的独立设置直接修改 H.264/H.265 SPS 中的 VUI；HDR 模式下也可重写为 SDR 标记。这不会改变实际像素。"
+                                    "将按上面的独立设置直接修改 H.264/H.265 SPS 中的 VUI；HDR 或自行处理 RAW 模式下也可独立重写。这不会改变实际像素。"
                                 } else {
                                     "这里的值只用于 SPS/VUI 重写，不会提交给编码器；至少选择一个非默认值后可开启。"
                                 },
