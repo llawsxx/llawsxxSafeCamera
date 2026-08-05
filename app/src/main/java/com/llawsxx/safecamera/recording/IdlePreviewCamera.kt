@@ -46,6 +46,9 @@ class IdlePreviewCamera(context: Context) {
                 lensShadingCorrectionEnabled = config.rawLensShadingCorrectionEnabled,
                 sharpeningEnabled = config.rawSharpeningEnabled,
                 sharpeningStrength = config.effectiveRawSharpeningStrength,
+                contrast = config.effectiveRawContrast,
+                saturation = config.effectiveRawSaturation,
+                highlightCompression = config.effectiveRawHighlightCompression,
             )
             when {
                 config.rawProcessingEnabled &&
@@ -363,6 +366,9 @@ class IdlePreviewCamera(context: Context) {
                 lensShadingCorrectionEnabled = config.rawLensShadingCorrectionEnabled,
                 sharpeningEnabled = config.rawSharpeningEnabled,
                 sharpeningStrength = config.effectiveRawSharpeningStrength,
+                contrast = config.effectiveRawContrast,
+                saturation = config.effectiveRawSaturation,
+                highlightCompression = config.effectiveRawHighlightCompression,
                 outputColorStandard = config.effectiveRawColorStandard,
                 outputColorTransfer = config.effectiveRawColorTransfer,
                 onError = { message -> Log.w(TAG, message) },

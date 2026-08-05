@@ -124,6 +124,12 @@ enum class RawOutputPreset(
     ),
 }
 
+enum class RawColorStyle(val label: String) : Serializable {
+    STANDARD_DIRECT("标准直出"),
+    FAITHFUL("忠实还原"),
+    CUSTOM("自定义"),
+}
+
 enum class OrientationMode(val label: String) : Serializable {
     FOLLOW_SENSOR("跟随设备"), LANDSCAPE("固定横屏"), PORTRAIT("固定竖屏")
 }
@@ -169,6 +175,10 @@ data class RecordingConfig(
     val rawLensShadingCorrectionEnabled: Boolean = true,
     val rawSharpeningEnabled: Boolean = false,
     val rawSharpeningStrength: Float = 0.32f,
+    val rawColorStyle: RawColorStyle = RawColorStyle.STANDARD_DIRECT,
+    val rawCustomContrast: Float = 1.08f,
+    val rawCustomSaturation: Float = 1.08f,
+    val rawCustomHighlightCompression: Float = 0.45f,
     val videoBitrate: Int = 12_000_000,
     val videoBitrateMode: VideoBitrateMode = VideoBitrateMode.DEFAULT,
     val videoKeyFrameIntervalSeconds: Int = 2,
@@ -262,6 +272,21 @@ data class RecordingConfig(
     val rawHdrOutput: Boolean get() = rawProcessingEnabled &&
         effectiveRawColorTransfer in setOf(VideoColorTransfer.HLG, VideoColorTransfer.ST2084)
     val effectiveRawSharpeningStrength: Float get() = rawSharpeningStrength.coerceIn(0f, 1f)
+    val effectiveRawContrast: Float get() = when (rawColorStyle) {
+        RawColorStyle.STANDARD_DIRECT -> 1.08f
+        RawColorStyle.FAITHFUL -> 1f
+        RawColorStyle.CUSTOM -> rawCustomContrast.coerceIn(0.7f, 1.3f)
+    }
+    val effectiveRawSaturation: Float get() = when (rawColorStyle) {
+        RawColorStyle.STANDARD_DIRECT -> 1.08f
+        RawColorStyle.FAITHFUL -> 1f
+        RawColorStyle.CUSTOM -> rawCustomSaturation.coerceIn(0f, 2f)
+    }
+    val effectiveRawHighlightCompression: Float get() = when (rawColorStyle) {
+        RawColorStyle.STANDARD_DIRECT -> 0.45f
+        RawColorStyle.FAITHFUL -> 0f
+        RawColorStyle.CUSTOM -> rawCustomHighlightCompression.coerceIn(0f, 1f)
+    }
     val requires10BitEncoding: Boolean get() = dynamicRange.is10Bit || rawHdrOutput
     val rawOutputPreset: RawOutputPreset? get() = RawOutputPreset.entries.firstOrNull {
         it.standard == effectiveRawColorStandard && it.transfer == effectiveRawColorTransfer &&

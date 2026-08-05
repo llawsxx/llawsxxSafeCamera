@@ -130,6 +130,7 @@ import com.llawsxx.safecamera.recording.RecorderState
 import com.llawsxx.safecamera.recording.RecordingConfig
 import com.llawsxx.safecamera.recording.RecordingMode
 import com.llawsxx.safecamera.recording.RawOutputPreset
+import com.llawsxx.safecamera.recording.RawColorStyle
 import com.llawsxx.safecamera.recording.RawSensorInfo
 import com.llawsxx.safecamera.recording.AudioAacProfile
 import com.llawsxx.safecamera.recording.VideoBitrateMode
@@ -512,6 +513,10 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.rawLensShadingCorrectionEnabled,
         config.rawSharpeningEnabled,
         config.rawSharpeningStrength,
+        config.rawColorStyle,
+        config.rawCustomContrast,
+        config.rawCustomSaturation,
+        config.rawCustomHighlightCompression,
     ) {
         if (state is RecorderState.Recording) {
             RecorderController.updateCameraControls(context, config)
@@ -582,6 +587,10 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.rawLensShadingCorrectionEnabled,
         config.rawSharpeningEnabled,
         config.rawSharpeningStrength,
+        config.rawColorStyle,
+        config.rawCustomContrast,
+        config.rawCustomSaturation,
+        config.rawCustomHighlightCompression,
         config.colorStandard,
         config.colorTransfer,
         config.previewMode,
@@ -1021,6 +1030,42 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                     steps = 19,
                                     enabled = !recording && config.rawSharpeningEnabled,
                                 )
+                                Labeled("RAW 色彩风格") {
+                                    ChoiceRow(
+                                        RawColorStyle.entries,
+                                        config.rawColorStyle,
+                                        { it.label },
+                                        !recording,
+                                    ) { config = config.copy(rawColorStyle = it) }
+                                }
+                                if (config.rawColorStyle == RawColorStyle.CUSTOM) {
+                                    Text("对比度 ${(config.effectiveRawContrast * 100f).format0()}%")
+                                    Slider(
+                                        value = config.effectiveRawContrast,
+                                        onValueChange = { config = config.copy(rawCustomContrast = it) },
+                                        valueRange = 0.7f..1.3f,
+                                        steps = 23,
+                                        enabled = !recording,
+                                    )
+                                    Text("饱和度 ${(config.effectiveRawSaturation * 100f).format0()}%")
+                                    Slider(
+                                        value = config.effectiveRawSaturation,
+                                        onValueChange = { config = config.copy(rawCustomSaturation = it) },
+                                        valueRange = 0f..2f,
+                                        steps = 19,
+                                        enabled = !recording,
+                                    )
+                                    Text("高光压缩 ${(config.effectiveRawHighlightCompression * 100f).format0()}%")
+                                    Slider(
+                                        value = config.effectiveRawHighlightCompression,
+                                        onValueChange = {
+                                            config = config.copy(rawCustomHighlightCompression = it)
+                                        },
+                                        valueRange = 0f..1f,
+                                        steps = 19,
+                                        enabled = !recording,
+                                    )
+                                }
                                 Labeled("RAW 输出预设") {
                                     ChoiceRow(
                                         RawOutputPreset.entries,
@@ -1077,7 +1122,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 }
                                 Text(
                                     if (camera.rawLensShadingCorrectionAvailable) {
-                                        "RAW_SENSOR 由单次 GPU pass 完成去马赛克、颜色转换和可选修正。"
+                                        "RAW_SENSOR 由 GPU 完成去马赛克、颜色转换、色彩风格和可选修正。"
                                     } else {
                                         "当前镜头不提供可用的 LensShadingMap，暗角修正不可用。"
                                     },
@@ -2995,10 +3040,16 @@ private fun LandscapeCameraControls(
                                             FullscreenControl.APERTURE -> { selected = control; onPresetControlChange(null); apertureExpanded = true }
                                             FullscreenControl.FOCUS -> if (supportsManualFocus) {
                                                 if (config.focusMode == FocusMode.MANUAL) {
-                                                    if (config.focusDistancePresets.isNotEmpty() &&
+                                                    if (selected != FullscreenControl.FOCUS) {
+                                                        selected = control
+                                                        onPresetControlChange(
+                                                            CameraPresetControl.FOCUS.takeIf {
+                                                                config.focusDistancePresets.isNotEmpty()
+                                                            }
+                                                        )
+                                                    } else if (config.focusDistancePresets.isNotEmpty() &&
                                                         presetControl != CameraPresetControl.FOCUS
                                                     ) {
-                                                        selected = control
                                                         onPresetControlChange(CameraPresetControl.FOCUS)
                                                     } else {
                                                         onPresetControlChange(null)
@@ -3615,10 +3666,16 @@ private fun QuickCameraControls(
                                 FullscreenControl.APERTURE -> { selected = control; onPresetControlChange(null); apertureExpanded = true }
                                 FullscreenControl.FOCUS -> if (supportsManualFocus) {
                                     if (config.focusMode == FocusMode.MANUAL) {
-                                        if (config.focusDistancePresets.isNotEmpty() &&
+                                        if (selected != FullscreenControl.FOCUS) {
+                                            selected = control
+                                            onPresetControlChange(
+                                                CameraPresetControl.FOCUS.takeIf {
+                                                    config.focusDistancePresets.isNotEmpty()
+                                                }
+                                            )
+                                        } else if (config.focusDistancePresets.isNotEmpty() &&
                                             presetControl != CameraPresetControl.FOCUS
                                         ) {
-                                            selected = control
                                             onPresetControlChange(CameraPresetControl.FOCUS)
                                         } else {
                                             onPresetControlChange(null)

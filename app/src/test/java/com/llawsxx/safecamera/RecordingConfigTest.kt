@@ -2,6 +2,7 @@ package com.llawsxx.safecamera
 
 import com.llawsxx.safecamera.recording.multiplyDivide
 import com.llawsxx.safecamera.recording.RecordingConfig
+import com.llawsxx.safecamera.recording.RawColorStyle
 import com.llawsxx.safecamera.recording.VideoColorMatrix
 import com.llawsxx.safecamera.recording.VideoColorRange
 import com.llawsxx.safecamera.recording.VideoColorStandard
@@ -58,11 +59,27 @@ class RecordingConfigTest {
         val defaults = RecordingConfig()
         assertEquals(0.32f, defaults.effectiveRawSharpeningStrength, 0f)
         assertTrue(defaults.rawThreeAAuxiliaryYuvEnabled)
+        assertEquals(RawColorStyle.STANDARD_DIRECT, defaults.rawColorStyle)
+        assertEquals(1.08f, defaults.effectiveRawContrast, 0f)
+        assertEquals(1.08f, defaults.effectiveRawSaturation, 0f)
+        assertEquals(0.45f, defaults.effectiveRawHighlightCompression, 0f)
 
         val invalid = RecordingConfig(
             rawSharpeningStrength = 4f,
+            rawColorStyle = RawColorStyle.CUSTOM,
+            rawCustomContrast = 4f,
+            rawCustomSaturation = -1f,
+            rawCustomHighlightCompression = 2f,
         )
         assertEquals(1f, invalid.effectiveRawSharpeningStrength, 0f)
+        assertEquals(1.3f, invalid.effectiveRawContrast, 0f)
+        assertEquals(0f, invalid.effectiveRawSaturation, 0f)
+        assertEquals(1f, invalid.effectiveRawHighlightCompression, 0f)
+
+        val faithful = RecordingConfig(rawColorStyle = RawColorStyle.FAITHFUL)
+        assertEquals(1f, faithful.effectiveRawContrast, 0f)
+        assertEquals(1f, faithful.effectiveRawSaturation, 0f)
+        assertEquals(0f, faithful.effectiveRawHighlightCompression, 0f)
     }
 
     @Test
