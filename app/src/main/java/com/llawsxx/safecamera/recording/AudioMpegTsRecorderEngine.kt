@@ -30,7 +30,7 @@ class AudioMpegTsRecorderEngine(
 ) : RecorderEngine {
     private val thread = HandlerThread("native-ts-audio").apply { start() }
     private val handler = Handler(thread.looper)
-    private var config = initialConfig
+    @Volatile private var config = initialConfig
     @Volatile private var record: AudioRecord? = null
     private var automaticGainControl: AutomaticGainControl? = null
     @Volatile private var codec: MediaCodec? = null
@@ -189,6 +189,7 @@ class AudioMpegTsRecorderEngine(
 
     override fun forceRelease() {
         running.set(false)
+        stopStarted.compareAndSet(false, true)
         handler.removeCallbacks(statsTick)
         // Stopping AudioRecord unblocks the audio loop. The finalization thread
         // remains the sole owner that releases codec, muxer and output objects.
@@ -197,7 +198,12 @@ class AudioMpegTsRecorderEngine(
     }
     override fun updatePreview(surface: Surface?, enabled: Boolean, previewRotationDegrees: Int) = Unit
     override fun switchCamera(cameraId: String) = Unit
-    override fun updateCameraControls(updated: RecordingConfig) { config = config.copy(audioInputDeviceId = updated.audioInputDeviceId) }
+    override fun updateCameraControls(updated: RecordingConfig) {
+        handler.post {
+            if (!running.get() || stopStarted.get()) return@post
+            config = config.copy(audioInputDeviceId = updated.audioInputDeviceId)
+        }
+    }
 
     private fun releaseAutomaticGainControl() {
         runCatching { automaticGainControl?.enabled = false }

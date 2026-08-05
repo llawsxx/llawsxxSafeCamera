@@ -4,10 +4,12 @@ import android.content.Context
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureResult
 import android.media.MediaRecorder
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
+import android.graphics.ImageFormat
 import android.os.Build
 import android.util.Size
 import android.view.SurfaceHolder
@@ -48,6 +50,7 @@ object CameraCapabilities {
                     ?.joinToString("/") { "%.1f".format(it) }
                     .orEmpty()
                 val streamMap = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                val capabilities = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.toSet().orEmpty()
                 val sizes = streamMap
                     ?.getOutputSizes(MediaRecorder::class.java)
                     ?.sortedWith(compareByDescending<Size> { it.width.toLong() * it.height }.thenBy { it.width })
@@ -58,6 +61,64 @@ object CameraCapabilities {
                     ?.sortedWith(compareByDescending<Size> { it.width.toLong() * it.height }.thenBy { it.width })
                     ?.distinctBy { "${it.width}x${it.height}" }
                     .orEmpty()
+                val rawSizes = if (CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW in capabilities) {
+                    streamMap?.getOutputSizes(ImageFormat.RAW_SENSOR)
+                        ?.sortedWith(compareByDescending<Size> { it.width.toLong() * it.height }.thenBy { it.width })
+                        ?.distinctBy { "${it.width}x${it.height}" }
+                        .orEmpty()
+                } else emptyList()
+                val rawEstimatedMaxFpsBySize = rawSizes.associate { size ->
+                    val duration = runCatching {
+                        streamMap?.getOutputMinFrameDuration(ImageFormat.RAW_SENSOR, size)
+                    }.getOrNull()?.takeIf { it > 0L }
+                    "${size.width}x${size.height}" to
+                        (duration?.let { (1_000_000_000.0 / it).toInt().coerceAtLeast(1) } ?: 0)
+                }
+                val rawLensShadingCorrectionAvailable = rawSizes.isNotEmpty() &&
+                    c.get(CameraCharacteristics.SENSOR_INFO_LENS_SHADING_APPLIED) != true &&
+                    (c.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_LENS_SHADING_MAP_MODES)
+                        ?: intArrayOf()).contains(CameraCharacteristics.STATISTICS_LENS_SHADING_MAP_MODE_ON)
+                val rawSensorInfo = rawSizes.takeIf { it.isNotEmpty() }?.let {
+                    val blackPattern = c.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
+                    val captureResultKeys = runCatching { c.availableCaptureResultKeys }
+                        .getOrDefault(emptyList())
+                    RawSensorInfo(
+                        cfa = c.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT),
+                        staticBlackLevels = blackPattern?.let { pattern ->
+                            listOf(
+                                pattern.getOffsetForIndex(0, 0),
+                                pattern.getOffsetForIndex(1, 0),
+                                pattern.getOffsetForIndex(0, 1),
+                                pattern.getOffsetForIndex(1, 1),
+                            )
+                        }.orEmpty(),
+                        whiteLevel = c.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL),
+                        dynamicBlackLevelAvailable = CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL in captureResultKeys,
+                        dynamicWhiteLevelAvailable = CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL in captureResultKeys,
+                        pixelArraySize = c.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE),
+                        preCorrectionActiveArraySize = c.get(
+                            CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE,
+                        )?.let { rect -> Size(rect.width(), rect.height()) },
+                        activeArraySize = c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+                            ?.let { rect -> Size(rect.width(), rect.height()) },
+                        opticalBlackRegionCount = c.get(CameraCharacteristics.SENSOR_OPTICAL_BLACK_REGIONS)
+                            ?.size ?: 0,
+                        perFrameColorTransformAvailable =
+                            CaptureResult.COLOR_CORRECTION_TRANSFORM in captureResultKeys,
+                        staticColorTransformCount = listOf(
+                            CameraCharacteristics.SENSOR_COLOR_TRANSFORM1,
+                            CameraCharacteristics.SENSOR_COLOR_TRANSFORM2,
+                        ).count { key -> c.get(key) != null },
+                        forwardMatrixCount = listOf(
+                            CameraCharacteristics.SENSOR_FORWARD_MATRIX1,
+                            CameraCharacteristics.SENSOR_FORWARD_MATRIX2,
+                        ).count { key -> c.get(key) != null },
+                        calibrationTransformCount = listOf(
+                            CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM1,
+                            CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM2,
+                        ).count { key -> c.get(key) != null },
+                    )
+                }
                 val surfaceViewSizes = streamMap
                     ?.getOutputSizes(SurfaceHolder::class.java)
                     ?.sortedWith(compareByDescending<Size> { it.width.toLong() * it.height }.thenBy { it.width })
@@ -99,7 +160,6 @@ object CameraCapabilities {
                     listOf(VideoDynamicRange.SDR)
                 }
                 val awbModes = c.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)?.toList().orEmpty()
-                val capabilities = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.toSet().orEmpty()
                 CameraInfo(
                     id = id,
                     displayName = "${if (experimentalCandidate) "实验 · " else ""}$facingName $id${if (focalLengths.isBlank()) "" else " · ${focalLengths}mm"}",
@@ -131,6 +191,10 @@ object CameraCapabilities {
                     sensorOrientation = c.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0,
                     highSpeedModes = highSpeedModes,
                     dynamicRanges = dynamicRanges,
+                    rawSizes = rawSizes,
+                    rawEstimatedMaxFpsBySize = rawEstimatedMaxFpsBySize,
+                    rawLensShadingCorrectionAvailable = rawLensShadingCorrectionAvailable,
+                    rawSensorInfo = rawSensorInfo,
                 )
             }.getOrNull()
         }.sortedWith(compareBy<CameraInfo> { it.experimentalCandidate }.thenBy { it.id.toIntOrNull() ?: Int.MAX_VALUE }.thenBy { it.id })

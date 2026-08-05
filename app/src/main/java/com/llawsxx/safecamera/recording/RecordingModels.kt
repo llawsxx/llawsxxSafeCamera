@@ -54,8 +54,8 @@ enum class VideoColorRange(
     val vuiFullRange: Int,
 ) : Serializable {
     DEFAULT("编码器默认", null, -1),
-    LIMITED("Limited range", MediaFormat.COLOR_RANGE_LIMITED, 0),
-    FULL("Full range", MediaFormat.COLOR_RANGE_FULL, 1),
+    LIMITED("TV / Limited range", MediaFormat.COLOR_RANGE_LIMITED, 0),
+    FULL("PC / Full range", MediaFormat.COLOR_RANGE_FULL, 1),
 }
 
 enum class VideoColorStandard(
@@ -98,6 +98,32 @@ enum class VideoColorTransfer(
     ST2084("ST 2084 / PQ", MediaFormat.COLOR_TRANSFER_ST2084, 16),
 }
 
+enum class RawOutputPreset(
+    val label: String,
+    val standard: VideoColorStandard,
+    val transfer: VideoColorTransfer,
+    val range: VideoColorRange,
+) : Serializable {
+    BT709_REC709_TV(
+        "BT.709 / Rec.709 / TV",
+        VideoColorStandard.BT709,
+        VideoColorTransfer.BT709,
+        VideoColorRange.LIMITED,
+    ),
+    BT2020_HLG_TV(
+        "BT.2020 / HLG / TV",
+        VideoColorStandard.BT2020,
+        VideoColorTransfer.HLG,
+        VideoColorRange.LIMITED,
+    ),
+    BT709_HLG_TV(
+        "BT.709 / HLG / TV",
+        VideoColorStandard.BT709,
+        VideoColorTransfer.HLG,
+        VideoColorRange.LIMITED,
+    ),
+}
+
 enum class OrientationMode(val label: String) : Serializable {
     FOLLOW_SENSOR("跟随设备"), LANDSCAPE("固定横屏"), PORTRAIT("固定竖屏")
 }
@@ -136,6 +162,13 @@ data class RecordingConfig(
     val experimentalCameraAccess: Boolean = false,
     val experimentalUnadvertisedFps: Boolean = false,
     val mediaCodecMode: Boolean = false,
+    val rawProcessingEnabled: Boolean = false,
+    val rawWidth: Int = 0,
+    val rawHeight: Int = 0,
+    val rawThreeAAuxiliaryYuvEnabled: Boolean = true,
+    val rawLensShadingCorrectionEnabled: Boolean = true,
+    val rawSharpeningEnabled: Boolean = false,
+    val rawSharpeningStrength: Float = 0.32f,
     val videoBitrate: Int = 12_000_000,
     val videoBitrateMode: VideoBitrateMode = VideoBitrateMode.DEFAULT,
     val videoKeyFrameIntervalSeconds: Int = 2,
@@ -210,6 +243,32 @@ data class RecordingConfig(
     val customRewriteColorMetadata: Boolean get() = rewriteColorRange != VideoColorRange.DEFAULT ||
         rewriteColorStandard != VideoColorStandard.DEFAULT || rewriteColorMatrix != VideoColorMatrix.DEFAULT ||
         rewriteColorTransfer != VideoColorTransfer.DEFAULT
+    val effectiveRawColorRange: VideoColorRange get() =
+        colorRange.takeUnless { it == VideoColorRange.DEFAULT } ?: VideoColorRange.LIMITED
+    val effectiveRawColorStandard: VideoColorStandard get() =
+        colorStandard.takeUnless { it == VideoColorStandard.DEFAULT } ?: VideoColorStandard.BT709
+    val effectiveRawColorTransfer: VideoColorTransfer get() =
+        colorTransfer.takeUnless { it == VideoColorTransfer.DEFAULT } ?: VideoColorTransfer.BT709
+    val effectiveRawColorMatrix: VideoColorMatrix get() = when (effectiveRawColorStandard) {
+        VideoColorStandard.BT2020 -> VideoColorMatrix.BT2020
+        else -> VideoColorMatrix.BT709
+    }
+    val rawHdrOutput: Boolean get() = rawProcessingEnabled &&
+        effectiveRawColorTransfer in setOf(VideoColorTransfer.HLG, VideoColorTransfer.ST2084)
+    val effectiveRawSharpeningStrength: Float get() = rawSharpeningStrength.coerceIn(0f, 1f)
+    val requires10BitEncoding: Boolean get() = dynamicRange.is10Bit || rawHdrOutput
+    val rawOutputPreset: RawOutputPreset? get() = RawOutputPreset.entries.firstOrNull {
+        it.standard == effectiveRawColorStandard && it.transfer == effectiveRawColorTransfer &&
+            it.range == effectiveRawColorRange
+    }
+    val rawColorConfigurationSupported: Boolean get() =
+        effectiveRawColorRange in setOf(VideoColorRange.LIMITED, VideoColorRange.FULL) &&
+            effectiveRawColorStandard in setOf(VideoColorStandard.BT709, VideoColorStandard.BT2020) &&
+            effectiveRawColorTransfer in setOf(
+                VideoColorTransfer.BT709,
+                VideoColorTransfer.HLG,
+                VideoColorTransfer.ST2084,
+            )
     val videoTransformEnabled: Boolean get() = cropEnabled || resizeEnabled || rotateImagePixels
     val customVideoEncoderParameters: Boolean get() = videoBitrateMode != VideoBitrateMode.DEFAULT ||
         videoKeyFrameIntervalSeconds != 2 || videoMaxBFrames != 0
@@ -217,7 +276,7 @@ data class RecordingConfig(
         if (container == ContainerFormat.MPEG_TS) AudioAacProfile.LC else audioAacProfile
     val mediaCodecEngineRequested: Boolean get() = mediaCodecMode || customVideoEncoderParameters ||
         (hasVideo && hasAudio && audioAutomaticGainControl) ||
-        customColorMetadata || videoTransformEnabled ||
+        customColorMetadata || videoTransformEnabled || rawProcessingEnabled ||
         dynamicRange != VideoDynamicRange.SDR || (forceSpsVui && customRewriteColorMetadata)
     val transformWidth: Int get() = if (cropEnabled) cropWidth else width
     val transformHeight: Int get() = if (cropEnabled) cropHeight else height
@@ -246,6 +305,27 @@ data class HighSpeedVideoMode(
     val label: String get() = "${width}×${height}  ${if (minFps == maxFps) maxFps else "$minFps–$maxFps"} fps"
 }
 
+data class RawSensorInfo(
+    val cfa: Int?,
+    /** Black levels in top-left, top-right, bottom-left, bottom-right CFA order. */
+    val staticBlackLevels: List<Int>,
+    val whiteLevel: Int?,
+    val dynamicBlackLevelAvailable: Boolean,
+    val dynamicWhiteLevelAvailable: Boolean,
+    val pixelArraySize: Size?,
+    val preCorrectionActiveArraySize: Size?,
+    val activeArraySize: Size?,
+    val opticalBlackRegionCount: Int,
+    val perFrameColorTransformAvailable: Boolean,
+    val staticColorTransformCount: Int,
+    val forwardMatrixCount: Int,
+    val calibrationTransformCount: Int,
+) {
+    val estimatedBitDepth: Int? get() = whiteLevel?.takeIf { it > 0 }?.let {
+        Int.SIZE_BITS - Integer.numberOfLeadingZeros(it)
+    }
+}
+
 data class CameraInfo(
     val id: String,
     val displayName: String,
@@ -272,6 +352,10 @@ data class CameraInfo(
     val sensorOrientation: Int,
     val highSpeedModes: List<HighSpeedVideoMode>,
     val dynamicRanges: List<VideoDynamicRange>,
+    val rawSizes: List<Size>,
+    val rawEstimatedMaxFpsBySize: Map<String, Int>,
+    val rawLensShadingCorrectionAvailable: Boolean,
+    val rawSensorInfo: RawSensorInfo?,
 )
 
 data class RecordingStats(

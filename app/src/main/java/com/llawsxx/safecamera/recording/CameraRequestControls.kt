@@ -18,6 +18,22 @@ object CameraRequestControls {
         builder: CaptureRequest.Builder,
     ) {
         val characteristics = manager.getCameraCharacteristics(cameraId)
+        builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+        if (config.rawProcessingEnabled && config.rawLensShadingCorrectionEnabled) {
+            val mapModes = characteristics.get(
+                CameraCharacteristics.STATISTICS_INFO_AVAILABLE_LENS_SHADING_MAP_MODES,
+            ) ?: intArrayOf()
+            if (CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON in mapModes) {
+                builder.set(
+                    CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE,
+                    CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON,
+                )
+            }
+            val shadingModes = characteristics.get(CameraCharacteristics.SHADING_AVAILABLE_MODES) ?: intArrayOf()
+            if (CaptureRequest.SHADING_MODE_OFF in shadingModes) {
+                builder.set(CaptureRequest.SHADING_MODE, CaptureRequest.SHADING_MODE_OFF)
+            }
+        }
         characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)?.let { activeArray ->
             builder.set(
                 CaptureRequest.SCALER_CROP_REGION,
@@ -182,6 +198,41 @@ object CameraRequestControls {
         return Rect(left, top, left + cropWidth, top + cropHeight)
     }
 }
+
+internal fun RecordingConfig.cameraRequestControlsKey(): List<Any?> = listOf(
+    cameraId,
+    width,
+    height,
+    fps,
+    experimentalUnadvertisedFps,
+    highSpeedMode,
+    rawProcessingEnabled,
+    rawLensShadingCorrectionEnabled,
+    manualExposure,
+    iso,
+    exposureNs,
+    unrestrictedIso,
+    unrestrictedExposure,
+    aperture,
+    exposureCompensation,
+    antibandingMode,
+    awbMode,
+    manualWhiteBalance,
+    whiteBalanceTemperature,
+    whiteBalanceTint,
+    advancedWhiteBalance,
+    splitWhiteBalanceGreen,
+    whiteBalanceRedGain,
+    whiteBalanceGreenEvenGain,
+    whiteBalanceGreenOddGain,
+    whiteBalanceBlueGain,
+    focusMode,
+    focusDistanceDiopters,
+    unrestrictedFocus,
+    opticalStabilization,
+    noiseReductionMode,
+    edgeMode,
+)
 
 internal data class ManualWhiteBalanceGains(
     val red: Float,

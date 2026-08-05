@@ -10,6 +10,9 @@ import com.llawsxx.safecamera.recording.VideoDynamicRange
 import com.llawsxx.safecamera.recording.VideoBitrateMode
 import com.llawsxx.safecamera.recording.AudioAacProfile
 import com.llawsxx.safecamera.recording.ContainerFormat
+import com.llawsxx.safecamera.recording.LINEAR_BT709_TO_BT2020
+import com.llawsxx.safecamera.recording.multiply3x3
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -43,6 +46,23 @@ class RecordingConfigTest {
     @Test
     fun pixelRotationRequestsMediaCodecEngine() {
         assertTrue(RecordingConfig(rotateImagePixels = true).mediaCodecEngineRequested)
+    }
+
+    @Test
+    fun rawProcessingRequestsMediaCodecEngine() {
+        assertTrue(RecordingConfig(rawProcessingEnabled = true).mediaCodecEngineRequested)
+    }
+
+    @Test
+    fun rawProcessingTuningKeepsExistingDefaultsAndClampsUnsafeValues() {
+        val defaults = RecordingConfig()
+        assertEquals(0.32f, defaults.effectiveRawSharpeningStrength, 0f)
+        assertTrue(defaults.rawThreeAAuxiliaryYuvEnabled)
+
+        val invalid = RecordingConfig(
+            rawSharpeningStrength = 4f,
+        )
+        assertEquals(1f, invalid.effectiveRawSharpeningStrength, 0f)
     }
 
     @Test
@@ -171,6 +191,27 @@ class RecordingConfigTest {
         val pts = multiplyDivide(tenHoursOfAudioFrames, 1_000_000L, 48_000L)
 
         assertTrue(pts > 35_000_000_000L)
+    }
+
+    @Test
+    fun bt2020TransformIsPremultipliedWithSensorTransform() {
+        val sensorTo709 = floatArrayOf(
+            1.1f, -0.1f, 0.0f,
+            0.0f, 1.0f, 0.0f,
+            0.0f, -0.2f, 1.2f,
+        )
+
+        val combined = multiply3x3(LINEAR_BT709_TO_BT2020, sensorTo709)
+        val sensorSample = floatArrayOf(0.2f, 0.4f, 0.8f)
+        val via709 = apply3x3(sensorTo709, sensorSample)
+        val expected = apply3x3(LINEAR_BT709_TO_BT2020, via709)
+
+        assertArrayEquals(expected, apply3x3(combined, sensorSample), 1e-6f)
+    }
+
+    private fun apply3x3(matrix: FloatArray, value: FloatArray): FloatArray = FloatArray(3) { row ->
+        matrix[row * 3] * value[0] + matrix[row * 3 + 1] * value[1] +
+            matrix[row * 3 + 2] * value[2]
     }
 
 }

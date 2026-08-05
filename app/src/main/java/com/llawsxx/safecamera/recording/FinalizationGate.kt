@@ -6,4 +6,6 @@ internal class FinalizationGate {
     private val claimed = AtomicBoolean(false)
 
     fun tryClaim(): Boolean = claimed.compareAndSet(false, true)
+
+    fun isClaimed(): Boolean = claimed.get()
 }

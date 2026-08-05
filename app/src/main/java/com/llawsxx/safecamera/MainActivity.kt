@@ -129,6 +129,8 @@ import com.llawsxx.safecamera.recording.RecorderMessage
 import com.llawsxx.safecamera.recording.RecorderState
 import com.llawsxx.safecamera.recording.RecordingConfig
 import com.llawsxx.safecamera.recording.RecordingMode
+import com.llawsxx.safecamera.recording.RawOutputPreset
+import com.llawsxx.safecamera.recording.RawSensorInfo
 import com.llawsxx.safecamera.recording.AudioAacProfile
 import com.llawsxx.safecamera.recording.VideoBitrateMode
 import com.llawsxx.safecamera.recording.VideoCodec
@@ -253,6 +255,11 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             fps = if (savedFpsUsable || highSpeedUsable) saved!!.fps else preferredFps(camera),
             experimentalUnadvertisedFps = savedFpsUsable && saved!!.experimentalUnadvertisedFps,
             highSpeedMode = highSpeedUsable,
+            rawProcessingEnabled = config.rawProcessingEnabled && camera.rawSizes.isNotEmpty(),
+            rawWidth = camera.rawSizes.firstOrNull { it.width == config.rawWidth && it.height == config.rawHeight }
+                ?.width ?: camera.rawSizes.firstOrNull()?.width ?: 0,
+            rawHeight = camera.rawSizes.firstOrNull { it.width == config.rawWidth && it.height == config.rawHeight }
+                ?.height ?: camera.rawSizes.firstOrNull()?.height ?: 0,
             aperture = config.aperture?.takeIf(camera.apertures::contains) ?: camera.apertures.firstOrNull(),
             opticalStabilization = config.opticalStabilization && camera.oisAvailable,
             antibandingMode = supportedAntibandingMode(camera, config.antibandingMode),
@@ -355,6 +362,13 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 width = size.first,
                 height = size.second,
                 fps = if (savedFpsSupported) config.fps else preferredFps(camera),
+                rawProcessingEnabled = config.rawProcessingEnabled && camera.rawSizes.isNotEmpty(),
+                rawWidth = camera.rawSizes.firstOrNull {
+                    it.width == config.rawWidth && it.height == config.rawHeight
+                }?.width ?: camera.rawSizes.firstOrNull()?.width ?: 0,
+                rawHeight = camera.rawSizes.firstOrNull {
+                    it.width == config.rawWidth && it.height == config.rawHeight
+                }?.height ?: camera.rawSizes.firstOrNull()?.height ?: 0,
             iso = camera.isoRange?.takeUnless { config.unrestrictedIso }
                 ?.let { config.iso.coerceIn(it.lower, it.upper) } ?: config.iso,
             exposureNs = camera.exposureRange?.takeUnless { config.unrestrictedExposure }
@@ -494,9 +508,12 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.antibandingMode,
         config.noiseReductionMode,
         config.edgeMode,
+        config.rawThreeAAuxiliaryYuvEnabled,
+        config.rawLensShadingCorrectionEnabled,
+        config.rawSharpeningEnabled,
+        config.rawSharpeningStrength,
     ) {
         if (state is RecorderState.Recording) {
-            delay(150)
             RecorderController.updateCameraControls(context, config)
         }
     }
@@ -558,6 +575,15 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.antibandingMode,
         config.noiseReductionMode,
         config.edgeMode,
+        config.rawProcessingEnabled,
+        config.rawWidth,
+        config.rawHeight,
+        config.rawThreeAAuxiliaryYuvEnabled,
+        config.rawLensShadingCorrectionEnabled,
+        config.rawSharpeningEnabled,
+        config.rawSharpeningStrength,
+        config.colorStandard,
+        config.colorTransfer,
         config.previewMode,
         config.previewWidth,
         config.previewHeight,
@@ -578,7 +604,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 )
                 if (canPreview && surface != null) {
                     if(previewReadyEpoch == previewResumeEpoch){
-                        idlePreview.show(config, surface)
+                        idlePreview.show(config, surface, previewRotationDegrees)
                     }
                 }
                 else idlePreview.hide()
@@ -894,7 +920,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     val mediaCodecEngineForced = config.dynamicRange != VideoDynamicRange.SDR ||
                         config.customVideoEncoderParameters || config.customColorMetadata ||
                         config.container == ContainerFormat.MPEG_TS || config.videoTransformEnabled ||
-                        config.forceSpsVui && config.customRewriteColorMetadata
+                        config.rawProcessingEnabled || config.forceSpsVui && config.customRewriteColorMetadata
                     ToggleLine(
                         "MediaCodec 直录引擎",
                         config.mediaCodecEngineRequested,
@@ -916,10 +942,155 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                         style = MaterialTheme.typography.bodySmall,
                     )
                     selectedCamera?.let { camera ->
+                        Section("RAW SENSOR 处理") {
+                            ToggleLine(
+                                "自行处理 Bayer RAW",
+                                config.rawProcessingEnabled,
+                                !recording && !config.highSpeedMode && camera.rawSizes.isNotEmpty() &&
+                                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.O,
+                            ) { enabled ->
+                                val rawSize = camera.rawSizes.firstOrNull()
+                                config = if (enabled && rawSize != null) {
+                                    config.copy(
+                                        rawProcessingEnabled = true,
+                                        rawWidth = rawSize.width,
+                                        rawHeight = rawSize.height,
+                                        highSpeedMode = false,
+                                        dynamicRange = VideoDynamicRange.SDR,
+                                        cropEnabled = false,
+                                        resizeEnabled = false,
+                                        rotateImagePixels = false,
+                                        permanentPreviewSurface = false,
+                                    )
+                                } else config.copy(rawProcessingEnabled = false)
+                            }
+                            camera.rawSensorInfo?.let { info ->
+                                RawSensorInformation(
+                                    info = info,
+                                    lensShadingMapAvailable = camera.rawLensShadingCorrectionAvailable,
+                                )
+                            }
+                            if (config.rawProcessingEnabled) {
+                                val selectedRawSize = camera.rawSizes.firstOrNull {
+                                    it.width == config.rawWidth && it.height == config.rawHeight
+                                }
+                                Labeled("RAW 输入尺寸") {
+                                    ChoiceRow(
+                                        camera.rawSizes,
+                                        selectedRawSize,
+                                        { size ->
+                                            val maxFps = camera.rawEstimatedMaxFpsBySize["${size.width}x${size.height}"]
+                                            "${size.width}x${size.height}${maxFps?.takeIf { it > 0 }?.let { " · <= $it fps" }.orEmpty()}"
+                                        },
+                                        !recording,
+                                    ) { size ->
+                                        config = config.copy(
+                                            rawWidth = size.width,
+                                            rawHeight = size.height,
+                                        )
+                                    }
+                                }
+                                ToggleLine(
+                                    "RAW 3A 辅助 YUV 流",
+                                    config.rawThreeAAuxiliaryYuvEnabled,
+                                    !recording,
+                                ) { enabled ->
+                                    config = config.copy(rawThreeAAuxiliaryYuvEnabled = enabled)
+                                }
+                                ToggleLine(
+                                    "镜头暗角修正",
+                                    config.rawLensShadingCorrectionEnabled &&
+                                        camera.rawLensShadingCorrectionAvailable,
+                                    !recording && camera.rawLensShadingCorrectionAvailable,
+                                ) { enabled ->
+                                    config = config.copy(rawLensShadingCorrectionEnabled = enabled)
+                                }
+                                ToggleLine(
+                                    "轻量锐化",
+                                    config.rawSharpeningEnabled,
+                                    !recording,
+                                ) { enabled -> config = config.copy(rawSharpeningEnabled = enabled) }
+                                Text(
+                                    "锐化强度 ${(config.effectiveRawSharpeningStrength * 100f).format0()}%",
+                                    style = MaterialTheme.typography.labelMedium,
+                                )
+                                Slider(
+                                    value = config.effectiveRawSharpeningStrength,
+                                    onValueChange = { config = config.copy(rawSharpeningStrength = it) },
+                                    valueRange = 0f..1f,
+                                    steps = 19,
+                                    enabled = !recording && config.rawSharpeningEnabled,
+                                )
+                                Labeled("RAW 输出预设") {
+                                    ChoiceRow(
+                                        RawOutputPreset.entries,
+                                        config.rawOutputPreset,
+                                        { it.label },
+                                        !recording,
+                                    ) { preset ->
+                                        config = config.copy(
+                                            colorStandard = preset.standard,
+                                            colorTransfer = preset.transfer,
+                                            colorRange = preset.range,
+                                            videoCodec = if (
+                                                preset.transfer == VideoColorTransfer.HLG ||
+                                                preset.transfer == VideoColorTransfer.ST2084
+                                            ) VideoCodec.H265 else config.videoCodec,
+                                        )
+                                    }
+                                }
+                                Labeled("Primaries") {
+                                    ChoiceRow(
+                                        listOf(VideoColorStandard.BT709, VideoColorStandard.BT2020),
+                                        config.effectiveRawColorStandard,
+                                        { it.label },
+                                        !recording,
+                                    ) { config = config.copy(colorStandard = it) }
+                                }
+                                Labeled("Transfer") {
+                                    ChoiceRow(
+                                        listOf(
+                                            VideoColorTransfer.BT709,
+                                            VideoColorTransfer.HLG,
+                                            VideoColorTransfer.ST2084,
+                                        ),
+                                        config.effectiveRawColorTransfer,
+                                        { it.label },
+                                        !recording,
+                                    ) { transfer ->
+                                        config = config.copy(
+                                            colorTransfer = transfer,
+                                            videoCodec = if (
+                                                transfer == VideoColorTransfer.HLG ||
+                                                transfer == VideoColorTransfer.ST2084
+                                            ) VideoCodec.H265 else config.videoCodec,
+                                        )
+                                    }
+                                }
+                                Labeled("Range") {
+                                    ChoiceRow(
+                                        listOf(VideoColorRange.LIMITED, VideoColorRange.FULL),
+                                        config.effectiveRawColorRange,
+                                        { it.label },
+                                        !recording,
+                                    ) { config = config.copy(colorRange = it) }
+                                }
+                                Text(
+                                    if (camera.rawLensShadingCorrectionAvailable) {
+                                        "RAW_SENSOR 由单次 GPU pass 完成去马赛克、颜色转换和可选修正。"
+                                    } else {
+                                        "当前镜头不提供可用的 LensShadingMap，暗角修正不可用。"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            } else if (camera.rawSizes.isEmpty()) {
+                                Text("当前镜头未通过 Camera2 声明 RAW 能力。", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
                         ToggleLine(
                             "高速录像模式",
                             config.highSpeedMode,
-                            !recording && !config.videoTransformEnabled && camera.highSpeedModes.isNotEmpty(),
+                            !recording && !config.videoTransformEnabled && !config.rawProcessingEnabled && camera.highSpeedModes.isNotEmpty(),
                         ) { enabled ->
                             val mode = camera.highSpeedModes.firstOrNull()
                             config = if (enabled && mode != null) config.copy(
@@ -957,7 +1128,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                     camera.dynamicRanges,
                                     config.dynamicRange.takeIf { it in camera.dynamicRanges },
                                     { it.label },
-                                    !recording && !config.highSpeedMode && !config.videoTransformEnabled,
+                                    !recording && !config.highSpeedMode && !config.videoTransformEnabled && !config.rawProcessingEnabled,
                                 ) { range ->
                                     config = if (range == VideoDynamicRange.SDR) {
                                         config.copy(
@@ -1268,7 +1439,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                         }
                         CameraValuePresetSettings(config, recording) { config = it }
                         MfassistSettings(config, recording) { config = it }
-                        Section("编码器颜色元数据") {
+                        if (!config.rawProcessingEnabled) Section("编码器颜色元数据") {
                             Labeled("Range") {
                                 ChoiceRow(VideoColorRange.entries, config.colorRange, { it.label }, !recording && !config.highSpeedMode && !config.dynamicRange.is10Bit) {
                                     config = config.copy(colorRange = it)
@@ -1293,7 +1464,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
-                        Section("SPS/VUI 强制重写") {
+                        if (!config.rawProcessingEnabled) Section("SPS/VUI 强制重写") {
                             Labeled("Range") {
                                 ChoiceRow(VideoColorRange.entries, config.rewriteColorRange, { it.label }, !recording && !config.highSpeedMode) {
                                     config = config.copy(rewriteColorRange = it)
@@ -1347,7 +1518,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     }
                 }
                 Labeled("编码") {
-                    val codecs = if (config.dynamicRange.is10Bit) listOf(VideoCodec.H265) else VideoCodec.entries
+                    val codecs = if (config.requires10BitEncoding) listOf(VideoCodec.H265) else VideoCodec.entries
                     ChoiceRow(codecs, config.videoCodec, { it.label }, !recording && config.hasVideo) {
                         config = config.copy(videoCodec = it)
                     }
@@ -2427,6 +2598,58 @@ private fun formatStorageBytes(bytes: Long): String = when {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(label, style = MaterialTheme.typography.labelLarge)
         content()
+    }
+}
+
+@Composable
+private fun RawSensorInformation(info: RawSensorInfo, lensShadingMapAvailable: Boolean) {
+    Labeled("RAW 传感器信息") {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            RawSensorInfoRow("CFA 排列", rawCfaLabel(info.cfa))
+            RawSensorInfoRow("静态黑电平", rawBlackLevelLabel(info))
+            RawSensorInfoRow(
+                "静态白电平",
+                info.whiteLevel?.let { level ->
+                    "$level（约 ${info.estimatedBitDepth ?: "?"}-bit 有效采样）"
+                } ?: "未提供",
+            )
+            RawSensorInfoRow(
+                "动态电平",
+                "黑 ${availabilityLabel(info.dynamicBlackLevelAvailable)} · " +
+                    "白 ${availabilityLabel(info.dynamicWhiteLevelAvailable)}",
+            )
+            RawSensorInfoRow(
+                "像素阵列",
+                buildString {
+                    append(info.pixelArraySize.sizeLabel())
+                    info.preCorrectionActiveArraySize?.let { append(" · 校正前有效 ${it.sizeLabel()}") }
+                    info.activeArraySize?.let { append(" · 有效 ${it.sizeLabel()}") }
+                },
+            )
+            RawSensorInfoRow(
+                "颜色标定",
+                "逐帧 ${availabilityLabel(info.perFrameColorTransformAvailable)} · " +
+                    "Color ${info.staticColorTransformCount}/2 · Forward ${info.forwardMatrixCount}/2 · " +
+                    "Calibration ${info.calibrationTransformCount}/2",
+            )
+            RawSensorInfoRow(
+                "光学校正",
+                "黑区 ${info.opticalBlackRegionCount} · LensShadingMap ${availabilityLabel(lensShadingMapAvailable)}",
+            )
+        }
+    }
+}
+
+@Composable
+private fun RawSensorInfoRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(88.dp),
+        )
+        Text(value, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
     }
 }
 
@@ -4241,7 +4464,37 @@ private data class MicrophoneChoice(val id: Int?, val label: String)
 
 private fun Float.format1(): String = String.format(Locale.US, "%.1f", this)
 private fun Float.format2(): String = String.format(Locale.US, "%.2f", this)
+private fun Float.format0(): String = String.format(Locale.US, "%.0f", this)
 private fun Double.format1(): String = String.format(Locale.US, "%.1f", this)
+
+private fun rawCfaLabel(cfa: Int?): String = when (cfa) {
+    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB -> "RGGB"
+    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG -> "GRBG"
+    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GBRG -> "GBRG"
+    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_BGGR -> "BGGR"
+    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGB -> "RGB"
+    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_MONO -> "MONO"
+    CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_NIR -> "NIR"
+    null -> "未提供"
+    else -> "未知 ($cfa)"
+}
+
+private fun rawBlackLevelLabel(info: RawSensorInfo): String {
+    if (info.staticBlackLevels.size < 4) return "未提供"
+    val channels = when (info.cfa) {
+        CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB -> listOf("R", "Gr", "Gb", "B")
+        CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG -> listOf("Gr", "R", "B", "Gb")
+        CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GBRG -> listOf("Gb", "B", "R", "Gr")
+        CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_BGGR -> listOf("B", "Gb", "Gr", "R")
+        else -> listOf("TL", "TR", "BL", "BR")
+    }
+    return channels.zip(info.staticBlackLevels).joinToString(" · ") { (channel, level) -> "$channel $level" }
+}
+
+private fun availabilityLabel(available: Boolean): String = if (available) "可用" else "不可用"
+
+private fun android.util.Size?.sizeLabel(): String = this?.let { "${it.width}×${it.height}" } ?: "未提供"
+
 private fun exposureCompensationLabel(camera: CameraInfo, index: Int): String {
     val step = camera.exposureCompensationStep?.toFloat() ?: 0f
     val ev = index * step

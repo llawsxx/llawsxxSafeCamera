@@ -49,7 +49,7 @@ class MediaCodecRecorderEngine(
     private val cameraThread = HandlerThread("exact-camera").apply { start() }
     private val cameraHandler = Handler(cameraThread.looper)
     private val cameraManager = context.getSystemService(CameraManager::class.java)
-    private var config = initialConfig
+    @Volatile private var config = initialConfig
     @Volatile private var camera: CameraDevice? = null
     @Volatile private var session: CameraCaptureSession? = null
     private var previewSurface: Surface? = null
@@ -57,6 +57,12 @@ class MediaCodecRecorderEngine(
     @Volatile private var permanentPreviewRenderer: PermanentPreviewRenderer? = null
     @Volatile private var encoderSurface: Surface? = null
     @Volatile private var transformRenderer: GlVideoTransformRenderer? = null
+    @Volatile private var rawRenderer: GpuRawVideoRenderer? = null
+    @Volatile private var rawThreeAAuxiliaryStream: RawThreeAAuxiliaryStream? = null
+    private var rawThreeAAuxiliaryFallback = false
+    private var cameraControlsPending = false
+    private var submittedCameraControlsKey: List<Any?>? = null
+    private var cameraGeneration = 0
     @Volatile private var videoCodec: MediaCodec? = null
     @Volatile private var audioCodec: MediaCodec? = null
     @Volatile private var audioRecord: AudioRecord? = null
@@ -96,13 +102,14 @@ class MediaCodecRecorderEngine(
         cameraHandler.post {
             if (stopStarted.get()) return@post
             previewSurface = preview?.takeIf { it.isValid }
-            this.previewEnabled = previewEnabled && (config.permanentPreviewSurface || previewSurface != null)
+            this.previewEnabled = previewEnabled &&
+                (config.permanentPreviewSurface || config.rawProcessingEnabled || previewSurface != null)
             preparing.set(true)
             runCatching {
-                if (config.permanentPreviewSurface) {
+                if (config.permanentPreviewSurface || config.rawProcessingEnabled) {
                     permanentPreviewRenderer = PermanentPreviewRenderer(
-                        config.previewWidth.takeIf { it > 0 } ?: config.width,
-                        config.previewHeight.takeIf { it > 0 } ?: config.height,
+                        if (config.rawProcessingEnabled) encodedOutputWidth else config.previewWidth.takeIf { it > 0 } ?: config.width,
+                        if (config.rawProcessingEnabled) encodedOutputHeight else config.previewHeight.takeIf { it > 0 } ?: config.height,
                         previewRotationDegrees,
                     ).also { it.setOutput(previewSurface, this.previewEnabled, previewRotationDegrees) }
                 }
@@ -127,6 +134,15 @@ class MediaCodecRecorderEngine(
         }
         require(!config.videoTransformEnabled || config.dynamicRange == VideoDynamicRange.SDR) {
             "像素旋转、中心裁切和分辨率缩放暂不支持 HDR/10-bit 录制"
+        }
+        require(!config.rawProcessingEnabled || !config.videoTransformEnabled) {
+            "RAW processing cannot currently be combined with crop, resize, or pixel rotation"
+        }
+        require(!config.rawProcessingEnabled || config.rawColorConfigurationSupported) {
+            "RAW output supports BT.709/BT.2020 primaries, Rec.709/HLG/PQ transfer and TV/PC range"
+        }
+        require(!config.rawHdrOutput || config.videoCodec == VideoCodec.H265) {
+            "RAW HLG/PQ output requires H.265 / HEVC encoding"
         }
         pixelRotationDegrees = if (config.rotateImagePixels) {
             recordingOrientationHint(context, config.cameraId, config.orientation)
@@ -174,15 +190,16 @@ class MediaCodecRecorderEngine(
             }
             coordinator = MediaMuxCoordinator(mediaMuxer, config.hasAudio) { markMuxStarted() }
         }
-        mux = if (config.forceSpsVui && config.customRewriteColorMetadata) {
+        val rewriteRawColor = config.rawProcessingEnabled
+        mux = if (rewriteRawColor || config.forceSpsVui && config.customRewriteColorMetadata) {
             VuiRewritingMuxCoordinator(
                 coordinator,
                 H26xVuiRewriter(
                     config.videoCodec,
-                    config.rewriteColorRange,
-                    config.rewriteColorStandard,
-                    config.rewriteColorMatrix,
-                    config.rewriteColorTransfer,
+                    if (rewriteRawColor) config.effectiveRawColorRange else config.rewriteColorRange,
+                    if (rewriteRawColor) config.effectiveRawColorStandard else config.rewriteColorStandard,
+                    if (rewriteRawColor) config.effectiveRawColorMatrix else config.rewriteColorMatrix,
+                    if (rewriteRawColor) config.effectiveRawColorTransfer else config.rewriteColorTransfer,
                 ),
             )
         } else {
@@ -201,9 +218,12 @@ class MediaCodecRecorderEngine(
             } else {
                 require(config.videoMaxBFrames == 0) { "B 帧设置需要 Android 10 或更高版本" }
             }
-            config.colorRange.mediaFormatValue?.let { setInteger(MediaFormat.KEY_COLOR_RANGE, it) }
-            config.colorStandard.mediaFormatValue?.let { setInteger(MediaFormat.KEY_COLOR_STANDARD, it) }
-            config.colorTransfer.mediaFormatValue?.let { setInteger(MediaFormat.KEY_COLOR_TRANSFER, it) }
+            val encoderRange = if (config.rawProcessingEnabled) config.effectiveRawColorRange else config.colorRange
+            val encoderStandard = if (config.rawProcessingEnabled) config.effectiveRawColorStandard else config.colorStandard
+            val encoderTransfer = if (config.rawProcessingEnabled) config.effectiveRawColorTransfer else config.colorTransfer
+            encoderRange.mediaFormatValue?.let { setInteger(MediaFormat.KEY_COLOR_RANGE, it) }
+            encoderStandard.mediaFormatValue?.let { setInteger(MediaFormat.KEY_COLOR_STANDARD, it) }
+            encoderTransfer.mediaFormatValue?.let { setInteger(MediaFormat.KEY_COLOR_TRANSFER, it) }
             if (config.dynamicRange.is10Bit) {
                 setInteger(MediaFormat.KEY_PROFILE, requiredHevcProfile(config.dynamicRange))
                 setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT2020)
@@ -216,6 +236,8 @@ class MediaCodecRecorderEngine(
                     },
                 )
                 setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
+            } else if (config.rawHdrOutput) {
+                setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10)
             }
         }
         val encoderName = MediaCodecList(MediaCodecList.REGULAR_CODECS).findEncoderForFormat(videoFormat)
@@ -225,7 +247,24 @@ class MediaCodecRecorderEngine(
         val video = MediaCodec.createByCodecName(encoderName)
         video.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         encoderSurface = video.createInputSurface()
-        if (config.videoTransformEnabled) {
+        if (config.rawProcessingEnabled) {
+            val characteristics = cameraManager.getCameraCharacteristics(config.cameraId)
+            rawRenderer = GpuRawVideoRenderer(
+                encoderSurface = checkNotNull(encoderSurface),
+                previewSurface = checkNotNull(permanentPreviewRenderer?.inputSurface),
+                characteristics = characteristics,
+                rawWidth = config.rawWidth,
+                rawHeight = config.rawHeight,
+                outputWidth = encodedOutputWidth,
+                outputHeight = encodedOutputHeight,
+                lensShadingCorrectionEnabled = config.rawLensShadingCorrectionEnabled,
+                sharpeningEnabled = config.rawSharpeningEnabled,
+                sharpeningStrength = config.effectiveRawSharpeningStrength,
+                outputColorStandard = config.effectiveRawColorStandard,
+                outputColorTransfer = config.effectiveRawColorTransfer,
+                onError = ::fail,
+            )
+        } else if (config.videoTransformEnabled) {
             transformRenderer = GlVideoTransformRenderer(
                 encoderSurface = checkNotNull(encoderSurface),
                 inputWidth = config.width,
@@ -407,14 +446,27 @@ class MediaCodecRecorderEngine(
     @SuppressLint("MissingPermission")
     private fun openCamera() {
         val id = config.cameraId
+        val openGeneration = ++cameraGeneration
         cameraManager.openCamera(id, object : CameraDevice.StateCallback() {
             override fun onOpened(device: CameraDevice) {
-                if (!running.get()) { device.close(); return }
+                if (!running.get() || openGeneration != cameraGeneration) { device.close(); return }
                 camera = device
                 createSession()
             }
-            override fun onDisconnected(device: CameraDevice) { device.close(); if (running.get()) fail("相机已断开") }
-            override fun onError(device: CameraDevice, error: Int) { device.close(); if (running.get()) fail("相机错误 $error") }
+            override fun onDisconnected(device: CameraDevice) {
+                device.close()
+                if (openGeneration == cameraGeneration && camera === device) {
+                    camera = null
+                    if (running.get()) fail("相机已断开")
+                }
+            }
+            override fun onError(device: CameraDevice, error: Int) {
+                device.close()
+                if (openGeneration == cameraGeneration && camera === device) {
+                    camera = null
+                    if (running.get()) fail("相机错误 $error")
+                }
+            }
         }, cameraHandler)
     }
 
@@ -422,9 +474,14 @@ class MediaCodecRecorderEngine(
         val device = camera ?: return
         val recordSurface = cameraInputSurface() ?: return
         val preview = sessionPreviewSurface()
+        prepareRawThreeAAuxiliaryStream()
+        val auxiliarySurface = rawThreeAAuxiliaryStream?.surface?.takeIf { it.isValid }
         val generation = ++sessionGeneration
         session?.close()
-        val surfaces = mutableListOf(recordSurface).apply { preview?.let(::add) }
+        val surfaces = mutableListOf(recordSurface).apply {
+            preview?.let(::add)
+            auxiliarySurface?.let(::add)
+        }
         val callback = object : CameraCaptureSession.StateCallback() {
             override fun onConfigured(newSession: CameraCaptureSession) {
                 if (!running.get() || generation != sessionGeneration || camera !== device) { newSession.close(); return }
@@ -433,13 +490,26 @@ class MediaCodecRecorderEngine(
                     val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                         addTarget(recordSurface)
                         requestPreviewSurface()?.let(::addTarget)
+                        auxiliarySurface?.let(::addTarget)
                         CameraRequestControls.apply(cameraManager, config.cameraId, config, this)
                         dynamicFpsRange(config.cameraId)?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                     }.build()
                     newSession.setRepeatingRequest(request, captureCallback, cameraHandler)
+                    submittedCameraControlsKey = config.cameraRequestControlsKey()
+                    cameraControlsPending = false
                 }.onFailure { fail("无法开始 MediaCodec 采集: ${it.message}") }
             }
             override fun onConfigureFailed(newSession: CameraCaptureSession) {
+                if (auxiliarySurface != null && !rawThreeAAuxiliaryFallback && running.get() &&
+                    generation == sessionGeneration && camera === device
+                ) {
+                    newSession.close()
+                    rawThreeAAuxiliaryFallback = true
+                    releaseRawThreeAAuxiliaryStream()
+                    onNotice("RAW 3A 辅助 YUV 流不受当前相机支持，已回退为 RAW-only")
+                    createSession()
+                    return
+                }
                 if (preview != null && running.get() && generation == sessionGeneration) {
                     if (permanentPreviewRenderer != null) {
                         fail("相机不支持永久预览 Surface 与当前录制配置的组合")
@@ -452,25 +522,40 @@ class MediaCodecRecorderEngine(
                 } else if (generation == sessionGeneration) fail("相机不支持当前编码 Surface")
             }
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && config.dynamicRange != VideoDynamicRange.SDR) {
-            val outputs = mutableListOf(
-                OutputConfiguration(recordSurface).apply {
-                    dynamicRangeProfile = config.dynamicRange.cameraProfile
-                },
-            ).apply {
-                preview?.let { add(OutputConfiguration(it)) }
+        val createResult = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && config.dynamicRange != VideoDynamicRange.SDR) {
+                val outputs = mutableListOf(
+                    OutputConfiguration(recordSurface).apply {
+                        dynamicRangeProfile = config.dynamicRange.cameraProfile
+                    },
+                ).apply {
+                    preview?.let { add(OutputConfiguration(it)) }
+                    auxiliarySurface?.let { add(OutputConfiguration(it)) }
+                }
+                device.createCaptureSession(
+                    SessionConfiguration(
+                        SessionConfiguration.SESSION_REGULAR,
+                        outputs,
+                        Executor { command -> cameraHandler.post(command) },
+                        callback,
+                    ),
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                device.createCaptureSession(surfaces, callback, cameraHandler)
             }
-            device.createCaptureSession(
-                SessionConfiguration(
-                    SessionConfiguration.SESSION_REGULAR,
-                    outputs,
-                    Executor { command -> cameraHandler.post(command) },
-                    callback,
-                ),
-            )
-        } else {
-            @Suppress("DEPRECATION")
-            device.createCaptureSession(surfaces, callback, cameraHandler)
+        }
+        createResult.onFailure {
+            if (auxiliarySurface != null && !rawThreeAAuxiliaryFallback &&
+                generation == sessionGeneration && camera === device
+            ) {
+                rawThreeAAuxiliaryFallback = true
+                releaseRawThreeAAuxiliaryStream()
+                onNotice("RAW 3A 辅助 YUV 流创建失败，已回退为 RAW-only：${it.message}")
+                createSession()
+            } else {
+                fail("无法创建相机采集会话: ${it.message}")
+            }
         }
     }
 
@@ -513,7 +598,31 @@ class MediaCodecRecorderEngine(
             request: CaptureRequest,
             result: android.hardware.camera2.TotalCaptureResult,
         ) {
+            if (!running.get() || session !== this@MediaCodecRecorderEngine.session || camera == null) return
             val whiteBalanceGains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
+            val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
+            if (timestamp == null) {
+                if (cameraControlsPending) submitRepeatingRequest("实时参数更新失败")
+                RecorderController.updateExposure(
+                    cameraId = config.cameraId,
+                    iso = result.get(CaptureResult.SENSOR_SENSITIVITY),
+                    exposureNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
+                    aperture = result.get(CaptureResult.LENS_APERTURE),
+                    focusDistanceDiopters = result.get(CaptureResult.LENS_FOCUS_DISTANCE),
+                    whiteBalanceRedGain = whiteBalanceGains?.red,
+                    whiteBalanceGreenEvenGain = whiteBalanceGains?.greenEven,
+                    whiteBalanceGreenOddGain = whiteBalanceGains?.greenOdd,
+                    whiteBalanceBlueGain = whiteBalanceGains?.blue,
+                )
+                return
+            }
+            rawRenderer?.submitMetadata(
+                timestampNs = timestamp,
+                gains = whiteBalanceGains,
+                transform = result.get(CaptureResult.COLOR_CORRECTION_TRANSFORM),
+                dynamicBlackLevel = result.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL),
+                lensShadingMap = result.get(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP),
+            )
             RecorderController.updateExposure(
                 cameraId = config.cameraId,
                 iso = result.get(CaptureResult.SENSOR_SENSITIVITY),
@@ -525,7 +634,6 @@ class MediaCodecRecorderEngine(
                 whiteBalanceGreenOddGain = whiteBalanceGains?.greenOdd,
                 whiteBalanceBlueGain = whiteBalanceGains?.blue,
             )
-            val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
             if (firstSensorNs == 0L) firstSensorNs = timestamp
             if (lastSensorNs > 0L) {
                 val expected = 1_000_000_000.0 / config.fps
@@ -536,11 +644,15 @@ class MediaCodecRecorderEngine(
             }
             lastSensorNs = timestamp
             capturedFrames++
+            if (session === this@MediaCodecRecorderEngine.session && cameraControlsPending) {
+                submitRepeatingRequest("实时参数更新失败")
+            }
         }
     }
 
     override fun updatePreview(surface: Surface?, enabled: Boolean, previewRotationDegrees: Int) {
         cameraHandler.post {
+            if (!running.get() || stopStarted.get()) return@post
             val next = surface?.takeIf { it.isValid }
             val nextEnabled = enabled && (permanentPreviewRenderer != null || next != null)
             val surfaceChanged = previewSurface !== next
@@ -572,6 +684,10 @@ class MediaCodecRecorderEngine(
     override fun switchCamera(cameraId: String) {
         cameraHandler.post {
             if (cameraId == config.cameraId || !running.get()) return@post
+            if (config.rawProcessingEnabled) {
+                onNotice("RAW processing does not support switching cameras while recording")
+                return@post
+            }
             if (!runCatching { validateCameraMode(cameraId) }.isSuccess) {
                 onNotice("未切换：目标镜头不支持当前尺寸或 ${config.fps} fps")
                 return@post
@@ -597,6 +713,8 @@ class MediaCodecRecorderEngine(
 
     override fun updateCameraControls(updated: RecordingConfig) {
         cameraHandler.post {
+            if (!running.get() || stopStarted.get()) return@post
+            val previousConfig = config
             config = config.copy(
                 manualExposure = updated.manualExposure,
                 iso = updated.iso,
@@ -622,12 +740,23 @@ class MediaCodecRecorderEngine(
                 antibandingMode = updated.antibandingMode,
                 noiseReductionMode = updated.noiseReductionMode,
                 edgeMode = updated.edgeMode,
+                rawLensShadingCorrectionEnabled = updated.rawLensShadingCorrectionEnabled,
+                rawSharpeningEnabled = updated.rawSharpeningEnabled,
+                rawSharpeningStrength = updated.rawSharpeningStrength,
             )
-            submitRepeatingRequest("实时参数更新失败")
+            rawRenderer?.updateProcessingParameters(
+                lensShadingCorrectionEnabled = config.rawLensShadingCorrectionEnabled,
+                sharpeningEnabled = config.rawSharpeningEnabled,
+                sharpeningStrength = config.effectiveRawSharpeningStrength,
+            )
+            if (previousConfig.cameraRequestControlsKey() != config.cameraRequestControlsKey()) {
+                cameraControlsPending = config.cameraRequestControlsKey() != submittedCameraControlsKey
+            }
         }
     }
 
     private fun submitRepeatingRequest(failurePrefix: String = "preview request update failed") {
+        if (!running.get() || stopStarted.get()) return
         val device = camera ?: return
         val activeSession = session ?: return
         val recordSurface = cameraInputSurface() ?: return
@@ -635,11 +764,17 @@ class MediaCodecRecorderEngine(
             val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(recordSurface)
                 requestPreviewSurface()?.let(::addTarget)
+                rawThreeAAuxiliaryStream?.surface?.takeIf { it.isValid }?.let(::addTarget)
                 CameraRequestControls.apply(cameraManager, config.cameraId, config, this)
                 dynamicFpsRange(config.cameraId)?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
             }.build()
             activeSession.setRepeatingRequest(request, captureCallback, cameraHandler)
-        }.onFailure { onNotice("$failurePrefix: ${it.message}") }
+            submittedCameraControlsKey = config.cameraRequestControlsKey()
+            cameraControlsPending = false
+        }.onFailure {
+            cameraControlsPending = false
+            onNotice("$failurePrefix: ${it.message}")
+        }
     }
 
     override fun stop(onComplete: () -> Unit) {
@@ -652,18 +787,23 @@ class MediaCodecRecorderEngine(
 
     override fun forceRelease() {
         running.set(false)
+        stopStarted.compareAndSet(false, true)
         cameraHandler.removeCallbacks(statsTick)
+        val forceOnHandler = Runnable { forceFinalize() }
         if (preparing.get()) {
             Thread({
-                while (preparing.get()) Thread.sleep(10)
-                forceFinalize()
+                while (preparing.get()) runCatching { Thread.sleep(10) }
+                cameraHandler.post(forceOnHandler)
             }, "exact-force-wait").apply { isDaemon = true; start() }
         } else {
-            forceFinalize()
+            cameraHandler.post(forceOnHandler)
         }
     }
 
     private fun forceFinalize() {
+        // Normal finalization owns the codec/session once it claims the gate.
+        // Do not call MediaCodec APIs concurrently from the timeout path.
+        if (finalizationGate.isClaimed()) return
         requestAudioStop()
         runCatching { videoCodec?.signalEndOfInputStream() }
         runCatching { session?.close() }
@@ -682,6 +822,9 @@ class MediaCodecRecorderEngine(
             session = null
             runCatching { transformRenderer?.release() }
             transformRenderer = null
+            runCatching { rawRenderer?.release() }
+            rawRenderer = null
+            releaseRawThreeAAuxiliaryStream()
             runCatching { videoCodec?.signalEndOfInputStream() }
         }
         finalizationThread = Thread({
@@ -703,6 +846,8 @@ class MediaCodecRecorderEngine(
     }
 
     private fun releaseCodecs() {
+        releaseRawThreeAAuxiliaryStream()
+        runCatching { rawRenderer?.release() }; rawRenderer = null
         runCatching { permanentPreviewRenderer?.release() }; permanentPreviewRenderer = null
         runCatching { transformRenderer?.release() }; transformRenderer = null
         runCatching { videoCodec?.stop() }; runCatching { videoCodec?.release() }; videoCodec = null
@@ -731,16 +876,43 @@ class MediaCodecRecorderEngine(
     }
 
     private fun cameraInputSurface(): Surface? =
-        (transformRenderer?.inputSurface ?: encoderSurface)?.takeIf { it.isValid }
+        (rawRenderer?.inputSurface ?: transformRenderer?.inputSurface ?: encoderSurface)?.takeIf { it.isValid }
 
-    private fun sessionPreviewSurface(): Surface? =
+    private fun sessionPreviewSurface(): Surface? = if (config.rawProcessingEnabled) {
+        null
+    } else {
         permanentPreviewRenderer?.inputSurface?.takeIf { it.isValid }
             ?: previewSurface?.takeIf { it.isValid }
+    }
 
-    private fun requestPreviewSurface(): Surface? = if (previewEnabled) {
+    private fun requestPreviewSurface(): Surface? = if (previewEnabled && !config.rawProcessingEnabled) {
         permanentPreviewRenderer?.inputSurface?.takeIf { it.isValid }
             ?: previewSurface?.takeIf { it.isValid }
     } else null
+
+    private fun prepareRawThreeAAuxiliaryStream() {
+        val enabled = config.rawProcessingEnabled && config.rawThreeAAuxiliaryYuvEnabled &&
+            !rawThreeAAuxiliaryFallback
+        if (!enabled) {
+            releaseRawThreeAAuxiliaryStream()
+            return
+        }
+        if (rawThreeAAuxiliaryStream != null) return
+        rawThreeAAuxiliaryStream = runCatching {
+            RawThreeAAuxiliaryStream.create(
+                cameraManager.getCameraCharacteristics(config.cameraId),
+                cameraHandler,
+            )
+        }.onFailure {
+            rawThreeAAuxiliaryFallback = true
+            onNotice("无法创建 RAW 3A 辅助 YUV 流，已使用 RAW-only：${it.message}")
+        }.getOrNull()
+    }
+
+    private fun releaseRawThreeAAuxiliaryStream() {
+        runCatching { rawThreeAAuxiliaryStream?.close() }
+        rawThreeAAuxiliaryStream = null
+    }
 
     private fun releaseCameraBlocking() {
         val latch = CountDownLatch(1)
@@ -788,6 +960,18 @@ class MediaCodecRecorderEngine(
 
     private fun validateCameraMode(cameraId: String) {
         val c = cameraManager.getCameraCharacteristics(cameraId)
+        if (config.rawProcessingEnabled) {
+            val capabilities = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
+            require(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW in capabilities) {
+                "Selected camera does not expose RAW capability"
+            }
+            val rawSizes = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                ?.getOutputSizes(android.graphics.ImageFormat.RAW_SENSOR).orEmpty()
+            require(config.rawWidth > 0 && config.rawHeight > 0 && rawSizes.any {
+                it.width == config.rawWidth && it.height == config.rawHeight
+            }) { "Camera does not support RAW_SENSOR ${config.rawWidth}x${config.rawHeight}" }
+            return
+        }
         val sizes = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             ?.getOutputSizes(if (config.videoTransformEnabled) SurfaceTexture::class.java else MediaCodec::class.java).orEmpty()
         require(sizes.any { it.width == config.width && it.height == config.height }) {
@@ -806,13 +990,18 @@ class MediaCodecRecorderEngine(
             .filter { it.lower <= config.fps && it.upper >= config.fps }
             .maxByOrNull { it.upper - it.lower }
         return declared ?: android.util.Range(config.fps, config.fps)
-            .takeIf { config.experimentalUnadvertisedFps }
+            .takeIf { config.rawProcessingEnabled || config.experimentalUnadvertisedFps }
     }
 
     private fun closeCamera() {
+        cameraGeneration++
         sessionGeneration++
+        cameraControlsPending = false
+        submittedCameraControlsKey = null
         runCatching { session?.close() }; session = null
         runCatching { camera?.close() }; camera = null
+        releaseRawThreeAAuxiliaryStream()
+        rawThreeAAuxiliaryFallback = false
     }
 
     private fun fail(message: String) {

@@ -36,7 +36,7 @@ class CameraRecorderEngine(
     private val thread = HandlerThread("safe-camera-engine").apply { start() }
     private val handler = Handler(thread.looper)
     private val manager = context.getSystemService(CameraManager::class.java)
-    private var config = initialConfig
+    @Volatile private var config = initialConfig
     @Volatile private var recorder: MediaRecorder? = null
     @Volatile private var camera: CameraDevice? = null
     @Volatile private var session: CameraCaptureSession? = null
@@ -57,8 +57,11 @@ class CameraRecorderEngine(
     private var droppedFrames = 0L
     @Volatile private var audioLevelDb = -60f
     private var segmentIndex = 1
-    private var stopped = false
+    @Volatile private var stopped = false
+    private var cameraGeneration = 0
     private var sessionGeneration = 0
+    private var cameraControlsPending = false
+    private var submittedCameraControlsKey: List<Any?>? = null
     private val stopStarted = AtomicBoolean(false)
     private val finalizationGate = FinalizationGate()
     private val preparing = AtomicBoolean(false)
@@ -136,24 +139,24 @@ class CameraRecorderEngine(
 
     override fun forceRelease() {
         stopped = true
-        runCatching { finalizingSession?.close() }
-        runCatching { finalizingCamera?.close() }
+        stopStarted.compareAndSet(false, true)
         // Do not release a MediaRecorder from this timeout thread while another
         // thread may still be blocked in MediaRecorder.stop(). Native media
         // implementations are not safe for that concurrent use and may abort
         // the whole process. Closing the camera/session above is sufficient to
         // unblock the finalizer; it will release the recorder in one thread.
+        val forceOnHandler = Runnable {
+            // Keep all Camera2 operations on the camera Handler. If normal
+            // finalization already claimed the gate, these are its snapshots.
+            if (!finalizationGate.isClaimed()) startFinalization({})
+        }
         if (preparing.get()) {
             Thread({
-                while (preparing.get()) Thread.sleep(10)
-                startFinalization({})
-                runCatching { finalizingSession?.close() }
-                runCatching { finalizingCamera?.close() }
+                while (preparing.get()) runCatching { Thread.sleep(10) }
+                handler.post(forceOnHandler)
             }, "safe-recorder-force-wait").apply { isDaemon = true; start() }
         } else {
-            startFinalization({})
-            runCatching { finalizingSession?.close() }
-            runCatching { finalizingCamera?.close() }
+            handler.post(forceOnHandler)
         }
     }
 
@@ -214,6 +217,7 @@ class CameraRecorderEngine(
     }
 
     override fun updatePreview(surface: Surface?, enabled: Boolean, previewRotationDegrees: Int) { handler.post {
+        if (stopped || stopStarted.get()) return@post
         val nextSurface = surface?.takeIf { it.isValid }
         val surfaceChanged = previewSurface !== nextSurface
         val nextEnabled = enabled && (permanentPreviewRenderer != null || nextSurface != null)
@@ -242,7 +246,7 @@ class CameraRecorderEngine(
     } }
 
     override fun switchCamera(cameraId: String) { handler.post {
-        if (!config.hasVideo || cameraId == config.cameraId) return@post
+        if (stopped || stopStarted.get() || !config.hasVideo || cameraId == config.cameraId) return@post
         val supported = runCatching {
             val characteristics = manager.getCameraCharacteristics(cameraId)
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
@@ -267,6 +271,7 @@ class CameraRecorderEngine(
 
     override fun updateCameraControls(updated: RecordingConfig) { handler.post {
         if (stopped || !config.hasVideo) return@post
+        val previousConfig = config
         config = config.copy(
             manualExposure = updated.manualExposure,
             iso = updated.iso,
@@ -293,20 +298,9 @@ class CameraRecorderEngine(
             noiseReductionMode = updated.noiseReductionMode,
             edgeMode = updated.edgeMode,
         )
-        val device = camera ?: return@post
-        val activeSession = session ?: return@post
-        val recordSurface = recorderSurface ?: return@post
-        runCatching {
-            val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                addTarget(recordSurface)
-                requestPreviewSurface()?.let(::addTarget)
-                CameraRequestControls.apply(manager, config.cameraId, config, this)
-                highSpeedFpsRange()?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
-            }.build()
-            if (config.highSpeedMode && activeSession is CameraConstrainedHighSpeedCaptureSession) {
-                activeSession.setRepeatingBurst(activeSession.createHighSpeedRequestList(request), captureCallback, handler)
-            } else activeSession.setRepeatingRequest(request, captureCallback, handler)
-        }.onFailure { onNotice("实时参数更新失败: ${it.message}") }
+        if (previousConfig.cameraRequestControlsKey() != config.cameraRequestControlsKey()) {
+            cameraControlsPending = config.cameraRequestControlsKey() != submittedCameraControlsKey
+        }
     } }
 
     private fun submitRepeatingRequest() {
@@ -323,7 +317,12 @@ class CameraRecorderEngine(
             if (config.highSpeedMode && activeSession is CameraConstrainedHighSpeedCaptureSession) {
                 activeSession.setRepeatingBurst(activeSession.createHighSpeedRequestList(request), captureCallback, handler)
             } else activeSession.setRepeatingRequest(request, captureCallback, handler)
-        }.onFailure { onNotice("preview request update failed: ${it.message}") }
+            submittedCameraControlsKey = config.cameraRequestControlsKey()
+            cameraControlsPending = false
+        }.onFailure {
+            cameraControlsPending = false
+            onNotice("preview request update failed: ${it.message}")
+        }
     }
 
     private fun prepareRecorder() {
@@ -425,9 +424,11 @@ class CameraRecorderEngine(
 
     @SuppressLint("MissingPermission")
     private fun openCamera() {
-        manager.openCamera(config.cameraId, object : CameraDevice.StateCallback() {
+        val cameraId = config.cameraId
+        val openGeneration = ++cameraGeneration
+        manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
             override fun onOpened(device: CameraDevice) {
-                if (stopped) {
+                if (stopped || openGeneration != cameraGeneration) {
                     device.close()
                     return
                 }
@@ -437,12 +438,18 @@ class CameraRecorderEngine(
 
             override fun onDisconnected(device: CameraDevice) {
                 device.close()
-                if (!stopped) fail("相机已断开")
+                if (openGeneration == cameraGeneration) {
+                    if (camera === device) camera = null
+                    if (!stopped) fail("相机已断开")
+                }
             }
 
             override fun onError(device: CameraDevice, error: Int) {
                 device.close()
-                if (!stopped) fail("无法打开相机，错误码 $error")
+                if (openGeneration == cameraGeneration) {
+                    if (camera === device) camera = null
+                    if (!stopped) fail("无法打开相机，错误码 $error")
+                }
             }
         }, handler)
     }
@@ -472,6 +479,8 @@ class CameraRecorderEngine(
                     if (config.highSpeedMode && newSession is CameraConstrainedHighSpeedCaptureSession) {
                         newSession.setRepeatingBurst(newSession.createHighSpeedRequestList(request), captureCallback, handler)
                     } else newSession.setRepeatingRequest(request, captureCallback, handler)
+                    submittedCameraControlsKey = config.cameraRequestControlsKey()
+                    cameraControlsPending = false
                     if (startRecorder) {
                         recorder?.start()
                         markStarted()
@@ -506,6 +515,7 @@ class CameraRecorderEngine(
             request: CaptureRequest,
             result: android.hardware.camera2.TotalCaptureResult,
         ) {
+            if (stopped || session !== this@CameraRecorderEngine.session || camera == null) return
             val whiteBalanceGains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
             RecorderController.updateExposure(
                 cameraId = config.cameraId,
@@ -527,6 +537,9 @@ class CameraRecorderEngine(
             lastFrameNs = timestamp
             fpsWindow.add(timestamp)
             emitStats()
+            if (session === this@CameraRecorderEngine.session && cameraControlsPending) {
+                submitRepeatingRequest()
+            }
         }
     }
 
@@ -597,7 +610,10 @@ class CameraRecorderEngine(
     }
 
     private fun closeCamera() {
+        cameraGeneration++
         sessionGeneration++
+        cameraControlsPending = false
+        submittedCameraControlsKey = null
         runCatching { session?.stopRepeating() }
         runCatching { session?.abortCaptures() }
         runCatching { session?.close() }

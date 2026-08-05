@@ -30,6 +30,13 @@ object ConfigPreferences {
             experimentalCameraAccess = p.getBoolean("experimentalCameraAccess", false),
             experimentalUnadvertisedFps = p.getBoolean("experimentalUnadvertisedFps", false),
             mediaCodecMode = p.getBoolean("mediaCodecMode", false),
+            rawProcessingEnabled = p.getBoolean("rawProcessingEnabled", false),
+            rawWidth = p.getInt("rawWidth", 0).coerceAtLeast(0),
+            rawHeight = p.getInt("rawHeight", 0).coerceAtLeast(0),
+            rawThreeAAuxiliaryYuvEnabled = p.getBoolean("rawThreeAAuxiliaryYuvEnabled", true),
+            rawLensShadingCorrectionEnabled = p.getBoolean("rawLensShadingCorrectionEnabled", true),
+            rawSharpeningEnabled = p.getBoolean("rawSharpeningEnabled", false),
+            rawSharpeningStrength = p.getFloat("rawSharpeningStrength", 0.32f).coerceIn(0f, 1f),
             videoBitrate = p.getInt("videoBitrate", 12_000_000),
             videoBitrateMode = enumValue(p.getString("videoBitrateMode", null), VideoBitrateMode.DEFAULT),
             videoKeyFrameIntervalSeconds = p.getInt("videoKeyFrameIntervalSeconds", 2).coerceIn(0, 60),
@@ -147,6 +154,13 @@ object ConfigPreferences {
             .putBoolean("experimentalCameraAccess", c.experimentalCameraAccess)
             .putBoolean("experimentalUnadvertisedFps", c.experimentalUnadvertisedFps)
             .putBoolean("mediaCodecMode", c.mediaCodecMode)
+            .putBoolean("rawProcessingEnabled", c.rawProcessingEnabled)
+            .putInt("rawWidth", c.rawWidth)
+            .putInt("rawHeight", c.rawHeight)
+            .putBoolean("rawThreeAAuxiliaryYuvEnabled", c.rawThreeAAuxiliaryYuvEnabled)
+            .putBoolean("rawLensShadingCorrectionEnabled", c.rawLensShadingCorrectionEnabled)
+            .putBoolean("rawSharpeningEnabled", c.rawSharpeningEnabled)
+            .putFloat("rawSharpeningStrength", c.effectiveRawSharpeningStrength)
             .putInt("videoBitrate", c.videoBitrate)
             .putString("videoBitrateMode", c.videoBitrateMode.name)
             .putInt("videoKeyFrameIntervalSeconds", c.videoKeyFrameIntervalSeconds)

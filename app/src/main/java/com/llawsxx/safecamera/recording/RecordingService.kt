@@ -30,6 +30,21 @@ class RecordingService : Service() {
     private var stopGeneration = 0L
     private var callbackGeneration = 0L
     private var notificationStartedAtElapsedMs: Long? = null
+    // Camera controls can change many times while a slider is dragged. Keep
+    // one latest value in the Service queue and deliver it after the current
+    // burst of startService commands has drained.
+    private var pendingControlConfig: RecordingConfig? = null
+    private var controlDispatchScheduled = false
+    private val controlDispatch: Runnable = Runnable {
+        controlDispatchScheduled = false
+        val latest = pendingControlConfig
+        pendingControlConfig = null
+        if (!stopping) latest?.let { engine?.updateCameraControls(it) }
+        if (pendingControlConfig != null && !controlDispatchScheduled) {
+            controlDispatchScheduled = true
+            mainHandler.post(controlDispatch)
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -55,7 +70,7 @@ class RecordingService : Service() {
                 } else {
                     @Suppress("DEPRECATION") intent.getSerializableExtra(EXTRA_CONFIG) as? RecordingConfig
                 }
-                config?.let { engine?.updateCameraControls(it) }
+                config?.let(::queueControlUpdate)
             }
         }
         return START_NOT_STICKY
@@ -63,6 +78,9 @@ class RecordingService : Service() {
 
     private fun startRecording(config: RecordingConfig) {
         if (engine != null || stopping) return
+        pendingControlConfig = null
+        mainHandler.removeCallbacks(controlDispatch)
+        controlDispatchScheduled = false
         currentConfig = config
         startAsForeground("正在准备录制", config)
         acquireWakeLock()
@@ -181,6 +199,9 @@ class RecordingService : Service() {
         }
         stopping = true
         callbackGeneration++
+        pendingControlConfig = null
+        mainHandler.removeCallbacks(controlDispatch)
+        controlDispatchScheduled = false
         stoppingEngine = oldEngine
         stopErrorMessage = errorMessage
         stopForced = false
@@ -304,12 +325,21 @@ class RecordingService : Service() {
     }
 
     override fun onDestroy() {
+        pendingControlConfig = null
+        mainHandler.removeCallbacks(controlDispatch)
         if (engine != null && !stopping) stopRecording()
         if (engine == null && !stopping) releaseWakeLock()
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun queueControlUpdate(config: RecordingConfig) {
+        pendingControlConfig = config
+        if (controlDispatchScheduled) return
+        controlDispatchScheduled = true
+        mainHandler.post(controlDispatch)
+    }
 
     companion object {
         const val ACTION_START = "com.llawsxx.safecamera.action.START"

@@ -13,3 +13,4 @@ add_library(
 
 target_compile_features(safecamera_mpegts PRIVATE c_std_11)
 target_compile_options(safecamera_mpegts PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(safecamera_mpegts m)
