@@ -264,7 +264,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             rawHeight = camera.rawSizes.firstOrNull { it.width == config.rawWidth && it.height == config.rawHeight }
                 ?.height ?: camera.rawSizes.firstOrNull()?.height ?: 0,
             aperture = config.aperture?.takeIf(camera.apertures::contains) ?: camera.apertures.firstOrNull(),
-            opticalStabilization = config.opticalStabilization && camera.oisAvailable,
             antibandingMode = supportedAntibandingMode(camera, config.antibandingMode),
         )
     }
@@ -380,7 +379,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 exposureCompensation = camera.exposureCompensationRange?.let {
                     config.exposureCompensation.coerceIn(it.lower, it.upper)
                 } ?: 0,
-                opticalStabilization = config.opticalStabilization && camera.oisAvailable,
                 antibandingMode = supportedAntibandingMode(camera, config.antibandingMode),
                 highSpeedMode = config.highSpeedMode && camera.highSpeedModes.any {
                     it.width == size.first && it.height == size.second && config.fps in it.minFps..it.maxFps

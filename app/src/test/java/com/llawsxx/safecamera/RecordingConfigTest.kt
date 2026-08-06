@@ -59,6 +59,7 @@ class RecordingConfigTest {
     @Test
     fun rawProcessingTuningKeepsExistingDefaultsAndClampsUnsafeValues() {
         val defaults = RecordingConfig()
+        assertTrue(defaults.opticalStabilization)
         assertEquals(0.32f, defaults.effectiveRawSharpeningStrength, 0f)
         assertTrue(defaults.rawThreeAAuxiliaryYuvEnabled)
         assertEquals(RawScalingQuality.HIGH_QUALITY, defaults.rawScalingQuality)
