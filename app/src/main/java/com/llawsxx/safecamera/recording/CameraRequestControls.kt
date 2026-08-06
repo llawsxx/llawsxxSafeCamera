@@ -18,7 +18,7 @@ object CameraRequestControls {
         config: RecordingConfig,
         builder: CaptureRequest.Builder,
         touchFocusCompleted: Boolean = false,
-        manualFocusDistanceOverride: Float? = null,
+        touchFocusLocked: Boolean = false,
     ) {
         val characteristics = manager.getCameraCharacteristics(cameraId)
         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
@@ -139,7 +139,14 @@ object CameraRequestControls {
         val afModes = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
         val minimumFocusDistance = characteristics.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
         val touchFocusRegion = touchFocusRegion(characteristics, config)
+        // After a touch AF has reached a terminal state, keep the camera in AUTO with
+        // its current locked position. This also applies after the touch-focus region
+        // is cleared, so disabling touch focus does not restore the stale MF value.
+        // Re-applying the reported LENS_FOCUS_DISTANCE is not reliable on some devices.
+        val keepTouchFocusLocked = config.focusMode == FocusMode.MANUAL &&
+            touchFocusCompleted && touchFocusLocked
         val useManualFocus = config.focusMode == FocusMode.MANUAL &&
+            !keepTouchFocusLocked &&
             (touchFocusRegion == null || touchFocusCompleted)
         if (useManualFocus && (
                 config.unrestrictedFocus || (
@@ -150,7 +157,7 @@ object CameraRequestControls {
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
             builder.set(
                 CaptureRequest.LENS_FOCUS_DISTANCE,
-                manualFocusDistanceOverride?.takeIf(Float::isFinite) ?: if (config.unrestrictedFocus) {
+                if (config.unrestrictedFocus) {
                     config.focusDistanceDiopters
                 } else {
                     config.focusDistanceDiopters.coerceIn(0f, minimumFocusDistance)
@@ -158,6 +165,8 @@ object CameraRequestControls {
             )
         } else {
             val automaticMode = when {
+                touchFocusLocked && touchFocusCompleted && afModes.contains(CaptureRequest.CONTROL_AF_MODE_AUTO) ->
+                    CaptureRequest.CONTROL_AF_MODE_AUTO
                 touchFocusRegion != null && afModes.contains(CaptureRequest.CONTROL_AF_MODE_AUTO) ->
                     CaptureRequest.CONTROL_AF_MODE_AUTO
                 afModes.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO) -> CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO

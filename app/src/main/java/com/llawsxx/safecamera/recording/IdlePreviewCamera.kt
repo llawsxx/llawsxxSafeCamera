@@ -48,7 +48,8 @@ class IdlePreviewCamera(context: Context) {
         val previousConfig = activeConfig
         if (config.focusMode != FocusMode.MANUAL ||
             (config.touchFocusRequestId == previousConfig?.touchFocusRequestId &&
-                config.focusDistanceDiopters != previousConfig.focusDistanceDiopters)
+                config.focusDistanceDiopters != previousConfig.focusDistanceDiopters &&
+                !config.unrestrictedFocus)
         ) {
             touchFocusLockedDistance = null
         }
@@ -245,7 +246,7 @@ class IdlePreviewCamera(context: Context) {
                     config,
                     this,
                     touchFocusCompleted = config.touchFocusRequestId == completedTouchFocusRequestId,
-                    manualFocusDistanceOverride = touchFocusLockedDistance,
+                    touchFocusLocked = touchFocusLockedDistance != null,
                 )
             }.build()
             activeSession.setRepeatingRequest(request, captureCallback, handler)

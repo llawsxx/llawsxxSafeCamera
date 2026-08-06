@@ -486,16 +486,13 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         val exposure = liveExposure ?: return@LaunchedEffect
         val completed = exposure.touchFocusState == TouchFocusState.SUCCESS ||
             exposure.touchFocusState == TouchFocusState.FAILED
-        val focusedDistance = exposure.focusDistanceDiopters?.takeIf(Float::isFinite)
-        if (config.focusMode == FocusMode.MANUAL && completed && focusedDistance != null &&
+        if (config.focusMode == FocusMode.MANUAL && !config.unrestrictedFocus && completed &&
             exposure.cameraId == config.cameraId &&
-            exposure.touchFocusRequestId == config.touchFocusRequestId &&
-            focusedDistance != config.focusDistanceDiopters
+            exposure.touchFocusRequestId == config.touchFocusRequestId
         ) {
-            config = config.copy(
-                focusDistanceDiopters = focusedDistance,
-                unrestrictedFocus = true,
-            )
+            // Keep the AF-locked physical lens position. The reported distance is
+            // display-only because some devices cannot accurately re-apply it in MF.
+            config = config.copy(unrestrictedFocus = true)
         }
     }
     LaunchedEffect(config.width, config.height, config.previewWidth, config.previewHeight) {
@@ -3118,6 +3115,8 @@ private fun LandscapeCameraControls(
     val displayedIso = if (config.manualExposure) config.iso else liveExposure?.iso ?: config.iso
     val displayedExposureNs = if (config.manualExposure) config.exposureNs else liveExposure?.exposureNs ?: config.exposureNs
     val displayedAperture = if (config.manualExposure) config.aperture else liveExposure?.aperture ?: config.aperture
+    val displayedFocusDistance = lockedTouchFocusDisplayDistance(config, liveExposure)
+        ?: config.focusDistanceDiopters
     val supportsManualFocus = (
         camera.minimumFocusDistance > 0f && camera.afModes.contains(CameraCharacteristics.CONTROL_AF_MODE_OFF)
         ) || config.focusDistancePresets.isNotEmpty()
@@ -3349,13 +3348,18 @@ private fun LandscapeCameraControls(
                             LandscapeSliderColumns {
                                 VerticalValueSlider(
                                     label = "对焦",
-                                    valueText = focusDistanceLabel(config.focusDistanceDiopters.coerceIn(0f, camera.minimumFocusDistance)),
-                                    value = config.focusDistanceDiopters.coerceIn(0f, camera.minimumFocusDistance),
-                                    onValueChange = { onChange(config.copy(focusDistanceDiopters = it, unrestrictedFocus = false)) },
-                                    valueRange = 0f..camera.minimumFocusDistance,
+                                    valueText = focusDistanceLabel(displayedFocusDistance),
+                                    value = focusSliderPosition(displayedFocusDistance, camera.minimumFocusDistance),
+                                    onValueChange = {
+                                        onChange(config.copy(
+                                            focusDistanceDiopters = focusDistanceFromSlider(it, camera.minimumFocusDistance),
+                                            unrestrictedFocus = false,
+                                        ))
+                                    },
+                                    valueRange = 0f..1f,
                                     enabled = enabled,
                                     lightText = overlay,
-                                    tickLabel = ::focusDistanceLabel,
+                                    tickLabel = { focusDistanceLabel(focusDistanceFromSlider(it, camera.minimumFocusDistance)) },
                                 )
                             }
                         } else {
@@ -3806,6 +3810,7 @@ private fun QuickCameraControls(
     val displayedIso = if (config.manualExposure) config.iso else liveExposure?.iso ?: config.iso
     val displayedExposureNs = if (config.manualExposure) config.exposureNs else liveExposure?.exposureNs ?: config.exposureNs
     val displayedAperture = if (config.manualExposure) config.aperture else liveExposure?.aperture ?: config.aperture
+    val displayedFocusDistance = lockedTouchFocusDisplayDistance(config, liveExposure)
     val supportsManualFocus = (
         camera.minimumFocusDistance > 0f && camera.afModes.contains(CameraCharacteristics.CONTROL_AF_MODE_OFF)
         ) || config.focusDistancePresets.isNotEmpty()
@@ -4044,7 +4049,7 @@ private fun QuickCameraControls(
                     onChange,
                     compact = true,
                     lightText = lightText,
-                    liveFocusDistanceDiopters = liveExposure?.focusDistanceDiopters,
+                    liveFocusDistanceDiopters = displayedFocusDistance,
                     presetLocationText = "使用下方对焦预设",
                 )
             }
@@ -4252,6 +4257,8 @@ private fun FocusControls(
     val supportsManual = (
         camera.minimumFocusDistance > 0f && camera.afModes.contains(CameraCharacteristics.CONTROL_AF_MODE_OFF)
         ) || config.focusDistancePresets.isNotEmpty()
+    val displayedFocusDistance = liveFocusDistanceDiopters?.takeIf(Float::isFinite)
+        ?: config.focusDistanceDiopters
     val textColor = if (lightText) Color.White else Color.Unspecified
     if (!compact) {
         OutlinedButton(
@@ -4281,23 +4288,33 @@ private fun FocusControls(
             return
         }
         if (!compact) Text(
-            "对焦 ${focusDistanceLabel(config.focusDistanceDiopters.coerceIn(0f, camera.minimumFocusDistance))}",
+            "对焦 ${focusDistanceLabel(displayedFocusDistance)}",
             color = textColor, style = MaterialTheme.typography.labelSmall,
         )
         if (compact) {
             CompactValueSlider(
-                value = config.focusDistanceDiopters.coerceIn(0f, camera.minimumFocusDistance),
-                onValueChange = { onChange(config.copy(focusDistanceDiopters = it, unrestrictedFocus = false)) },
-                valueRange = 0f..camera.minimumFocusDistance,
+                value = focusSliderPosition(displayedFocusDistance, camera.minimumFocusDistance),
+                onValueChange = {
+                    onChange(config.copy(
+                        focusDistanceDiopters = focusDistanceFromSlider(it, camera.minimumFocusDistance),
+                        unrestrictedFocus = false,
+                    ))
+                },
+                valueRange = 0f..1f,
                 enabled = enabled,
-                valueLabel = { focusDistanceLabel(it) },
-                currentValueLabel = focusDistanceLabel(config.focusDistanceDiopters),
+                valueLabel = { focusDistanceLabel(focusDistanceFromSlider(it, camera.minimumFocusDistance)) },
+                currentValueLabel = focusDistanceLabel(displayedFocusDistance),
             )
         } else {
             Slider(
-                value = config.focusDistanceDiopters.coerceIn(0f, camera.minimumFocusDistance),
-                onValueChange = { onChange(config.copy(focusDistanceDiopters = it, unrestrictedFocus = false)) },
-                valueRange = 0f..camera.minimumFocusDistance,
+                value = focusSliderPosition(displayedFocusDistance, camera.minimumFocusDistance),
+                onValueChange = {
+                    onChange(config.copy(
+                        focusDistanceDiopters = focusDistanceFromSlider(it, camera.minimumFocusDistance),
+                        unrestrictedFocus = false,
+                    ))
+                },
+                valueRange = 0f..1f,
                 enabled = enabled,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -4857,4 +4874,34 @@ private fun focusDistanceLabel(diopters: Float): String = when {
     1f / diopters >= 1f -> "${(1f / diopters).format1()} m"
     else -> "${((1f / diopters) * 100f).format1()} cm"
 }
+
+private fun lockedTouchFocusDisplayDistance(
+    config: RecordingConfig,
+    exposure: CameraExposureState?,
+): Float? {
+    val locked = exposure?.touchFocusState == TouchFocusState.SUCCESS ||
+        exposure?.touchFocusState == TouchFocusState.FAILED
+    return exposure?.focusDistanceDiopters?.takeIf {
+        config.focusMode == FocusMode.MANUAL &&
+            config.unrestrictedFocus &&
+            config.touchFocusRequestId > 0L &&
+            exposure.cameraId == config.cameraId &&
+            exposure.touchFocusRequestId == config.touchFocusRequestId &&
+            locked && it.isFinite()
+    }
+}
+
+/** Maps the manual-focus slider with finer control at far distances. */
+private fun focusSliderPosition(diopters: Float, maximum: Float): Float {
+    val max = maximum.coerceAtLeast(0.0001f)
+    val normalized = (diopters / max).coerceIn(0f, 1f)
+    return kotlin.math.sqrt(normalized)
+}
+
+private fun focusDistanceFromSlider(position: Float, maximum: Float): Float {
+    val max = maximum.coerceAtLeast(0f)
+    val normalized = position.coerceIn(0f, 1f)
+    return normalized * normalized * max
+}
+
 private fun formatDuration(ms: Long): String = "%02d:%02d:%02d".format(ms / 3_600_000, ms / 60_000 % 60, ms / 1_000 % 60)

@@ -506,7 +506,7 @@ class MediaCodecRecorderEngine(
                         CameraRequestControls.apply(
                             cameraManager, config.cameraId, config, this,
                             touchFocusCompleted = config.touchFocusRequestId == completedTouchFocusRequestId,
-                            manualFocusDistanceOverride = touchFocusLockedDistance,
+                            touchFocusLocked = touchFocusLockedDistance != null,
                         )
                         dynamicFpsRange(config.cameraId)?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                     }.build()
@@ -747,7 +747,8 @@ class MediaCodecRecorderEngine(
             val previousConfig = config
             if (updated.focusMode != FocusMode.MANUAL ||
                 (updated.touchFocusRequestId == config.touchFocusRequestId &&
-                    updated.focusDistanceDiopters != config.focusDistanceDiopters)
+                    updated.focusDistanceDiopters != config.focusDistanceDiopters &&
+                    !updated.unrestrictedFocus)
             ) {
                 touchFocusLockedDistance = null
             }
@@ -822,7 +823,7 @@ class MediaCodecRecorderEngine(
                 CameraRequestControls.apply(
                     cameraManager, config.cameraId, config, this,
                     touchFocusCompleted = config.touchFocusRequestId == completedTouchFocusRequestId,
-                    manualFocusDistanceOverride = touchFocusLockedDistance,
+                    touchFocusLocked = touchFocusLockedDistance != null,
                 )
                 dynamicFpsRange(config.cameraId)?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
             }.build()
