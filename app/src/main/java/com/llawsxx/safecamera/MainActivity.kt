@@ -3308,7 +3308,12 @@ private fun LandscapeCameraControls(
                                                     }
                                                 )
                                             }
-                                            FullscreenControl.WB -> { selected = control; onPresetControlChange(null); whiteBalanceExpanded = true }
+                                            FullscreenControl.WB -> {
+                                                val slidersAlreadyVisible = selected == FullscreenControl.WB
+                                                selected = control
+                                                onPresetControlChange(null)
+                                                whiteBalanceExpanded = !config.manualWhiteBalance || slidersAlreadyVisible
+                                            }
                                             FullscreenControl.APERTURE -> { selected = control; onPresetControlChange(null); apertureExpanded = true }
                                             FullscreenControl.FOCUS -> if (supportsManualFocus) {
                                                 if (config.focusMode == FocusMode.MANUAL) {
@@ -4005,7 +4010,12 @@ private fun QuickCameraControls(
                                         }
                                     )
                                 }
-                                FullscreenControl.WB -> { selected = control; onPresetControlChange(null); whiteBalanceExpanded = true }
+                                FullscreenControl.WB -> {
+                                    val slidersAlreadyVisible = selected == FullscreenControl.WB
+                                    selected = control
+                                    onPresetControlChange(null)
+                                    whiteBalanceExpanded = !config.manualWhiteBalance || slidersAlreadyVisible
+                                }
                                 FullscreenControl.APERTURE -> { selected = control; onPresetControlChange(null); apertureExpanded = true }
                                 FullscreenControl.FOCUS -> if (supportsManualFocus) {
                                     if (config.focusMode == FocusMode.MANUAL) {
