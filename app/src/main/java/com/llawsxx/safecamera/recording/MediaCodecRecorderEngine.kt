@@ -62,6 +62,11 @@ class MediaCodecRecorderEngine(
     private var rawThreeAAuxiliaryFallback = false
     private var cameraControlsPending = false
     private var submittedCameraControlsKey: List<Any?>? = null
+    private var triggeredTouchFocusRequestId = 0L
+    private var completedTouchFocusRequestId = 0L
+    private var touchFocusState: TouchFocusState? = null
+    private var lastReportedFocusDistance: Float? = null
+    private var touchFocusLockedDistance: Float? = null
     private var cameraGeneration = 0
     @Volatile private var videoCodec: MediaCodec? = null
     @Volatile private var audioCodec: MediaCodec? = null
@@ -498,12 +503,17 @@ class MediaCodecRecorderEngine(
                         addTarget(recordSurface)
                         requestPreviewSurface()?.let(::addTarget)
                         auxiliarySurface?.let(::addTarget)
-                        CameraRequestControls.apply(cameraManager, config.cameraId, config, this)
+                        CameraRequestControls.apply(
+                            cameraManager, config.cameraId, config, this,
+                            touchFocusCompleted = config.touchFocusRequestId == completedTouchFocusRequestId,
+                            manualFocusDistanceOverride = touchFocusLockedDistance,
+                        )
                         dynamicFpsRange(config.cameraId)?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                     }.build()
                     newSession.setRepeatingRequest(request, captureCallback, cameraHandler)
                     submittedCameraControlsKey = config.cameraRequestControlsKey()
                     cameraControlsPending = false
+                    triggerTouchFocusIfNeeded(device, newSession, recordSurface)
                 }.onFailure { fail("无法开始 MediaCodec 采集: ${it.message}") }
             }
             override fun onConfigureFailed(newSession: CameraCaptureSession) {
@@ -607,6 +617,10 @@ class MediaCodecRecorderEngine(
         ) {
             if (!running.get() || session !== this@MediaCodecRecorderEngine.session || camera == null) return
             val whiteBalanceGains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
+            updateTouchFocusResult(request, result)
+            result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.takeIf(Float::isFinite)?.let {
+                lastReportedFocusDistance = it
+            }
             val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
             if (timestamp == null) {
                 if (cameraControlsPending) submitRepeatingRequest("实时参数更新失败")
@@ -620,6 +634,8 @@ class MediaCodecRecorderEngine(
                     whiteBalanceGreenEvenGain = whiteBalanceGains?.greenEven,
                     whiteBalanceGreenOddGain = whiteBalanceGains?.greenOdd,
                     whiteBalanceBlueGain = whiteBalanceGains?.blue,
+                    touchFocusRequestId = config.touchFocusRequestId,
+                    touchFocusState = touchFocusState,
                 )
                 return
             }
@@ -640,6 +656,8 @@ class MediaCodecRecorderEngine(
                 whiteBalanceGreenEvenGain = whiteBalanceGains?.greenEven,
                 whiteBalanceGreenOddGain = whiteBalanceGains?.greenOdd,
                 whiteBalanceBlueGain = whiteBalanceGains?.blue,
+                touchFocusRequestId = config.touchFocusRequestId,
+                touchFocusState = touchFocusState,
             )
             if (firstSensorNs == 0L) firstSensorNs = timestamp
             if (lastSensorNs > 0L) {
@@ -713,7 +731,12 @@ class MediaCodecRecorderEngine(
                 transformRenderer?.setPixelRotationDegrees(it)
             }
             lastSensorNs = 0L
-            config = config.copy(cameraId = cameraId)
+            config = config.copy(cameraId = cameraId, touchFocusX = null, touchFocusY = null)
+            triggeredTouchFocusRequestId = 0L
+            completedTouchFocusRequestId = 0L
+            touchFocusState = null
+            lastReportedFocusDistance = null
+            touchFocusLockedDistance = null
             openCamera()
         }
     }
@@ -722,6 +745,12 @@ class MediaCodecRecorderEngine(
         cameraHandler.post {
             if (!running.get() || stopStarted.get()) return@post
             val previousConfig = config
+            if (updated.focusMode != FocusMode.MANUAL ||
+                (updated.touchFocusRequestId == config.touchFocusRequestId &&
+                    updated.focusDistanceDiopters != config.focusDistanceDiopters)
+            ) {
+                touchFocusLockedDistance = null
+            }
             config = config.copy(
                 manualExposure = updated.manualExposure,
                 iso = updated.iso,
@@ -743,6 +772,14 @@ class MediaCodecRecorderEngine(
                 focusMode = updated.focusMode,
                 focusDistanceDiopters = updated.focusDistanceDiopters,
                 unrestrictedFocus = updated.unrestrictedFocus,
+                touchFocusEnabled = updated.touchFocusEnabled,
+                touchFocusX = updated.touchFocusX,
+                touchFocusY = updated.touchFocusY,
+                touchFocusRotationDegrees = updated.touchFocusRotationDegrees,
+                touchFocusPreviewWidth = updated.touchFocusPreviewWidth,
+                touchFocusPreviewHeight = updated.touchFocusPreviewHeight,
+                touchFocusPreviewMirrored = updated.touchFocusPreviewMirrored,
+                touchFocusRequestId = updated.touchFocusRequestId,
                 opticalStabilization = updated.opticalStabilization,
                 antibandingMode = updated.antibandingMode,
                 noiseReductionMode = updated.noiseReductionMode,
@@ -782,15 +819,69 @@ class MediaCodecRecorderEngine(
                 addTarget(recordSurface)
                 requestPreviewSurface()?.let(::addTarget)
                 rawThreeAAuxiliaryStream?.surface?.takeIf { it.isValid }?.let(::addTarget)
-                CameraRequestControls.apply(cameraManager, config.cameraId, config, this)
+                CameraRequestControls.apply(
+                    cameraManager, config.cameraId, config, this,
+                    touchFocusCompleted = config.touchFocusRequestId == completedTouchFocusRequestId,
+                    manualFocusDistanceOverride = touchFocusLockedDistance,
+                )
                 dynamicFpsRange(config.cameraId)?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
             }.build()
             activeSession.setRepeatingRequest(request, captureCallback, cameraHandler)
             submittedCameraControlsKey = config.cameraRequestControlsKey()
             cameraControlsPending = false
+            triggerTouchFocusIfNeeded(device, activeSession, recordSurface)
         }.onFailure {
             cameraControlsPending = false
             onNotice("$failurePrefix: ${it.message}")
+        }
+    }
+
+    private fun triggerTouchFocusIfNeeded(
+        device: CameraDevice,
+        activeSession: CameraCaptureSession,
+        recordSurface: Surface,
+    ) {
+        val requestId = config.touchFocusRequestId
+        if (requestId <= 0L || requestId == triggeredTouchFocusRequestId ||
+            touchFocusRegion(cameraManager.getCameraCharacteristics(config.cameraId), config) == null
+        ) return
+        fun triggerRequest(trigger: Int) = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+            addTarget(recordSurface)
+            requestPreviewSurface()?.let(::addTarget)
+            rawThreeAAuxiliaryStream?.surface?.takeIf { it.isValid }?.let(::addTarget)
+            CameraRequestControls.apply(cameraManager, config.cameraId, config, this)
+            dynamicFpsRange(config.cameraId)?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+            set(CaptureRequest.CONTROL_AF_TRIGGER, trigger)
+        }.build()
+        touchFocusState = TouchFocusState.FOCUSING
+        triggeredTouchFocusRequestId = requestId
+        activeSession.capture(
+            triggerRequest(CaptureRequest.CONTROL_AF_TRIGGER_CANCEL), captureCallback, cameraHandler,
+        )
+        activeSession.capture(
+            triggerRequest(CaptureRequest.CONTROL_AF_TRIGGER_START), captureCallback, cameraHandler,
+        )
+    }
+
+    private fun updateTouchFocusResult(request: CaptureRequest, result: CaptureResult) {
+        if (request.get(CaptureRequest.CONTROL_AF_TRIGGER) == CaptureRequest.CONTROL_AF_TRIGGER_CANCEL) return
+        val requestId = config.touchFocusRequestId
+        if (requestId <= 0L || requestId != triggeredTouchFocusRequestId ||
+            requestId == completedTouchFocusRequestId
+        ) return
+        touchFocusState = when (result.get(CaptureResult.CONTROL_AF_STATE)) {
+            CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED -> TouchFocusState.SUCCESS
+            CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED -> TouchFocusState.FAILED
+            else -> return
+        }
+        completedTouchFocusRequestId = requestId
+        if (config.focusMode == FocusMode.MANUAL) {
+            touchFocusLockedDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
+                ?.takeIf(Float::isFinite)
+                ?: lastReportedFocusDistance?.takeIf(Float::isFinite)
+                ?: config.focusDistanceDiopters
+            submittedCameraControlsKey = null
+            cameraControlsPending = true
         }
     }
 

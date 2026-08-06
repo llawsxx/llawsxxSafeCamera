@@ -15,12 +15,27 @@ import com.llawsxx.safecamera.recording.AudioAacProfile
 import com.llawsxx.safecamera.recording.ContainerFormat
 import com.llawsxx.safecamera.recording.LINEAR_BT709_TO_BT2020
 import com.llawsxx.safecamera.recording.multiply3x3
+import com.llawsxx.safecamera.recording.mapTouchFocusPoint
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RecordingConfigTest {
+    @Test
+    fun touchFocusMapsRotationMirrorAndPreviewCrop() {
+        val cropped = mapTouchFocusPoint(0f, 0f, 0, false, 4f / 3f, 16f / 9f)
+        assertEquals(0f, cropped.first, 0.0001f)
+        assertEquals(0.125f, cropped.second, 0.0001f)
+
+        val rotated = mapTouchFocusPoint(0.2f, 0.3f, 90, false, 1f, 1f)
+        assertEquals(0.3f, rotated.first, 0.0001f)
+        assertEquals(0.8f, rotated.second, 0.0001f)
+
+        val mirrored = mapTouchFocusPoint(0.2f, 0.3f, 0, true, 1f, 1f)
+        assertEquals(0.8f, mirrored.first, 0.0001f)
+        assertEquals(0.3f, mirrored.second, 0.0001f)
+    }
     @Test
     fun mediaCodecEngineCanBeRequestedExplicitly() {
         assertTrue(RecordingConfig(fps = 30, mediaCodecMode = true).mediaCodecEngineRequested)

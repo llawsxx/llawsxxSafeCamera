@@ -132,6 +132,7 @@ object ConfigPreferences {
             whiteBalanceBlueGain = p.getFloat("whiteBalanceBlueGain", 1f).coerceIn(1f, 8f),
             focusMode = enumValue(p.getString("focusMode", null), FocusMode.CONTINUOUS),
             focusDistanceDiopters = p.getFloat("focusDistanceDiopters", 0f).coerceAtLeast(0f),
+            touchFocusEnabled = p.getBoolean("touchFocusEnabled", false),
             isoPresets = p.getString("isoPresets", null)
                 ?.split(',')?.mapNotNull(String::toIntOrNull)?.filter { it > 0 }?.distinct()
                 ?: emptyList(),
@@ -250,6 +251,7 @@ object ConfigPreferences {
             .putFloat("whiteBalanceBlueGain", c.whiteBalanceBlueGain)
             .putString("focusMode", c.focusMode.name)
             .putFloat("focusDistanceDiopters", c.focusDistanceDiopters)
+            .putBoolean("touchFocusEnabled", c.touchFocusEnabled)
             .putString("isoPresets", c.isoPresets.joinToString(","))
             .putString("shutterPresets", c.shutterPresets.joinToString(","))
             .putString(

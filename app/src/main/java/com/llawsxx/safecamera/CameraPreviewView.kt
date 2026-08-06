@@ -13,11 +13,13 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.MotionEvent
 import android.widget.FrameLayout
+import com.llawsxx.safecamera.recording.TouchFocusState
 
 internal class CameraPreviewView(context: Context) : FrameLayout(context), SurfaceHolder.Callback {
     private val surfaceView = SurfaceView(context)
     private val cropFrameView = CropFrameView(context)
-    private val transformLayer = PreviewLayout(context, surfaceView, cropFrameView)
+    private val focusFrameView = FocusFrameView(context)
+    private val transformLayer = PreviewLayout(context, surfaceView, cropFrameView, focusFrameView)
     private var surfaceCallback: ((Surface?) -> Unit)? = null
     private var bufferReadyCallback: ((Int) -> Unit)? = null
     private var bufferWidth = 1
@@ -30,7 +32,7 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Surfa
     private var centerX = 0.5f
     private var centerY = 0.5f
     private var panCallback: ((Float, Float) -> Unit)? = null
-    private var tapCallback: (() -> Unit)? = null
+    private var tapCallback: ((Float, Float) -> Unit)? = null
     private var downX = 0f
     private var downY = 0f
 
@@ -54,7 +56,10 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Surfa
         centerX: Float = 0.5f,
         centerY: Float = 0.5f,
         onPan: ((Float, Float) -> Unit)? = null,
-        onTap: (() -> Unit)? = null,
+        onTap: ((Float, Float) -> Unit)? = null,
+        touchFocusX: Float? = null,
+        touchFocusY: Float? = null,
+        touchFocusState: TouchFocusState? = null,
         callback: (Surface?) -> Unit,
         onBufferReady: (Int) -> Unit,
     ) {
@@ -81,6 +86,7 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Surfa
         }
         panCallback = onPan
         tapCallback = onTap
+        focusFrameView.setFocus(touchFocusX, touchFocusY, touchFocusState)
         if (epochChanged) reportedReadyEpoch = Int.MIN_VALUE
         surfaceCallback = callback
         bufferReadyCallback = onBufferReady
@@ -113,7 +119,15 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Surfa
                     )
                     panCallback?.invoke(-sourceDx, -sourceDy)
                 } else {
-                    tapCallback?.invoke()
+                    val localX = (event.x - width / 2f - transformLayer.translationX) /
+                        assistZoom + width / 2f
+                    val localY = (event.y - height / 2f - transformLayer.translationY) /
+                        assistZoom + height / 2f
+                    val contentLeft = (width - transformLayer.displayedContentWidth) / 2f
+                    val contentTop = (height - transformLayer.displayedContentHeight) / 2f
+                    val x = (localX - contentLeft) / transformLayer.displayedContentWidth
+                    val y = (localY - contentTop) / transformLayer.displayedContentHeight
+                    if (x in 0f..1f && y in 0f..1f) tapCallback?.invoke(x, y)
                 }
                 return true
             }
@@ -232,7 +246,55 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Surfa
         }
     }
 
-    private inner class PreviewLayout(context: Context, private val content: View, private val overlay: View) : ViewGroup(context) {
+    private class FocusFrameView(context: Context) : View(context) {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = resources.displayMetrics.density * 2f
+            pathEffect = android.graphics.DashPathEffect(
+                floatArrayOf(resources.displayMetrics.density * 7f, resources.displayMetrics.density * 5f),
+                0f,
+            )
+        }
+        private var focusX: Float? = null
+        private var focusY: Float? = null
+        private var state: TouchFocusState? = null
+
+        fun setFocus(x: Float?, y: Float?, state: TouchFocusState?) {
+            focusX = x?.coerceIn(0f, 1f)
+            focusY = y?.coerceIn(0f, 1f)
+            this.state = state
+            visibility = if (focusX != null && focusY != null) VISIBLE else GONE
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val x = focusX ?: return
+            val y = focusY ?: return
+            paint.color = when (state) {
+                TouchFocusState.SUCCESS -> Color.GREEN
+                TouchFocusState.FAILED -> Color.RED
+                else -> Color.GRAY
+            }
+            val side = minOf(width, height) * 0.14f
+            val centerX = x * width
+            val centerY = y * height
+            val half = side / 2f
+            canvas.drawRect(
+                (centerX - half).coerceIn(0f, width - side),
+                (centerY - half).coerceIn(0f, height - side),
+                (centerX - half).coerceIn(0f, width - side) + side,
+                (centerY - half).coerceIn(0f, height - side) + side,
+                paint,
+            )
+        }
+    }
+
+    private inner class PreviewLayout(
+        context: Context,
+        private val content: View,
+        private val overlay: View,
+        private val focusOverlay: View,
+    ) : ViewGroup(context) {
         var displayAspect: Float = 1f
             set(value) { field = value.coerceAtLeast(0.0001f); requestLayout() }
         var assistZoom: Float = 1f
@@ -249,6 +311,7 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Surfa
         init {
             addView(content)
             addView(overlay)
+            addView(focusOverlay)
         }
 
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -272,6 +335,10 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Surfa
                 MeasureSpec.makeMeasureSpec(displayedWidth, MeasureSpec.EXACTLY),
                 MeasureSpec.makeMeasureSpec(displayedHeight, MeasureSpec.EXACTLY),
             )
+            focusOverlay.measure(
+                MeasureSpec.makeMeasureSpec(displayedWidth, MeasureSpec.EXACTLY),
+                MeasureSpec.makeMeasureSpec(displayedHeight, MeasureSpec.EXACTLY),
+            )
             setMeasuredDimension(measuredWidth, measuredHeight)
         }
 
@@ -288,6 +355,7 @@ internal class CameraPreviewView(context: Context) : FrameLayout(context), Surfa
         override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
             layoutOneView(content)
             layoutOneView(overlay)
+            layoutOneView(focusOverlay)
 
             pivotX = width / 2f
             pivotY = height / 2f

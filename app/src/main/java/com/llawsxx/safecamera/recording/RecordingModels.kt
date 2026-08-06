@@ -146,6 +146,10 @@ enum class FocusMode(val label: String) : Serializable {
     CONTINUOUS("连续自动"), MANUAL("手动")
 }
 
+enum class TouchFocusState : Serializable {
+    FOCUSING, SUCCESS, FAILED
+}
+
 enum class VideoScalingAlgorithm(val label: String) : Serializable {
     NEAREST("最近邻（最快）"),
     BILINEAR("双线性（推荐）"),
@@ -244,6 +248,14 @@ data class RecordingConfig(
     val whiteBalanceBlueGain: Float = 1f,
     val focusMode: FocusMode = FocusMode.CONTINUOUS,
     val focusDistanceDiopters: Float = 0f,
+    val touchFocusEnabled: Boolean = false,
+    val touchFocusX: Float? = null,
+    val touchFocusY: Float? = null,
+    val touchFocusRotationDegrees: Int = 0,
+    val touchFocusPreviewWidth: Int = 0,
+    val touchFocusPreviewHeight: Int = 0,
+    val touchFocusPreviewMirrored: Boolean = false,
+    val touchFocusRequestId: Long = 0L,
     val isoPresets: List<Int> = emptyList(),
     val shutterPresets: List<String> = emptyList(),
     val focusDistancePresets: List<FocusDistancePreset> = emptyList(),
@@ -396,6 +408,7 @@ data class CameraInfo(
     val edgeModes: List<Int>,
     val shadingModes: List<Int>,
     val afModes: List<Int>,
+    val maxAfRegions: Int,
     val minimumFocusDistance: Float,
     val sensorOrientation: Int,
     val highSpeedModes: List<HighSpeedVideoMode>,
@@ -429,6 +442,8 @@ data class CameraExposureState(
     val whiteBalanceGreenEvenGain: Float? = null,
     val whiteBalanceGreenOddGain: Float? = null,
     val whiteBalanceBlueGain: Float? = null,
+    val touchFocusRequestId: Long = 0L,
+    val touchFocusState: TouchFocusState? = null,
 )
 
 sealed interface RecorderState {

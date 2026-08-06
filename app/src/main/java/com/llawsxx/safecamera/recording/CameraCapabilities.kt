@@ -189,6 +189,7 @@ object CameraCapabilities {
                     edgeModes = c.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)?.toList().orEmpty(),
                     shadingModes = shadingModes,
                     afModes = c.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)?.toList().orEmpty(),
+                    maxAfRegions = c.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0,
                     minimumFocusDistance = c.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f,
                     sensorOrientation = c.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0,
                     highSpeedModes = highSpeedModes,

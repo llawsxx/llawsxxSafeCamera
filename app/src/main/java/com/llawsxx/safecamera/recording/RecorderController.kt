@@ -114,10 +114,16 @@ object RecorderController {
         whiteBalanceGreenEvenGain: Float?,
         whiteBalanceGreenOddGain: Float?,
         whiteBalanceBlueGain: Float?,
+        touchFocusRequestId: Long = 0L,
+        touchFocusState: TouchFocusState? = null,
     ) {
         val now = SystemClock.elapsedRealtime()
         val previous = mutableExposure.value
-        if (previous?.cameraId == cameraId && now - lastExposureUpdateMs < 100L) return
+        if (previous?.cameraId == cameraId &&
+            previous.touchFocusRequestId == touchFocusRequestId &&
+            previous.touchFocusState == touchFocusState &&
+            now - lastExposureUpdateMs < 100L
+        ) return
         lastExposureUpdateMs = now
         mutableExposure.value = CameraExposureState(
             cameraId,
@@ -129,6 +135,8 @@ object RecorderController {
             whiteBalanceGreenEvenGain,
             whiteBalanceGreenOddGain,
             whiteBalanceBlueGain,
+            touchFocusRequestId,
+            touchFocusState,
         )
     }
 }

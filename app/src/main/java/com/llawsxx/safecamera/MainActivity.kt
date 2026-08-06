@@ -119,6 +119,7 @@ import com.llawsxx.safecamera.recording.ConfigPresetPreferences
 import com.llawsxx.safecamera.recording.ConfigPreferences
 import com.llawsxx.safecamera.recording.IdlePreviewCamera
 import com.llawsxx.safecamera.recording.FocusMode
+import com.llawsxx.safecamera.recording.TouchFocusState
 import com.llawsxx.safecamera.recording.FocusDistancePreset
 import com.llawsxx.safecamera.recording.FocusDistanceUnit
 import com.llawsxx.safecamera.recording.OrientationMode
@@ -264,6 +265,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             rawHeight = camera.rawSizes.firstOrNull { it.width == config.rawWidth && it.height == config.rawHeight }
                 ?.height ?: camera.rawSizes.firstOrNull()?.height ?: 0,
             aperture = config.aperture?.takeIf(camera.apertures::contains) ?: camera.apertures.firstOrNull(),
+            touchFocusX = null,
+            touchFocusY = null,
             antibandingMode = supportedAntibandingMode(camera, config.antibandingMode),
         )
     }
@@ -351,7 +354,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         audioInputsLoaded = true
     }
 
-    LaunchedEffect(config.experimentalCameraAccess) {
+    LaunchedEffect(config.experimentalCameraAccess, permissionEpoch) {
         val queriedCameras = CameraCapabilities.query(context, config.experimentalCameraAccess)
         (queriedCameras.firstOrNull { it.id == config.cameraId } ?: queriedCameras.firstOrNull())?.let { camera ->
             val savedSizes = if (config.videoTransformEnabled) camera.previewSizes else camera.sizes
@@ -376,6 +379,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             exposureNs = camera.exposureRange?.takeUnless { config.unrestrictedExposure }
                 ?.let { config.exposureNs.coerceIn(it.lower, it.upper) } ?: config.exposureNs,
                 aperture = config.aperture?.takeIf(camera.apertures::contains) ?: camera.apertures.firstOrNull(),
+                touchFocusX = null,
+                touchFocusY = null,
                 exposureCompensation = camera.exposureCompensationRange?.let {
                     config.exposureCompensation.coerceIn(it.lower, it.upper)
                 } ?: 0,
@@ -473,6 +478,38 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         val supported = supportedAntibandingMode(camera, config.antibandingMode)
         if (supported != config.antibandingMode) config = config.copy(antibandingMode = supported)
     }
+    LaunchedEffect(
+        liveExposure?.cameraId,
+        liveExposure?.touchFocusRequestId,
+        liveExposure?.touchFocusState,
+    ) {
+        val exposure = liveExposure ?: return@LaunchedEffect
+        val completed = exposure.touchFocusState == TouchFocusState.SUCCESS ||
+            exposure.touchFocusState == TouchFocusState.FAILED
+        val focusedDistance = exposure.focusDistanceDiopters?.takeIf(Float::isFinite)
+        if (config.focusMode == FocusMode.MANUAL && completed && focusedDistance != null &&
+            exposure.cameraId == config.cameraId &&
+            exposure.touchFocusRequestId == config.touchFocusRequestId &&
+            focusedDistance != config.focusDistanceDiopters
+        ) {
+            config = config.copy(
+                focusDistanceDiopters = focusedDistance,
+                unrestrictedFocus = true,
+            )
+        }
+    }
+    LaunchedEffect(config.width, config.height, config.previewWidth, config.previewHeight) {
+        val explicitPreviewSize = config.previewWidth > 0 && config.previewHeight > 0
+        if (explicitPreviewSize && !hasSameAspectRatio(
+                config.previewWidth,
+                config.previewHeight,
+                config.width,
+                config.height,
+            )
+        ) {
+            config = config.copy(previewWidth = 0, previewHeight = 0)
+        }
+    }
     LaunchedEffect(config.fps, config.cameraId, cameras) {
         selectedCamera?.exposureRange?.takeUnless { config.unrestrictedExposure }?.let { range ->
             val maximum = minOf(range.upper, config.maximumExposureNs).coerceAtLeast(range.lower)
@@ -505,6 +542,14 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.focusMode,
         config.focusDistanceDiopters,
         config.unrestrictedFocus,
+        config.touchFocusEnabled,
+        config.touchFocusX,
+        config.touchFocusY,
+        config.touchFocusRotationDegrees,
+        config.touchFocusPreviewWidth,
+        config.touchFocusPreviewHeight,
+        config.touchFocusPreviewMirrored,
+        config.touchFocusRequestId,
         config.opticalStabilization,
         config.antibandingMode,
         config.noiseReductionMode,
@@ -577,6 +622,14 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.focusMode,
         config.focusDistanceDiopters,
         config.unrestrictedFocus,
+        config.touchFocusEnabled,
+        config.touchFocusX,
+        config.touchFocusY,
+        config.touchFocusRotationDegrees,
+        config.touchFocusPreviewWidth,
+        config.touchFocusPreviewHeight,
+        config.touchFocusPreviewMirrored,
+        config.touchFocusRequestId,
         config.opticalStabilization,
         config.antibandingMode,
         config.noiseReductionMode,
@@ -716,7 +769,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 if (recording) {
                     RecorderController.switchCamera(context, camera.id)
                     restoreCameraModeAfterRecording = camera.id
-                    config = config.copy(cameraId = camera.id)
+                    config = config.copy(cameraId = camera.id, touchFocusX = null, touchFocusY = null)
                 } else {
                     config = applyCameraMode(camera)
                 }
@@ -746,7 +799,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 if (recording) {
                     RecorderController.switchCamera(context, camera.id)
                     restoreCameraModeAfterRecording = camera.id
-                    config = config.copy(cameraId = camera.id)
+                    config = config.copy(cameraId = camera.id, touchFocusX = null, touchFocusY = null)
                 } else {
                     config = applyCameraMode(camera)
                 }
@@ -1843,6 +1896,8 @@ private fun MainRecorderScreen(
                 RemainingSpacePreview(
                     config = config,
                     camera = camera,
+                    liveExposure = liveExposure,
+                    recording = recording,
                     previewRotationDegrees = previewRotationDegrees,
                     previewResumeEpoch = previewResumeEpoch,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -1933,6 +1988,8 @@ private fun LandscapeMainRecorderScreen(
             RemainingSpacePreview(
                 config = config,
                 camera = camera,
+                liveExposure = liveExposure,
+                recording = recording,
                 previewRotationDegrees = previewRotationDegrees,
                 previewResumeEpoch = previewResumeEpoch,
                 modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -1958,6 +2015,8 @@ private fun LandscapeMainRecorderScreen(
 private fun RemainingSpacePreview(
     config: RecordingConfig,
     camera: CameraInfo,
+    liveExposure: CameraExposureState?,
+    recording: Boolean,
     previewRotationDegrees: Int,
     previewResumeEpoch: Int,
     modifier: Modifier,
@@ -1967,6 +2026,7 @@ private fun RemainingSpacePreview(
     showZoomControls: Boolean = true,
     presetControl: CameraPresetControl? = null,
 ) {
+    val context = LocalContext.current
     val previewBuffer = previewBufferSize(camera, config)
     Box(modifier, contentAlignment = Alignment.Center) {
         val previewModifier = Modifier.fillMaxSize()
@@ -1989,9 +2049,25 @@ private fun RemainingSpacePreview(
                 mfAssistCenterX = boundedAssistCenter(config.mfAssistCenterX + dx, config.mfAssistMagnification),
                 mfAssistCenterY = boundedAssistCenter(config.mfAssistCenterY + dy, config.mfAssistMagnification),
             )) },
+            onTap = { x, y ->
+                if (config.touchFocusEnabled && camera.maxAfRegions > 0) {
+                    onConfigChange(
+                        config.withTouchFocusRequest(
+                            x,
+                            y,
+                            previewRotationDegrees,
+                            touchFocusSourceSize(context, config, previewBuffer, recording),
+                            camera,
+                        ),
+                    )
+                }
+            },
             presetControl = presetControl,
             config = config,
             onConfigChange = onConfigChange,
+            touchFocusState = liveExposure?.takeIf {
+                it.cameraId == config.cameraId && it.touchFocusRequestId == config.touchFocusRequestId
+            }?.touchFocusState,
         )
         if (showZoomControls) {
             Row(
@@ -2004,6 +2080,11 @@ private fun RemainingSpacePreview(
                 ZoomButton("+", true) {
                     onConfigChange(assistConfigAtMagnification(config, nextMagnification(config)))
                 }
+                TouchFocusToggleButton(config, camera, onConfigChange)
+            }
+        } else {
+            Box(Modifier.align(Alignment.TopEnd).padding(6.dp)) {
+                TouchFocusToggleButton(config, camera, onConfigChange)
             }
         }
         if (config.mfAssistMagnification > 1) {
@@ -2042,7 +2123,7 @@ private fun PreviewToolbar(
 ) {
     val controls: @Composable () -> Unit = {
         CompactChoice("镜头", cameras, selectedCamera, { it.displayName }, true, Modifier.width(116.dp), onCameraSelect)
-        val previewSizes = selectedCamera?.let(::previewSizeOptions).orEmpty()
+        val previewSizes = selectedCamera?.let { previewSizeOptions(it, config) }.orEmpty()
         val selectedPreviewSize = previewSizes.firstOrNull {
             it.first == config.previewWidth && it.second == config.previewHeight
         } ?: previewSizes.firstOrNull()
@@ -2166,6 +2247,8 @@ private fun FullscreenRecorder(
 ) {
     val context = LocalContext.current
     val previewBuffer = previewBufferSize(camera, config)
+    val recording = state is RecorderState.Recording ||
+        state is RecorderState.Starting || state is RecorderState.Stopping
     var controlsVisible by remember { mutableStateOf(true) }
     var presetControl by remember { mutableStateOf<CameraPresetControl?>(null) }
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -2190,10 +2273,23 @@ private fun FullscreenRecorder(
                 mfAssistCenterX = boundedAssistCenter(config.mfAssistCenterX + dx, config.mfAssistMagnification),
                 mfAssistCenterY = boundedAssistCenter(config.mfAssistCenterY + dy, config.mfAssistMagnification),
             )) },
-            onTap = {
-                controlsVisible = !controlsVisible
-                if (!controlsVisible) presetControl = null
+            onTap = { x, y ->
+                if (config.touchFocusEnabled && (camera?.maxAfRegions ?: 0) > 0) {
+                    onConfigChange(
+                        config.withTouchFocusRequest(
+                            x,
+                            y,
+                            previewRotationDegrees,
+                            touchFocusSourceSize(context, config, previewBuffer, recording),
+                            camera,
+                        ),
+                    )
+                }
             },
+            config = config,
+            touchFocusState = liveExposure?.takeIf {
+                it.cameraId == config.cameraId && it.touchFocusRequestId == config.touchFocusRequestId
+            }?.touchFocusState,
         )
         if (isLandscape) {
             Row(
@@ -2279,12 +2375,6 @@ private fun FullscreenRecorder(
                         )
                     }
                 }
-                ZoomControls(
-                    config = config,
-                    onChange = onConfigChange,
-                    overlay = true,
-                    modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp),
-                )
             } else {
                 Column(
                     modifier = Modifier
@@ -2313,6 +2403,29 @@ private fun FullscreenRecorder(
                             onConfigChange = onConfigChange,
                         )
                     }
+                }
+            }
+        }
+        camera?.let {
+            Row(
+                Modifier.align(Alignment.CenterEnd).padding(end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                TouchFocusButtons(
+                    config = config,
+                    camera = it,
+                    onChange = onConfigChange,
+                    controlsVisible = controlsVisible,
+                    onControlsVisibleChange = { visible ->
+                        controlsVisible = visible
+                        if (!visible) presetControl = null
+                    },
+                    showParametersButton = true,
+                    overlay = true,
+                )
+                if (controlsVisible) {
+                    ZoomControls(config, onConfigChange, overlay = true)
                 }
             }
         }
@@ -2359,7 +2472,7 @@ private fun PreviewSizeChoice(
     onConfigChange: (RecordingConfig) -> Unit,
     enabled: Boolean,
 ) {
-    val options = camera?.let(::previewSizeOptions).orEmpty()
+    val options = camera?.let { previewSizeOptions(it, config) }.orEmpty()
     val selected = options.firstOrNull {
         it.first == config.previewWidth && it.second == config.previewHeight
     } ?: options.firstOrNull()
@@ -2386,7 +2499,7 @@ private fun PreviewPanel(
     modifier: Modifier,
     onSurface: (Surface?) -> Unit,
     onBufferReady: (Int) -> Unit,
-    onTap: (() -> Unit)? = null,
+    onTap: ((Float, Float) -> Unit)? = null,
     assistZoom: Int = 1,
     cropFrameWidthFraction: Float? = null,
     cropFrameHeightFraction: Float? = null,
@@ -2396,12 +2509,10 @@ private fun PreviewPanel(
     presetControl: CameraPresetControl? = null,
     config: RecordingConfig? = null,
     onConfigChange: ((RecordingConfig) -> Unit)? = null,
+    touchFocusState: TouchFocusState? = null,
 ) {
-    val panelModifier = modifier.let {
-        if (onTap != null) it.clickable(onClick = onTap) else it
-    }
     Card(
-        modifier = panelModifier,
+        modifier = modifier,
         shape = RectangleShape,
         colors = CardDefaults.cardColors(containerColor = Color(0xFF111416)),
     ) {
@@ -2426,6 +2537,9 @@ private fun PreviewPanel(
                                 centerY = centerY,
                                 onPan = onPan,
                                 onTap = onTap,
+                                touchFocusX = config?.touchFocusX,
+                                touchFocusY = config?.touchFocusY,
+                                touchFocusState = touchFocusState,
                                 callback = { surface -> onSurface(surface) },
                                 onBufferReady = onBufferReady,
                             )
@@ -3094,7 +3208,7 @@ private fun LandscapeCameraControls(
                                                         onPresetControlChange(CameraPresetControl.FOCUS)
                                                     } else {
                                                         onPresetControlChange(null)
-                                                        onChange(config.copy(focusMode = FocusMode.CONTINUOUS))
+                                                        onChange(config.withGlobalAutoFocus())
                                                     }
                                                 } else {
                                                     selected = control
@@ -3106,9 +3220,8 @@ private fun LandscapeCameraControls(
                                                             focusMode = FocusMode.MANUAL,
                                                             focusDistanceDiopters =
                                                                 liveExposure?.focusDistanceDiopters
-                                                                    ?.coerceIn(0f, camera.minimumFocusDistance)
                                                                     ?: config.focusDistanceDiopters,
-                                                            unrestrictedFocus = false,
+                                                            unrestrictedFocus = true,
                                                         ),
                                                     )
                                                 }
@@ -3562,6 +3675,72 @@ private fun ZoomControls(
 }
 
 @Composable
+private fun TouchFocusToggleButton(
+    config: RecordingConfig,
+    camera: CameraInfo,
+    onChange: (RecordingConfig) -> Unit,
+    overlay: Boolean = false,
+) {
+    OutlinedButton(
+        onClick = {
+            onChange(
+                config.copy(
+                    touchFocusEnabled = !config.touchFocusEnabled,
+                    touchFocusX = null,
+                    touchFocusY = null,
+                ),
+            )
+        },
+        enabled = camera.maxAfRegions > 0 &&
+            camera.afModes.contains(CameraCharacteristics.CONTROL_AF_MODE_AUTO) &&
+            !config.highSpeedMode,
+        modifier = Modifier.height(36.dp),
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+    ) {
+        Text(
+            "触屏对焦 ${if (config.touchFocusEnabled) "开" else "关"}",
+            color = if (overlay) Color.White else Color.Unspecified,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun TouchFocusButtons(
+    config: RecordingConfig,
+    camera: CameraInfo,
+    onChange: (RecordingConfig) -> Unit,
+    controlsVisible: Boolean,
+    onControlsVisibleChange: (Boolean) -> Unit,
+    showParametersButton: Boolean,
+    overlay: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalAlignment = Alignment.End,
+    ) {
+        TouchFocusToggleButton(config, camera, onChange, overlay)
+        if (showParametersButton) {
+            OutlinedButton(
+                onClick = { onControlsVisibleChange(!controlsVisible) },
+                modifier = Modifier.height(36.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+            ) {
+                Text(
+                    "参数 ${if (controlsVisible) "隐藏" else "显示"}",
+                    color = if (overlay) Color.White else Color.Unspecified,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun ZoomButton(label: String, enabled: Boolean, onClick: () -> Unit) {
     OutlinedButton(
         onClick = onClick,
@@ -3720,7 +3899,7 @@ private fun QuickCameraControls(
                                             onPresetControlChange(CameraPresetControl.FOCUS)
                                         } else {
                                             onPresetControlChange(null)
-                                            onChange(config.copy(focusMode = FocusMode.CONTINUOUS))
+                                            onChange(config.withGlobalAutoFocus())
                                         }
                                     } else {
                                         selected = control
@@ -3732,9 +3911,8 @@ private fun QuickCameraControls(
                                                 focusMode = FocusMode.MANUAL,
                                                 focusDistanceDiopters =
                                                     liveExposure?.focusDistanceDiopters
-                                                        ?.coerceIn(0f, camera.minimumFocusDistance)
                                                         ?: config.focusDistanceDiopters,
-                                                unrestrictedFocus = false,
+                                                unrestrictedFocus = true,
                                             ),
                                         )
                                     }
@@ -4080,14 +4258,14 @@ private fun FocusControls(
             onClick = {
                 val nextManual = config.focusMode != FocusMode.MANUAL
                 onChange(
-                    config.copy(
-                        focusMode = if (nextManual) FocusMode.MANUAL else FocusMode.CONTINUOUS,
+                    if (nextManual) config.copy(
+                        focusMode = FocusMode.MANUAL,
                         focusDistanceDiopters = if (nextManual) {
                             liveFocusDistanceDiopters
-                                ?.coerceIn(0f, camera.minimumFocusDistance)
                                 ?: config.focusDistanceDiopters
                         } else config.focusDistanceDiopters,
-                    )
+                        unrestrictedFocus = true,
+                    ) else config.withGlobalAutoFocus()
                 )
             },
             enabled = enabled && supportsManual,
@@ -4469,7 +4647,9 @@ private fun preferredFps(camera: CameraInfo): Int = when {
 
 private fun previewBufferSize(camera: CameraInfo?, config: RecordingConfig): Pair<Int, Int> {
     if (camera == null) return config.width to config.height
-    val supportedSizes = camera.surfaceViewSizes.ifEmpty { camera.previewSizes }
+    val supportedSizes = camera.surfaceViewSizes.ifEmpty { camera.previewSizes }.filter { size ->
+        hasSameAspectRatio(size.width, size.height, config.width, config.height)
+    }
     val selected = supportedSizes.firstOrNull { it.width == config.previewWidth && it.height == config.previewHeight }
     if (selected != null) return selected.width to selected.height
     val fpsUsableSizes = supportedSizes.filter { size ->
@@ -4479,24 +4659,29 @@ private fun previewBufferSize(camera: CameraInfo?, config: RecordingConfig): Pai
         it.width == config.width && it.height == config.height
     }
     if (exact != null) return exact.width to exact.height
-    val targetAspect = config.width.toDouble() / config.height.coerceAtLeast(1)
     val targetArea = config.width.toLong() * config.height
     val best = fpsUsableSizes.minByOrNull { size ->
-        val aspect = size.width.toDouble() / size.height.coerceAtLeast(1)
-        val aspectPenalty = kotlin.math.abs(aspect - targetAspect) * 1_000_000_000.0
-        val areaPenalty = kotlin.math.abs(size.width.toLong() * size.height - targetArea).toDouble()
-        aspectPenalty + areaPenalty
+        kotlin.math.abs(size.width.toLong() * size.height - targetArea)
     }
     return best?.let { it.width to it.height } ?: (config.width to config.height)
 }
 
-private fun previewSizeOptions(camera: CameraInfo): List<Pair<Int, Int>> {
+private fun previewSizeOptions(camera: CameraInfo, config: RecordingConfig): List<Pair<Int, Int>> {
     val sizes = (camera.surfaceViewSizes.ifEmpty { camera.previewSizes })
+        .filter { hasSameAspectRatio(it.width, it.height, config.width, config.height) }
         .map { it.width to it.height }
         .distinct()
         .sortedWith(compareByDescending<Pair<Int, Int>> { it.first.toLong() * it.second }.thenBy { it.first })
     return listOf(0 to 0) + sizes
 }
+
+private fun hasSameAspectRatio(
+    firstWidth: Int,
+    firstHeight: Int,
+    secondWidth: Int,
+    secondHeight: Int,
+): Boolean = firstWidth > 0 && firstHeight > 0 && secondWidth > 0 && secondHeight > 0 &&
+    firstWidth.toLong() * secondHeight == firstHeight.toLong() * secondWidth
 
 private fun displayRotationDegrees(rotation: Int): Int = when (rotation) {
     Surface.ROTATION_90 -> 90
@@ -4621,6 +4806,52 @@ private fun formatShutter(exposureNs: Long): String {
         "${String.format(Locale.US, "%.2f", seconds).trimEnd('0').trimEnd('.')} s"
     }
 }
+private fun RecordingConfig.withTouchFocusRequest(
+    x: Float,
+    y: Float,
+    rotationDegrees: Int,
+    previewBuffer: Pair<Int, Int>,
+    camera: CameraInfo?,
+): RecordingConfig = copy(
+    touchFocusX = x.coerceIn(0f, 1f),
+    touchFocusY = y.coerceIn(0f, 1f),
+    touchFocusRotationDegrees = normalizedQuarterTurn(rotationDegrees),
+    touchFocusPreviewWidth = previewBuffer.first.coerceAtLeast(1),
+    touchFocusPreviewHeight = previewBuffer.second.coerceAtLeast(1),
+    touchFocusPreviewMirrored = !rawProcessingEnabled && !permanentPreviewSurface &&
+        camera?.lensFacing == CameraCharacteristics.LENS_FACING_FRONT,
+    touchFocusRequestId = maxOf(1L, touchFocusRequestId + 1L),
+)
+
+private fun touchFocusSourceSize(
+    context: android.content.Context,
+    config: RecordingConfig,
+    previewBuffer: Pair<Int, Int>,
+    recording: Boolean,
+): Pair<Int, Int> {
+    if (!config.rawProcessingEnabled) return previewBuffer
+    if (!recording) {
+        return (config.previewWidth.takeIf { it > 0 } ?: config.width) to
+            (config.previewHeight.takeIf { it > 0 } ?: config.height)
+    }
+    val pixelRotation = if (config.rotateImagePixels && config.cameraId.isNotBlank()) {
+        runCatching {
+            recordingOrientationHint(
+                context,
+                config.cameraId,
+                config.orientation,
+            )
+        }.getOrDefault(0)
+    } else 0
+    return rotatedDimensions(config.outputWidth, config.outputHeight, pixelRotation)
+}
+
+private fun RecordingConfig.withGlobalAutoFocus(): RecordingConfig = copy(
+    focusMode = FocusMode.CONTINUOUS,
+    touchFocusX = null,
+    touchFocusY = null,
+)
+
 private fun focusDistanceLabel(diopters: Float): String = when {
     diopters <= 0.001f -> "∞"
     1f / diopters >= 1f -> "${(1f / diopters).format1()} m"

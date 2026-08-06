@@ -4,6 +4,7 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.params.RggbChannelVector
+import android.hardware.camera2.params.MeteringRectangle
 import android.graphics.Rect
 import android.os.Build
 import android.util.Range
@@ -16,6 +17,8 @@ object CameraRequestControls {
         cameraId: String,
         config: RecordingConfig,
         builder: CaptureRequest.Builder,
+        touchFocusCompleted: Boolean = false,
+        manualFocusDistanceOverride: Float? = null,
     ) {
         val characteristics = manager.getCameraCharacteristics(cameraId)
         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
@@ -135,7 +138,10 @@ object CameraRequestControls {
         }
         val afModes = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
         val minimumFocusDistance = characteristics.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
-        if (config.focusMode == FocusMode.MANUAL && (
+        val touchFocusRegion = touchFocusRegion(characteristics, config)
+        val useManualFocus = config.focusMode == FocusMode.MANUAL &&
+            (touchFocusRegion == null || touchFocusCompleted)
+        if (useManualFocus && (
                 config.unrestrictedFocus || (
                     minimumFocusDistance > 0f && afModes.contains(CaptureRequest.CONTROL_AF_MODE_OFF)
                 )
@@ -144,18 +150,25 @@ object CameraRequestControls {
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
             builder.set(
                 CaptureRequest.LENS_FOCUS_DISTANCE,
-                if (config.unrestrictedFocus) config.focusDistanceDiopters else {
+                manualFocusDistanceOverride?.takeIf(Float::isFinite) ?: if (config.unrestrictedFocus) {
+                    config.focusDistanceDiopters
+                } else {
                     config.focusDistanceDiopters.coerceIn(0f, minimumFocusDistance)
                 },
             )
         } else {
             val automaticMode = when {
+                touchFocusRegion != null && afModes.contains(CaptureRequest.CONTROL_AF_MODE_AUTO) ->
+                    CaptureRequest.CONTROL_AF_MODE_AUTO
                 afModes.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO) -> CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
                 afModes.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE) -> CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
                 afModes.contains(CaptureRequest.CONTROL_AF_MODE_AUTO) -> CaptureRequest.CONTROL_AF_MODE_AUTO
                 else -> CaptureRequest.CONTROL_AF_MODE_OFF
             }
             builder.set(CaptureRequest.CONTROL_AF_MODE, automaticMode)
+            touchFocusRegion?.let {
+                builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(it))
+            }
         }
         val oisModes = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION) ?: intArrayOf()
         val requestedOis = if (config.opticalStabilization) {
@@ -172,6 +185,155 @@ object CameraRequestControls {
         (config.edgeMode.takeIf(edgeModes::contains) ?: edgeModes.firstOrNull())?.let {
             builder.set(CaptureRequest.EDGE_MODE, it)
         }
+    }
+}
+
+internal fun touchFocusRegion(
+    characteristics: CameraCharacteristics,
+    config: RecordingConfig,
+): MeteringRectangle? {
+    if (!config.touchFocusEnabled || config.touchFocusRequestId <= 0L) return null
+    if ((characteristics.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0) <= 0) return null
+    if (CaptureRequest.CONTROL_AF_MODE_AUTO !in
+        (characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf())
+    ) return null
+    val displayX = config.touchFocusX?.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: return null
+    val displayY = config.touchFocusY?.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: return null
+    val active = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return null
+    val streamAspect = config.touchFocusPreviewWidth.coerceAtLeast(1).toFloat() /
+        config.touchFocusPreviewHeight.coerceAtLeast(1)
+    val (centerX, centerY, crop) = if (config.rawProcessingEnabled &&
+        config.rawWidth > 0 && config.rawHeight > 0
+    ) {
+        val sourcePoint = mapDisplayToSourcePoint(
+            displayX,
+            displayY,
+            config.touchFocusRotationDegrees,
+            mirrored = false,
+        )
+        val rawCrop = centeredRawCropForTouchFocus(
+            config.rawWidth,
+            config.rawHeight,
+            config.touchFocusPreviewWidth.coerceAtLeast(1),
+            config.touchFocusPreviewHeight.coerceAtLeast(1),
+        )
+        val rawX = rawCrop.left + sourcePoint.first * rawCrop.width()
+        val rawY = rawCrop.top + sourcePoint.second * rawCrop.height()
+        val sensorRect = rawSensorCoordinateRect(characteristics, config, active)
+        val sensorX = sensorRect.left + rawX / config.rawWidth * sensorRect.width()
+        val sensorY = sensorRect.top + rawY / config.rawHeight * sensorRect.height()
+        Triple(sensorX.toInt(), sensorY.toInt(), active)
+    } else {
+        val activeAspect = active.width().toFloat() / active.height().coerceAtLeast(1)
+        val (activeX, activeY) = mapTouchFocusPoint(
+            displayX = displayX,
+            displayY = displayY,
+            rotationDegrees = config.touchFocusRotationDegrees,
+            mirrored = config.touchFocusPreviewMirrored,
+            activeAspect = activeAspect,
+            streamAspect = streamAspect,
+        )
+        val streamCrop = centeredAspectCrop(active, streamAspect)
+        Triple(
+            (active.left + activeX * active.width()).toInt(),
+            (active.top + activeY * active.height()).toInt(),
+            streamCrop,
+        )
+    }
+    val side = (minOf(crop.width(), crop.height()) * 0.12f).toInt().coerceAtLeast(1)
+    val left = (centerX - side / 2).coerceIn(crop.left, crop.right - side)
+    val top = (centerY - side / 2).coerceIn(crop.top, crop.bottom - side)
+    return MeteringRectangle(left, top, side, side, MeteringRectangle.METERING_WEIGHT_MAX)
+}
+
+private fun centeredAspectCrop(source: Rect, outputAspect: Float): Rect {
+    val sourceAspect = source.width().toFloat() / source.height().coerceAtLeast(1)
+    return if (sourceAspect > outputAspect) {
+        val width = (source.height() * outputAspect).toInt().coerceIn(1, source.width())
+        val left = source.left + (source.width() - width) / 2
+        Rect(left, source.top, left + width, source.bottom)
+    } else {
+        val height = (source.width() / outputAspect).toInt().coerceIn(1, source.height())
+        val top = source.top + (source.height() - height) / 2
+        Rect(source.left, top, source.right, top + height)
+    }
+}
+
+private fun centeredRawCropForTouchFocus(
+    sourceWidth: Int,
+    sourceHeight: Int,
+    outputWidth: Int,
+    outputHeight: Int,
+): Rect {
+    val sourceAspect = sourceWidth.toDouble() / sourceHeight.coerceAtLeast(1)
+    val outputAspect = outputWidth.toDouble() / outputHeight.coerceAtLeast(1)
+    val width = if (sourceAspect > outputAspect) (sourceHeight * outputAspect).toInt() else sourceWidth
+    val height = if (sourceAspect > outputAspect) sourceHeight else (sourceWidth / outputAspect).toInt()
+    val left = ((sourceWidth - width) / 2).coerceAtLeast(2)
+    val top = ((sourceHeight - height) / 2).coerceAtLeast(2)
+    return Rect(
+        left,
+        top,
+        left + minOf(width, sourceWidth - left - 2),
+        top + minOf(height, sourceHeight - top - 2),
+    )
+}
+
+private fun rawSensorCoordinateRect(
+    characteristics: CameraCharacteristics,
+    config: RecordingConfig,
+    active: Rect,
+): Rect {
+    val pixelSize = characteristics.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+    val preCorrection = characteristics.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)
+    return when {
+        pixelSize != null && config.rawWidth == pixelSize.width && config.rawHeight == pixelSize.height ->
+            Rect(0, 0, pixelSize.width, pixelSize.height)
+        preCorrection != null && config.rawWidth == preCorrection.width() && config.rawHeight == preCorrection.height() ->
+            preCorrection
+        config.rawWidth == active.width() && config.rawHeight == active.height() -> active
+        pixelSize != null -> centeredAspectCrop(
+            Rect(0, 0, pixelSize.width, pixelSize.height),
+            config.rawWidth.toFloat() / config.rawHeight.coerceAtLeast(1),
+        )
+        else -> active
+    }
+}
+
+internal fun mapTouchFocusPoint(
+    displayX: Float,
+    displayY: Float,
+    rotationDegrees: Int,
+    mirrored: Boolean,
+    activeAspect: Float,
+    streamAspect: Float,
+): Pair<Float, Float> {
+    val (sourceX, sourceY) = mapDisplayToSourcePoint(
+        displayX, displayY, rotationDegrees, mirrored,
+    )
+    val safeActiveAspect = activeAspect.coerceAtLeast(0.0001f)
+    val safeStreamAspect = streamAspect.coerceAtLeast(0.0001f)
+    return if (safeActiveAspect > safeStreamAspect) {
+        val widthFraction = safeStreamAspect / safeActiveAspect
+        (0.5f + (sourceX - 0.5f) * widthFraction) to sourceY
+    } else {
+        val heightFraction = safeActiveAspect / safeStreamAspect
+        sourceX to (0.5f + (sourceY - 0.5f) * heightFraction)
+    }
+}
+
+private fun mapDisplayToSourcePoint(
+    displayX: Float,
+    displayY: Float,
+    rotationDegrees: Int,
+    mirrored: Boolean,
+): Pair<Float, Float> {
+    val screenX = if (mirrored) 1f - displayX else displayX
+    return when (((rotationDegrees % 360) + 360) % 360) {
+        90 -> displayY to 1f - screenX
+        180 -> 1f - screenX to 1f - displayY
+        270 -> 1f - displayY to screenX
+        else -> screenX to displayY
     }
 }
 
@@ -206,6 +368,14 @@ internal fun RecordingConfig.cameraRequestControlsKey(): List<Any?> = listOf(
     focusMode,
     focusDistanceDiopters,
     unrestrictedFocus,
+    touchFocusEnabled,
+    touchFocusX,
+    touchFocusY,
+    touchFocusRotationDegrees,
+    touchFocusPreviewWidth,
+    touchFocusPreviewHeight,
+    touchFocusPreviewMirrored,
+    touchFocusRequestId,
     opticalStabilization,
     noiseReductionMode,
     edgeMode,
