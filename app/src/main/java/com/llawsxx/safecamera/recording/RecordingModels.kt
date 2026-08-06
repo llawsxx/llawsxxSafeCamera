@@ -142,6 +142,11 @@ enum class PreviewLayout(val label: String) : Serializable {
     STACKED("上下布局"), FULLSCREEN("全屏预览")
 }
 
+enum class PhotoFormat(val label: String, val extension: String, val mimeType: String) : Serializable {
+    JPEG("JPG", "jpg", "image/jpeg"),
+    PNG("PNG", "png", "image/png"),
+}
+
 enum class FocusMode(val label: String) : Serializable {
     CONTINUOUS("连续自动"), MANUAL("手动")
 }
@@ -230,6 +235,8 @@ data class RecordingConfig(
     /** Explicit preview buffer size; zero means follow the recording size. */
     val previewWidth: Int = 0,
     val previewHeight: Int = 0,
+    val photoFormat: PhotoFormat = PhotoFormat.JPEG,
+    val photoJpegQuality: Int = 95,
     val manualExposure: Boolean = false,
     val iso: Int = 400,
     val exposureNs: Long = 10_000_000L,

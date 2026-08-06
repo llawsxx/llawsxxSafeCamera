@@ -125,6 +125,7 @@ import com.llawsxx.safecamera.recording.FocusDistanceUnit
 import com.llawsxx.safecamera.recording.OrientationMode
 import com.llawsxx.safecamera.recording.PreviewLayout
 import com.llawsxx.safecamera.recording.PreviewMode
+import com.llawsxx.safecamera.recording.PhotoFormat
 import com.llawsxx.safecamera.recording.RecorderController
 import com.llawsxx.safecamera.recording.RecorderMessage
 import com.llawsxx.safecamera.recording.RecorderState
@@ -199,7 +200,9 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
     var config by remember { mutableStateOf(ConfigPreferences.load(context)) }
     var permissionError by remember { mutableStateOf<String?>(null) }
     var previewSurface by remember { mutableStateOf<Surface?>(null) }
+    var photoCaptureInProgress by remember { mutableStateOf(false) }
     var startAfterPermission by remember { mutableStateOf(false) }
+    var capturePhotoAfterPermission by remember { mutableStateOf(false) }
     var permissionEpoch by remember { mutableStateOf(0) }
     var askedInitialPreviewPermission by remember { mutableStateOf(false) }
     var appInForeground by remember { mutableStateOf(true) }
@@ -705,6 +708,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             idlePreview.hide { RecorderController.start(context, config) }
         } else if (denied.isNotEmpty()) {
             startAfterPermission = false
+            capturePhotoAfterPermission = false
             permissionError = "缺少权限：${denied.joinToString { it.substringAfterLast('.') }}"
         }
     }
@@ -750,6 +754,56 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             permissionLauncher.launch(missing.toTypedArray())
         }
     }
+    val capturePhoto: () -> Unit = capture@{
+        if (recording || photoCaptureInProgress || !config.hasVideo ||
+            config.previewMode != PreviewMode.FULL
+        ) return@capture
+        if (Build.VERSION.SDK_INT <= 28 && config.outputTreeUri == null &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            capturePhotoAfterPermission = true
+            permissionLauncher.launch(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE))
+            return@capture
+        }
+        val surface = previewSurface?.takeIf { it.isValid }
+        if (surface == null || previewReadyEpoch != previewResumeEpoch) {
+            Toast.makeText(context, "预览尚未准备好", Toast.LENGTH_SHORT).show()
+            return@capture
+        }
+        val previewSize = previewBufferSize(selectedCamera, config)
+        photoCaptureInProgress = true
+        PreviewPhotoCapture.capture(
+            context = context,
+            surface = surface,
+            width = previewSize.first,
+            height = previewSize.second,
+            rotationDegrees = previewRotationDegrees,
+            format = config.photoFormat,
+            jpegQuality = config.photoJpegQuality,
+            treeUri = config.outputTreeUri,
+        ) { result ->
+            photoCaptureInProgress = false
+            result.fold(
+                onSuccess = { path ->
+                    Toast.makeText(context, "照片已保存：$path", Toast.LENGTH_SHORT).show()
+                },
+                onFailure = { error ->
+                    Toast.makeText(context, "拍照失败：${error.message ?: error.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+                },
+            )
+        }
+    }
+    LaunchedEffect(capturePhotoAfterPermission, permissionEpoch) {
+        if (capturePhotoAfterPermission &&
+            (Build.VERSION.SDK_INT > 28 || config.outputTreeUri != null ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) ==
+                PackageManager.PERMISSION_GRANTED)
+        ) {
+            capturePhotoAfterPermission = false
+            capturePhoto()
+        }
+    }
     if (config.previewLayout == PreviewLayout.FULLSCREEN && config.hasVideo && selectedCamera != null) {
         FullscreenRecorder(
             state = state,
@@ -774,6 +828,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             onExit = { config = config.copy(previewLayout = PreviewLayout.STACKED) },
             onStart = startRecording,
             onStop = { RecorderController.stop(context) },
+            onCapturePhoto = capturePhoto,
+            photoCaptureInProgress = photoCaptureInProgress,
             onSurface = onPreviewSurface,
             onBufferReady = onPreviewBufferReady,
         )
@@ -803,6 +859,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             },
             onStart = startRecording,
             onStop = { RecorderController.stop(context) },
+            onCapturePhoto = capturePhoto,
+            photoCaptureInProgress = photoCaptureInProgress,
             onSettings = { settingsOpen = true },
             onExitApp = { (context as? Activity)?.finishAndRemoveTask() },
             onSurface = onPreviewSurface,
@@ -1684,6 +1742,33 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 }
             }
 
+            if (config.hasVideo) {
+                Section("拍照") {
+                    Labeled("图片格式") {
+                        ChoiceRow(PhotoFormat.entries, config.photoFormat, { it.label }, !recording) {
+                            config = config.copy(photoFormat = it)
+                        }
+                    }
+                    if (config.photoFormat == PhotoFormat.JPEG) {
+                        Text("JPG 质量 ${config.photoJpegQuality}")
+                        Slider(
+                            value = config.photoJpegQuality.toFloat(),
+                            onValueChange = {
+                                config = config.copy(photoJpegQuality = it.roundToInt().coerceIn(1, 100))
+                            },
+                            valueRange = 1f..100f,
+                            steps = 98,
+                            enabled = !recording,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    Text(
+                        "照片取自当前预览输出，不包含界面控件、触屏对焦框和裁切参考框。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+
             if (config.hasAudio) {
                 Section("音频") {
                     Labeled("AAC 类型") {
@@ -1807,6 +1892,8 @@ private fun MainRecorderScreen(
     onCameraSelect: (CameraInfo) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    onCapturePhoto: () -> Unit,
+    photoCaptureInProgress: Boolean,
     onSettings: () -> Unit,
     onExitApp: () -> Unit,
     onSurface: (Surface?) -> Unit,
@@ -1831,6 +1918,8 @@ private fun MainRecorderScreen(
             onCameraSelect = onCameraSelect,
             onStart = onStart,
             onStop = onStop,
+            onCapturePhoto = onCapturePhoto,
+            photoCaptureInProgress = photoCaptureInProgress,
             onSettings = onSettings,
             onExitApp = onExitApp,
             onSurface = onSurface,
@@ -1854,6 +1943,7 @@ private fun MainRecorderScreen(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             RecordButton(state, config, onStop, onStart, modifier = Modifier.width(88.dp).height(38.dp))
+            if (config.hasVideo) PhotoButton(state, config, photoCaptureInProgress, onCapturePhoto)
             OutlinedButton(
                 onClick = onSettings,
                 enabled = !recording,
@@ -1929,6 +2019,8 @@ private fun LandscapeMainRecorderScreen(
     onCameraSelect: (CameraInfo) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    onCapturePhoto: () -> Unit,
+    photoCaptureInProgress: Boolean,
     onSettings: () -> Unit,
     onExitApp: () -> Unit,
     onSurface: (Surface?) -> Unit,
@@ -1946,6 +2038,7 @@ private fun LandscapeMainRecorderScreen(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             RecordButton(state, config, onStop, onStart, modifier = Modifier.width(88.dp).height(38.dp))
+            PhotoButton(state, config, photoCaptureInProgress, onCapturePhoto)
             PreviewToolbar(
                 config,
                 cameras,
@@ -2239,6 +2332,8 @@ private fun FullscreenRecorder(
     onExit: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    onCapturePhoto: () -> Unit,
+    photoCaptureInProgress: Boolean,
     onSurface: (Surface?) -> Unit,
     onBufferReady: (Int) -> Unit,
 ) {
@@ -2450,13 +2545,16 @@ private fun FullscreenRecorder(
             ),
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
         ) {
-            RecordButton(
-                state = state,
-                config = config,
-                onStop = onStop,
-                onStart = onStart,
-                modifier = Modifier.width(88.dp).height(38.dp),
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                RecordButton(
+                    state = state,
+                    config = config,
+                    onStop = onStop,
+                    onStart = onStart,
+                    modifier = Modifier.width(88.dp).height(38.dp),
+                )
+                PhotoButton(state, config, photoCaptureInProgress, onCapturePhoto)
+            }
         }
     }
     DisposableEffect(Unit) { onDispose { onSurface(null) } }
@@ -2663,6 +2761,26 @@ private fun RecordButton(
                 else -> "开始录制"
             }
         )
+    }
+}
+
+@Composable
+private fun PhotoButton(
+    state: RecorderState,
+    config: RecordingConfig,
+    captureInProgress: Boolean,
+    onCapture: () -> Unit,
+) {
+    val recording = state is RecorderState.Recording ||
+        state is RecorderState.Starting || state is RecorderState.Stopping
+    OutlinedButton(
+        onClick = onCapture,
+        enabled = !recording && !captureInProgress && config.hasVideo &&
+            config.previewMode == PreviewMode.FULL && config.cameraId.isNotBlank(),
+        modifier = Modifier.width(72.dp).height(38.dp),
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+    ) {
+        Text(if (captureInProgress) "保存中" else "拍照", style = MaterialTheme.typography.labelMedium)
     }
 }
 

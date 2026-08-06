@@ -37,23 +37,25 @@ class RecordingOutputStore(
     }
 
     private fun createInMediaStore(name: String, mimeType: String): OutputHandle {
-        val audioOnly = mimeType.startsWith("audio/")
-        val collection = if (audioOnly) {
-            MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-        } else {
-            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        val mediaDirectory = when {
+            mimeType.startsWith("audio/") -> MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) to
+                Environment.DIRECTORY_MUSIC
+            mimeType.startsWith("image/") -> MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) to
+                Environment.DIRECTORY_DCIM
+            else -> MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) to
+                Environment.DIRECTORY_DCIM
         }
+        val (collection, directory) = mediaDirectory
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
             put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
             put(
                 MediaStore.MediaColumns.RELATIVE_PATH,
-                "${if (audioOnly) Environment.DIRECTORY_MUSIC else Environment.DIRECTORY_DCIM}/SafeCamera",
+                "$directory/SafeCamera",
             )
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val uri = checkNotNull(resolver.insert(collection, values)) { "无法在 DCIM 创建文件" }
-        val directory = if (audioOnly) Environment.DIRECTORY_MUSIC else Environment.DIRECTORY_DCIM
         return descriptorHandle(uri, "$directory/SafeCamera/$name", pending = true)
     }
 

@@ -111,6 +111,8 @@ object ConfigPreferences {
             previewLayout = enumValue(p.getString("previewLayout", null), PreviewLayout.STACKED),
             previewWidth = p.getInt("previewWidth", 0).coerceAtLeast(0),
             previewHeight = p.getInt("previewHeight", 0).coerceAtLeast(0),
+            photoFormat = enumValue(p.getString("photoFormat", null), PhotoFormat.JPEG),
+            photoJpegQuality = p.getInt("photoJpegQuality", 95).coerceIn(1, 100),
             manualExposure = p.getBoolean("manualExposure", false),
             iso = p.getInt("iso", 400),
             exposureNs = p.getLong("exposureNs", 10_000_000L),
@@ -233,6 +235,8 @@ object ConfigPreferences {
             .putString("previewLayout", c.previewLayout.name)
             .putInt("previewWidth", c.previewWidth)
             .putInt("previewHeight", c.previewHeight)
+            .putString("photoFormat", c.photoFormat.name)
+            .putInt("photoJpegQuality", c.photoJpegQuality.coerceIn(1, 100))
             .putBoolean("manualExposure", c.manualExposure)
             .putInt("iso", c.iso)
             .putLong("exposureNs", c.exposureNs)
