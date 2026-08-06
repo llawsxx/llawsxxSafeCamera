@@ -22,6 +22,9 @@ import java.util.ArrayDeque
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.ln
+import kotlin.math.pow
+import kotlin.math.sqrt
 
 /** Uploads RAW16 Bayer data once and performs the complete ISP pass in an ES 3 fragment shader. */
 internal class GpuRawVideoRenderer(
@@ -35,6 +38,8 @@ internal class GpuRawVideoRenderer(
     lensShadingCorrectionEnabled: Boolean,
     scalingQuality: RawScalingQuality,
     demosaicAlgorithm: RawDemosaicAlgorithm,
+    transferLutEnabled: Boolean,
+    transferLutSize: Int,
     rawFrameBufferCapacity: Int,
     sharpeningEnabled: Boolean,
     sharpeningStrength: Float,
@@ -69,6 +74,8 @@ internal class GpuRawVideoRenderer(
     private var lensShadingCorrectionEnabled = lensShadingCorrectionEnabled
     private val scalingQuality = scalingQuality
     private var demosaicAlgorithm = demosaicAlgorithm
+    private val transferLutEnabled = transferLutEnabled
+    private val transferLutSize = transferLutSize.takeIf { it in TRANSFER_LUT_SIZES } ?: 4096
     private val rawCrop = centeredCrop(rawWidth, rawHeight, outputWidth, outputHeight)
     private val intermediateWidth = if (scalingQuality == RawScalingQuality.HIGH_QUALITY) {
         rawCrop.second.first
@@ -85,6 +92,7 @@ internal class GpuRawVideoRenderer(
     private val outputColorTransfer = outputColorTransfer
     private val rawTexture: Int
     private val lensShadingTexture: Int
+    private val transferLutTexture: Int
     private val intermediateTexture: Int
     private val intermediateFramebuffer: Int
     private var lensShadingWidth = 1
@@ -94,18 +102,21 @@ internal class GpuRawVideoRenderer(
     private var lensShadingBuffer = floatBuffer(1f, 1f, 1f, 1f)
     private val outputColorTransform = FloatArray(9)
     private val fastRawProgram: RawShaderProgram
+    private val fastFinalRawProgram: RawShaderProgram?
     private val highQualityRawProgram: RawShaderProgram
+    private val highQualityFinalRawProgram: RawShaderProgram?
     private val outputProgram: Int
     private val outputPositionLocation: Int
     private val outputTexCoordLocation: Int
     private val outputTransferLocation: Int
-    private val outputPrimariesConversionLocation: Int
+    private val outputColorRow0Location: Int
+    private val outputColorRow1Location: Int
+    private val outputColorRow2Location: Int
     private val outputContrastLocation: Int
     private val outputSaturationLocation: Int
     private val outputHighlightCompressionLocation: Int
     private val outputImageSizeLocation: Int
     private val outputHighQualityScalingLocation: Int
-    private val sharedFinalOutput = hasEncoderOutput
     private val finalOutputTexture: Int
     private val finalOutputFramebuffer: Int
     private val copyProgram: Int
@@ -245,18 +256,70 @@ internal class GpuRawVideoRenderer(
         )
         checkGl("allocate lens shading texture")
 
+        transferLutTexture = if (transferLutEnabled) {
+            createTransferLutTexture()
+        } else {
+            0
+        }
+
         intermediateTexture = IntArray(1).also { GLES30.glGenTextures(1, it, 0) }[0]
         intermediateFramebuffer = IntArray(1).also { GLES30.glGenFramebuffers(1, it, 0) }[0]
         allocateIntermediateTarget()
 
-        fastRawProgram = createRawShaderProgram(rawFragmentShader(highQuality = false))
-        highQualityRawProgram = createRawShaderProgram(rawFragmentShader(highQuality = true))
+        fastRawProgram = createRawShaderProgram(
+            rawFragmentShader(
+                highQuality = false,
+                combinedFinalOutput = false,
+                applyColorTransform = scalingQuality == RawScalingQuality.FAST,
+                useTransferLut = transferLutEnabled,
+            ),
+        )
+        fastFinalRawProgram = if (hasEncoderOutput && scalingQuality == RawScalingQuality.FAST) {
+            createRawShaderProgram(
+                rawFragmentShader(
+                    highQuality = false,
+                    combinedFinalOutput = true,
+                    applyColorTransform = true,
+                    useTransferLut = transferLutEnabled,
+                ),
+            )
+        } else {
+            null
+        }
+        highQualityRawProgram = createRawShaderProgram(
+            rawFragmentShader(
+                highQuality = true,
+                combinedFinalOutput = false,
+                applyColorTransform = scalingQuality == RawScalingQuality.FAST,
+                useTransferLut = transferLutEnabled,
+            ),
+        )
+        highQualityFinalRawProgram = if (hasEncoderOutput && scalingQuality == RawScalingQuality.FAST) {
+            createRawShaderProgram(
+                rawFragmentShader(
+                    highQuality = true,
+                    combinedFinalOutput = true,
+                    applyColorTransform = true,
+                    useTransferLut = transferLutEnabled,
+                ),
+            )
+        } else {
+            null
+        }
 
-        outputProgram = createProgram(VERTEX_SHADER, OUTPUT_FRAGMENT_SHADER)
+        outputProgram = createProgram(
+            VERTEX_SHADER,
+            outputFragmentShader(
+                applyColorTransform = scalingQuality == RawScalingQuality.HIGH_QUALITY,
+                useTransferLut = transferLutEnabled,
+            ),
+        )
         outputPositionLocation = GLES30.glGetAttribLocation(outputProgram, "aPosition")
         outputTexCoordLocation = GLES30.glGetAttribLocation(outputProgram, "aTexCoord")
         outputTransferLocation = GLES30.glGetUniformLocation(outputProgram, "uOutputTransfer")
-        outputPrimariesConversionLocation = GLES30.glGetUniformLocation(outputProgram, "uPrimariesConversion")
+        outputColorRow0Location = GLES30.glGetUniformLocation(outputProgram, "uColorRow0")
+        outputColorRow1Location = GLES30.glGetUniformLocation(outputProgram, "uColorRow1")
+        outputColorRow2Location = GLES30.glGetUniformLocation(outputProgram, "uColorRow2")
         outputContrastLocation = GLES30.glGetUniformLocation(outputProgram, "uContrast")
         outputSaturationLocation = GLES30.glGetUniformLocation(outputProgram, "uSaturation")
         outputHighlightCompressionLocation = GLES30.glGetUniformLocation(outputProgram, "uHighlightCompression")
@@ -264,8 +327,11 @@ internal class GpuRawVideoRenderer(
         outputHighQualityScalingLocation = GLES30.glGetUniformLocation(outputProgram, "uHighQualityScaling")
         GLES30.glUseProgram(outputProgram)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(outputProgram, "uLinearImage"), 2)
+        if (transferLutEnabled) {
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(outputProgram, "uTransferLut"), 4)
+        }
 
-        if (sharedFinalOutput) {
+        if (hasEncoderOutput) {
             finalOutputTexture = IntArray(1).also { GLES30.glGenTextures(1, it, 0) }[0]
             finalOutputFramebuffer = IntArray(1).also { GLES30.glGenFramebuffers(1, it, 0) }[0]
             allocateFinalOutputTarget()
@@ -402,23 +468,36 @@ internal class GpuRawVideoRenderer(
         if (useLensShading) uploadLensShading(checkNotNull(metadata.lensShadingMap))
 
         val (cropOrigin, cropSize) = rawCrop
-        val siteGains = metadata.gainsByCfaPosition()
+        val siteScales = metadata.gainsByCfaPosition()
+        for (site in 0..3) {
+            siteScales[site] /= maxOf(1f, metadata.whiteLevel - metadata.blackLevels[site])
+        }
         val m = if (outputColorStandard == VideoColorStandard.BT2020) {
             multiply3x3(LINEAR_BT709_TO_BT2020, metadata.transform, outputColorTransform)
         } else {
             metadata.transform
         }
-        val raw = if (demosaicAlgorithm == RawDemosaicAlgorithm.HIGH_QUALITY) {
-            highQualityRawProgram
-        } else {
-            fastRawProgram
+        val combinedFinalOutput = hasEncoderOutput && scalingQuality == RawScalingQuality.FAST
+        val raw = when {
+            combinedFinalOutput && demosaicAlgorithm == RawDemosaicAlgorithm.HIGH_QUALITY ->
+                checkNotNull(highQualityFinalRawProgram)
+            combinedFinalOutput -> checkNotNull(fastFinalRawProgram)
+            demosaicAlgorithm == RawDemosaicAlgorithm.HIGH_QUALITY -> highQualityRawProgram
+            else -> fastRawProgram
         }
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, intermediateFramebuffer)
-        GLES30.glViewport(0, 0, intermediateWidth, intermediateHeight)
+        GLES30.glBindFramebuffer(
+            GLES30.GL_FRAMEBUFFER,
+            if (combinedFinalOutput) finalOutputFramebuffer else intermediateFramebuffer,
+        )
+        GLES30.glViewport(
+            0,
+            0,
+            if (combinedFinalOutput) outputWidth else intermediateWidth,
+            if (combinedFinalOutput) outputHeight else intermediateHeight,
+        )
         GLES30.glUseProgram(raw.program)
         GLES30.glUniform4fv(raw.blackLocation, 1, metadata.blackLevels, 0)
-        GLES30.glUniform1f(raw.whiteLevelLocation, metadata.whiteLevel)
-        GLES30.glUniform4fv(raw.gainsLocation, 1, siteGains, 0)
+        GLES30.glUniform4fv(raw.siteScalesLocation, 1, siteScales, 0)
         GLES30.glUniform3f(raw.colorRow0Location, m[0], m[1], m[2])
         GLES30.glUniform3f(raw.colorRow1Location, m[3], m[4], m[5])
         GLES30.glUniform3f(raw.colorRow2Location, m[6], m[7], m[8])
@@ -428,6 +507,13 @@ internal class GpuRawVideoRenderer(
         GLES30.glUniform1i(raw.lensShadingEnabledLocation, if (useLensShading) 1 else 0)
         GLES30.glUniform1i(raw.sharpeningEnabledLocation, if (sharpeningEnabled) 1 else 0)
         GLES30.glUniform1f(raw.sharpeningStrengthLocation, sharpeningStrength)
+        if (combinedFinalOutput) {
+            GLES30.glUniform1i(raw.outputTransferLocation, transferValue(outputColorTransfer))
+            GLES30.glUniform1f(raw.outputContrastLocation, contrast)
+            GLES30.glUniform1f(raw.outputSaturationLocation, saturation)
+            GLES30.glUniform1f(raw.outputHighlightCompressionLocation, highlightCompression)
+        }
+        bindTransferLut()
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, lensShadingTexture)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
@@ -435,11 +521,11 @@ internal class GpuRawVideoRenderer(
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
         checkGl("render RAW ISP frame")
 
-        if (sharedFinalOutput) {
+        if (hasEncoderOutput && !combinedFinalOutput) {
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, finalOutputFramebuffer)
             drawOutput(
                 transfer = transferValue(outputColorTransfer),
-                primariesConversion = CONVERT_NONE,
+                colorTransform = m,
                 width = outputWidth,
                 height = outputHeight,
             )
@@ -450,14 +536,7 @@ internal class GpuRawVideoRenderer(
 
         if (hasEncoderOutput) {
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            if (sharedFinalOutput) drawFinalOutput(outputWidth, outputHeight) else {
-                drawOutput(
-                    transfer = transferValue(outputColorTransfer),
-                    primariesConversion = CONVERT_NONE,
-                    width = outputWidth,
-                    height = outputHeight,
-                )
-            }
+            drawFinalOutput(outputWidth, outputHeight)
             EGLExt.eglPresentationTimeANDROID(display, primarySurface, timestampNs)
             check(EGL14.eglSwapBuffers(display, primarySurface)) { "Unable to submit GPU RAW encoder frame" }
         }
@@ -472,16 +551,12 @@ internal class GpuRawVideoRenderer(
         val previewHeight = IntArray(1)
         EGL14.eglQuerySurface(display, previewEglSurface, EGL14.EGL_WIDTH, previewWidth, 0)
         EGL14.eglQuerySurface(display, previewEglSurface, EGL14.EGL_HEIGHT, previewHeight, 0)
-        if (sharedFinalOutput) {
+        if (hasEncoderOutput) {
             drawFinalOutput(previewWidth[0].coerceAtLeast(1), previewHeight[0].coerceAtLeast(1))
         } else {
             drawOutput(
-                transfer = TRANSFER_REC709,
-                primariesConversion = if (outputColorStandard == VideoColorStandard.BT2020) {
-                    CONVERT_BT2020_TO_BT709
-                } else {
-                    CONVERT_NONE
-                },
+                transfer = transferValue(outputColorTransfer),
+                colorTransform = m,
                 width = previewWidth[0].coerceAtLeast(1),
                 height = previewHeight[0].coerceAtLeast(1),
             )
@@ -493,14 +568,31 @@ internal class GpuRawVideoRenderer(
 
     private fun drawOutput(
         transfer: Int,
-        primariesConversion: Int,
+        colorTransform: FloatArray,
         width: Int,
         height: Int,
     ) {
         GLES30.glViewport(0, 0, width, height)
         GLES30.glUseProgram(outputProgram)
         GLES30.glUniform1i(outputTransferLocation, transfer)
-        GLES30.glUniform1i(outputPrimariesConversionLocation, primariesConversion)
+        GLES30.glUniform3f(
+            outputColorRow0Location,
+            colorTransform[0],
+            colorTransform[1],
+            colorTransform[2],
+        )
+        GLES30.glUniform3f(
+            outputColorRow1Location,
+            colorTransform[3],
+            colorTransform[4],
+            colorTransform[5],
+        )
+        GLES30.glUniform3f(
+            outputColorRow2Location,
+            colorTransform[6],
+            colorTransform[7],
+            colorTransform[8],
+        )
         GLES30.glUniform1f(outputContrastLocation, contrast)
         GLES30.glUniform1f(outputSaturationLocation, saturation)
         GLES30.glUniform1f(outputHighlightCompressionLocation, highlightCompression)
@@ -511,6 +603,7 @@ internal class GpuRawVideoRenderer(
                 (width != intermediateWidth || height != intermediateHeight)
             ) 1 else 0,
         )
+        bindTransferLut()
         GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, intermediateTexture)
         bindVertices(outputVertices, outputPositionLocation, outputTexCoordLocation)
@@ -528,6 +621,12 @@ internal class GpuRawVideoRenderer(
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         checkGl("copy final RAW output frame")
+    }
+
+    private fun bindTransferLut() {
+        if (!transferLutEnabled) return
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE4)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, transferLutTexture)
     }
 
     private fun bindVertices(buffer: FloatBuffer, position: Int, texCoord: Int) {
@@ -565,14 +664,22 @@ internal class GpuRawVideoRenderer(
     }
 
     private fun allocateFinalOutputTarget() {
+        val hdrOutput = isHdrTransfer(outputColorTransfer)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, finalOutputTexture)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, outputWidth, outputHeight, 0,
-            GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null,
+            GLES30.GL_TEXTURE_2D,
+            0,
+            if (hdrOutput) GLES30.GL_RGB10_A2 else GLES30.GL_RGBA8,
+            outputWidth,
+            outputHeight,
+            0,
+            GLES30.GL_RGBA,
+            if (hdrOutput) GLES30.GL_UNSIGNED_INT_2_10_10_10_REV else GLES30.GL_UNSIGNED_BYTE,
+            null,
         )
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, finalOutputFramebuffer)
         GLES30.glFramebufferTexture2D(
@@ -583,10 +690,46 @@ internal class GpuRawVideoRenderer(
             0,
         )
         check(GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) == GLES30.GL_FRAMEBUFFER_COMPLETE) {
-            "Device cannot render the final RAW output into an RGBA16F framebuffer"
+            "Device cannot render the final RAW output into ${if (hdrOutput) "RGB10_A2" else "RGBA8"}"
         }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         checkGl("allocate final RAW output framebuffer")
+    }
+
+    private fun createTransferLutTexture(): Int {
+        val encode: (Float) -> Float = when (outputColorTransfer) {
+            VideoColorTransfer.HLG -> ::encodeHlg
+            VideoColorTransfer.ST2084 -> ::encodePq
+            else -> ::encodeRec709
+        }
+        val values = FloatArray(transferLutSize)
+        for (index in 0 until transferLutSize) {
+            val linear = index.toFloat() / (transferLutSize - 1).coerceAtLeast(1)
+            values[index] = encode(linear)
+        }
+        val buffer = ByteBuffer.allocateDirect(values.size * 4)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+            .apply { put(values); position(0) }
+        return IntArray(1).also { GLES30.glGenTextures(1, it, 0) }[0].also { texture ->
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexImage2D(
+                GLES30.GL_TEXTURE_2D,
+                0,
+                GLES30.GL_R16F,
+                transferLutSize,
+                1,
+                0,
+                GLES30.GL_RED,
+                GLES30.GL_FLOAT,
+                buffer,
+            )
+            checkGl("upload RAW transfer LUT")
+        }
     }
 
     private fun uploadLensShading(map: LensShadingMap) {
@@ -650,7 +793,9 @@ internal class GpuRawVideoRenderer(
         imageReaderThread.quitSafely()
         makePrimaryCurrent()
         GLES30.glDeleteProgram(fastRawProgram.program)
+        fastFinalRawProgram?.let { GLES30.glDeleteProgram(it.program) }
         GLES30.glDeleteProgram(highQualityRawProgram.program)
+        highQualityFinalRawProgram?.let { GLES30.glDeleteProgram(it.program) }
         GLES30.glDeleteProgram(outputProgram)
         if (copyProgram != 0) GLES30.glDeleteProgram(copyProgram)
         GLES30.glDeleteFramebuffers(1, intArrayOf(intermediateFramebuffer), 0)
@@ -658,6 +803,7 @@ internal class GpuRawVideoRenderer(
             GLES30.glDeleteFramebuffers(1, intArrayOf(finalOutputFramebuffer), 0)
         }
         GLES30.glDeleteTextures(3, intArrayOf(rawTexture, lensShadingTexture, intermediateTexture), 0)
+        if (transferLutTexture != 0) GLES30.glDeleteTextures(1, intArrayOf(transferLutTexture), 0)
         if (finalOutputTexture != 0) GLES30.glDeleteTextures(1, intArrayOf(finalOutputTexture), 0)
         releaseCurrent()
         EGL14.eglDestroySurface(display, previewEglSurface)
@@ -711,13 +857,15 @@ internal class GpuRawVideoRenderer(
         GLES30.glUseProgram(program)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uRaw"), 0)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLensShading"), 1)
+        if (transferLutEnabled) {
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uTransferLut"), 4)
+        }
         return RawShaderProgram(
             program = program,
             positionLocation = GLES30.glGetAttribLocation(program, "aPosition"),
             texCoordLocation = GLES30.glGetAttribLocation(program, "aTexCoord"),
             blackLocation = GLES30.glGetUniformLocation(program, "uBlack"),
-            whiteLevelLocation = GLES30.glGetUniformLocation(program, "uWhiteLevel"),
-            gainsLocation = GLES30.glGetUniformLocation(program, "uSiteGains"),
+            siteScalesLocation = GLES30.glGetUniformLocation(program, "uSiteScales"),
             colorRow0Location = GLES30.glGetUniformLocation(program, "uColorRow0"),
             colorRow1Location = GLES30.glGetUniformLocation(program, "uColorRow1"),
             colorRow2Location = GLES30.glGetUniformLocation(program, "uColorRow2"),
@@ -727,6 +875,10 @@ internal class GpuRawVideoRenderer(
             lensShadingEnabledLocation = GLES30.glGetUniformLocation(program, "uLensShadingEnabled"),
             sharpeningEnabledLocation = GLES30.glGetUniformLocation(program, "uSharpeningEnabled"),
             sharpeningStrengthLocation = GLES30.glGetUniformLocation(program, "uSharpeningStrength"),
+            outputTransferLocation = GLES30.glGetUniformLocation(program, "uOutputTransfer"),
+            outputContrastLocation = GLES30.glGetUniformLocation(program, "uContrast"),
+            outputSaturationLocation = GLES30.glGetUniformLocation(program, "uSaturation"),
+            outputHighlightCompressionLocation = GLES30.glGetUniformLocation(program, "uHighlightCompression"),
         )
     }
 
@@ -735,8 +887,7 @@ internal class GpuRawVideoRenderer(
         val positionLocation: Int,
         val texCoordLocation: Int,
         val blackLocation: Int,
-        val whiteLevelLocation: Int,
-        val gainsLocation: Int,
+        val siteScalesLocation: Int,
         val colorRow0Location: Int,
         val colorRow1Location: Int,
         val colorRow2Location: Int,
@@ -746,6 +897,10 @@ internal class GpuRawVideoRenderer(
         val lensShadingEnabledLocation: Int,
         val sharpeningEnabledLocation: Int,
         val sharpeningStrengthLocation: Int,
+        val outputTransferLocation: Int,
+        val outputContrastLocation: Int,
+        val outputSaturationLocation: Int,
+        val outputHighlightCompressionLocation: Int,
     )
 
     private fun checkGl(operation: String) {
@@ -790,11 +945,10 @@ internal class GpuRawVideoRenderer(
         const val EGL_GL_COLORSPACE_BT2020_HLG_EXT = 0x3540
         const val EGL_GL_COLORSPACE_BT2020_PQ_EXT = 0x3340
         const val METADATA_TIMEOUT_MS = 500L
-        const val CONVERT_NONE = 0
-        const val CONVERT_BT2020_TO_BT709 = 1
         const val TRANSFER_REC709 = 0
         const val TRANSFER_HLG = 1
         const val TRANSFER_PQ = 2
+        val TRANSFER_LUT_SIZES = setOf(1024, 2048, 4096, 8192)
         const val MAX_RAW_FRAME_BUFFER_CAPACITY = 6
         const val VERTEX_SHADER = """#version 300 es
             in vec4 aPosition;
@@ -802,8 +956,16 @@ internal class GpuRawVideoRenderer(
             out vec2 vTexCoord;
             void main() { gl_Position = aPosition; vTexCoord = aTexCoord; }
         """
-        fun rawFragmentShader(highQuality: Boolean): String = """#version 300 es
+        fun rawFragmentShader(
+            highQuality: Boolean,
+            combinedFinalOutput: Boolean,
+            applyColorTransform: Boolean,
+            useTransferLut: Boolean,
+        ): String = """#version 300 es
             #define HIGH_QUALITY_DEMOSAIC ${if (highQuality) 1 else 0}
+            #define COMBINED_FINAL_OUTPUT ${if (combinedFinalOutput) 1 else 0}
+            #define APPLY_COLOR_TRANSFORM ${if (applyColorTransform) 1 else 0}
+            #define USE_TRANSFER_LUT ${if (useTransferLut) 1 else 0}
             precision highp float;
             precision highp int;
             precision highp usampler2D;
@@ -812,17 +974,27 @@ internal class GpuRawVideoRenderer(
             uniform usampler2D uRaw;
             uniform sampler2D uLensShading;
             uniform vec4 uBlack;
-            uniform float uWhiteLevel;
-            uniform vec4 uSiteGains;
-            uniform vec3 uColorRow0;
-            uniform vec3 uColorRow1;
-            uniform vec3 uColorRow2;
+            uniform vec4 uSiteScales;
+            #if APPLY_COLOR_TRANSFORM
+                uniform vec3 uColorRow0;
+                uniform vec3 uColorRow1;
+                uniform vec3 uColorRow2;
+            #endif
             uniform int uCfa;
             uniform ivec2 uCropOrigin;
             uniform ivec2 uCropSize;
             uniform int uLensShadingEnabled;
             uniform int uSharpeningEnabled;
             uniform float uSharpeningStrength;
+            #if COMBINED_FINAL_OUTPUT
+                uniform int uOutputTransfer;
+                uniform float uContrast;
+                uniform float uSaturation;
+                uniform float uHighlightCompression;
+                #if USE_TRANSFER_LUT
+                    uniform sampler2D uTransferLut;
+                #endif
+            #endif
 
             int site(ivec2 p) { return ((p.y & 1) << 1) | (p.x & 1); }
             int colorAt(ivec2 p) {
@@ -835,26 +1007,19 @@ internal class GpuRawVideoRenderer(
             float siteValue(vec4 values, int s) {
                 return s == 0 ? values.x : (s == 1 ? values.y : (s == 2 ? values.z : values.w));
             }
-            float sensorAt(ivec2 p) {
-                ivec2 size = textureSize(uRaw, 0);
-                p = clamp(p, ivec2(0), size - ivec2(1));
-                int s = site(p);
-                float black = siteValue(uBlack, s);
-                float value = float(texelFetch(uRaw, p, 0).r);
-                return max(0.0, (value - black) / max(1.0, uWhiteLevel - black));
-            }
             float lensGain(vec4 gains, int s) {
                 if (uCfa == 0) return siteValue(gains, s);
                 if (uCfa == 1) return s == 0 ? gains.g : (s == 1 ? gains.r : (s == 2 ? gains.a : gains.b));
                 if (uCfa == 2) return s == 0 ? gains.g : (s == 1 ? gains.a : (s == 2 ? gains.r : gains.b));
                 return s == 0 ? gains.a : (s == 1 ? gains.g : (s == 2 ? gains.b : gains.r));
             }
-            float rawScaleAt(ivec2 p, vec4 lensGains) {
-                float shading = uLensShadingEnabled != 0 ? lensGain(lensGains, site(p)) : 1.0;
-                return siteValue(uSiteGains, site(p)) * shading;
-            }
             float rawAt(ivec2 p, vec4 lensGains) {
-                return clamp(sensorAt(p) * rawScaleAt(p, lensGains), 0.0, 1.0);
+                int s = site(p);
+                float black = siteValue(uBlack, s);
+                float value = float(texelFetch(uRaw, p, 0).r);
+                float shading = uLensShadingEnabled != 0 ? lensGain(lensGains, s) : 1.0;
+                float scale = siteValue(uSiteScales, s) * shading;
+                return clamp((value - black) * scale, 0.0, 1.0);
             }
             float directionalGreen(
                 float center,
@@ -871,10 +1036,10 @@ internal class GpuRawVideoRenderer(
                 float vertical = 0.5 * (up + down) + 0.25 * (2.0 * center - up2 - down2);
                 float horizontalGradient = abs(left - right) + abs(2.0 * center - left2 - right2);
                 float verticalGradient = abs(up - down) + abs(2.0 * center - up2 - down2);
-                float horizontalWeight = 1.0 / (0.0001 + horizontalGradient);
-                float verticalWeight = 1.0 / (0.0001 + verticalGradient);
-                return max(0.0, (horizontal * horizontalWeight + vertical * verticalWeight) /
-                    (horizontalWeight + verticalWeight));
+                float horizontalCost = 0.0001 + horizontalGradient;
+                float verticalCost = 0.0001 + verticalGradient;
+                return max(0.0, (horizontal * verticalCost + vertical * horizontalCost) /
+                    (horizontalCost + verticalCost));
             }
             vec3 demosaicAt(ivec2 p) {
                 ivec2 sourceSize = textureSize(uRaw, 0);
@@ -953,29 +1118,101 @@ internal class GpuRawVideoRenderer(
                 #endif
             }
 
+            #if COMBINED_FINAL_OUTPUT
+                #if !USE_TRANSFER_LUT
+                    float rec709(float value) {
+                        value = clamp(value, 0.0, 1.0);
+                        return value < 0.018 ? 4.5 * value : 1.099 * pow(value, 0.45) - 0.099;
+                    }
+                    float hlg(float value) {
+                        const float a = 0.17883277;
+                        const float b = 0.28466892;
+                        const float c = 0.55991073;
+                        value = clamp(value, 0.0, 1.0);
+                        return value <= (1.0 / 12.0) ? sqrt(3.0 * value) : a * log(12.0 * value - b) + c;
+                    }
+                    float pq(float value) {
+                        const float m1 = 0.1593017578125;
+                        const float m2 = 78.84375;
+                        const float c1 = 0.8359375;
+                        const float c2 = 18.8515625;
+                        const float c3 = 18.6875;
+                        float p = pow(clamp(value * 0.1, 0.0, 1.0), m1);
+                        return pow((c1 + c2 * p) / (1.0 + c3 * p), m2);
+                    }
+                #endif
+                vec3 encodeTransfer(vec3 value) {
+                    #if USE_TRANSFER_LUT
+                        value = clamp(value, 0.0, 1.0);
+                        float width = float(textureSize(uTransferLut, 0).x);
+                        value = (value * (width - 1.0) + 0.5) / width;
+                        return vec3(
+                            texture(uTransferLut, vec2(value.r, 0.5)).r,
+                            texture(uTransferLut, vec2(value.g, 0.5)).r,
+                            texture(uTransferLut, vec2(value.b, 0.5)).r
+                        );
+                    #else
+                        if (uOutputTransfer == 1) return vec3(hlg(value.r), hlg(value.g), hlg(value.b));
+                        if (uOutputTransfer == 2) return vec3(pq(value.r), pq(value.g), pq(value.b));
+                        return vec3(rec709(value.r), rec709(value.g), rec709(value.b));
+                    #endif
+                }
+                vec3 compressHighlights(vec3 value) {
+                    const float knee = 0.65;
+                    float peak = max(value.r, max(value.g, value.b));
+                    if (peak <= knee || uHighlightCompression <= 0.0) return value;
+                    float excess = peak - knee;
+                    float compressedPeak = knee + excess /
+                        (1.0 + 2.0 * uHighlightCompression * excess);
+                    return value * (compressedPeak / peak);
+                }
+            #endif
+
             void main() {
                 ivec2 sourcePosition = uCropOrigin + ivec2(vTexCoord * vec2(uCropSize));
                 vec3 rgb = demosaicAt(sourcePosition);
-                // uColorRow already maps sensor RGB directly into the selected linear output primaries.
-                vec3 corrected = vec3(dot(uColorRow0, rgb), dot(uColorRow1, rgb), dot(uColorRow2, rgb));
-                corrected = max(corrected, vec3(0.0));
-                outColor = vec4(corrected, 1.0);
+                #if APPLY_COLOR_TRANSFORM
+                    vec3 corrected = vec3(
+                        dot(uColorRow0, rgb), dot(uColorRow1, rgb), dot(uColorRow2, rgb));
+                    corrected = max(corrected, vec3(0.0));
+                #else
+                    vec3 corrected = rgb;
+                #endif
+                #if COMBINED_FINAL_OUTPUT
+                    corrected = compressHighlights(corrected);
+                    vec3 encoded = encodeTransfer(clamp(corrected, 0.0, 1.0));
+                    float luma = dot(encoded, vec3(0.2126, 0.7152, 0.0722));
+                    encoded = mix(vec3(luma), encoded, uSaturation);
+                    encoded = (encoded - vec3(0.5)) * uContrast + vec3(0.5);
+                    outColor = vec4(clamp(encoded, 0.0, 1.0), 1.0);
+                #else
+                    outColor = vec4(corrected, 1.0);
+                #endif
             }
         """
         const val COPY_FRAGMENT_SHADER = """#version 300 es
-            precision mediump float;
+            precision highp float;
             in vec2 vTexCoord;
             layout(location = 0) out vec4 outColor;
             uniform sampler2D uImage;
             void main() { outColor = texture(uImage, vTexCoord); }
         """
-        const val OUTPUT_FRAGMENT_SHADER = """#version 300 es
+        fun outputFragmentShader(applyColorTransform: Boolean, useTransferLut: Boolean): String = """#version 300 es
+            #define APPLY_COLOR_TRANSFORM ${if (applyColorTransform) 1 else 0}
+            #define USE_TRANSFER_LUT ${if (useTransferLut) 1 else 0}
             precision highp float;
             in vec2 vTexCoord;
             layout(location = 0) out vec4 outColor;
             uniform sampler2D uLinearImage;
             uniform int uOutputTransfer;
-            uniform int uPrimariesConversion;
+            #if USE_TRANSFER_LUT
+                uniform sampler2D uTransferLut;
+            #endif
+            #if APPLY_COLOR_TRANSFORM
+                uniform vec3 uColorRow0;
+                uniform vec3 uColorRow1;
+                uniform vec3 uColorRow2;
+            #endif
             uniform float uContrast;
             uniform float uSaturation;
             uniform float uHighlightCompression;
@@ -1007,37 +1244,43 @@ internal class GpuRawVideoRenderer(
                     texture(uLinearImage, vec2(h1.x, h1.y)).rgb * g1.x * g1.y;
             }
 
-            float rec709(float value) {
-                value = clamp(value, 0.0, 1.0);
-                return value < 0.018 ? 4.5 * value : 1.099 * pow(value, 0.45) - 0.099;
-            }
-            float hlg(float value) {
-                const float a = 0.17883277;
-                const float b = 0.28466892;
-                const float c = 0.55991073;
-                value = clamp(value, 0.0, 1.0);
-                return value <= (1.0 / 12.0) ? sqrt(3.0 * value) : a * log(12.0 * value - b) + c;
-            }
-            float pq(float value) {
-                const float m1 = 0.1593017578125;
-                const float m2 = 78.84375;
-                const float c1 = 0.8359375;
-                const float c2 = 18.8515625;
-                const float c3 = 18.6875;
-                float p = pow(clamp(value * 0.1, 0.0, 1.0), m1);
-                return pow((c1 + c2 * p) / (1.0 + c3 * p), m2);
-            }
+            #if !USE_TRANSFER_LUT
+                float rec709(float value) {
+                    value = clamp(value, 0.0, 1.0);
+                    return value < 0.018 ? 4.5 * value : 1.099 * pow(value, 0.45) - 0.099;
+                }
+                float hlg(float value) {
+                    const float a = 0.17883277;
+                    const float b = 0.28466892;
+                    const float c = 0.55991073;
+                    value = clamp(value, 0.0, 1.0);
+                    return value <= (1.0 / 12.0) ? sqrt(3.0 * value) : a * log(12.0 * value - b) + c;
+                }
+                float pq(float value) {
+                    const float m1 = 0.1593017578125;
+                    const float m2 = 78.84375;
+                    const float c1 = 0.8359375;
+                    const float c2 = 18.8515625;
+                    const float c3 = 18.6875;
+                    float p = pow(clamp(value * 0.1, 0.0, 1.0), m1);
+                    return pow((c1 + c2 * p) / (1.0 + c3 * p), m2);
+                }
+            #endif
             vec3 encodeTransfer(vec3 value) {
-                if (uOutputTransfer == 1) return vec3(hlg(value.r), hlg(value.g), hlg(value.b));
-                if (uOutputTransfer == 2) return vec3(pq(value.r), pq(value.g), pq(value.b));
-                return vec3(rec709(value.r), rec709(value.g), rec709(value.b));
-            }
-            vec3 bt2020ToBt709(vec3 value) {
-                return vec3(
-                    1.6604910 * value.r - 0.5876411 * value.g - 0.0728499 * value.b,
-                    -0.1245505 * value.r + 1.1328999 * value.g - 0.0083494 * value.b,
-                    -0.0181508 * value.r - 0.1005789 * value.g + 1.1187297 * value.b
-                );
+                #if USE_TRANSFER_LUT
+                    value = clamp(value, 0.0, 1.0);
+                    float width = float(textureSize(uTransferLut, 0).x);
+                    value = (value * (width - 1.0) + 0.5) / width;
+                    return vec3(
+                        texture(uTransferLut, vec2(value.r, 0.5)).r,
+                        texture(uTransferLut, vec2(value.g, 0.5)).r,
+                        texture(uTransferLut, vec2(value.b, 0.5)).r
+                    );
+                #else
+                    if (uOutputTransfer == 1) return vec3(hlg(value.r), hlg(value.g), hlg(value.b));
+                    if (uOutputTransfer == 2) return vec3(pq(value.r), pq(value.g), pq(value.b));
+                    return vec3(rec709(value.r), rec709(value.g), rec709(value.b));
+                #endif
             }
             vec3 compressHighlights(vec3 value) {
                 const float knee = 0.65;
@@ -1051,8 +1294,15 @@ internal class GpuRawVideoRenderer(
             void main() {
                 vec3 linear = uHighQualityScaling != 0 ?
                     sampleBicubic(vTexCoord) : texture(uLinearImage, vTexCoord).rgb;
+                #if APPLY_COLOR_TRANSFORM
+                    linear = vec3(
+                        dot(uColorRow0, linear),
+                        dot(uColorRow1, linear),
+                        dot(uColorRow2, linear)
+                    );
+                    linear = max(linear, vec3(0.0));
+                #endif
                 linear = compressHighlights(max(linear, vec3(0.0)));
-                if (uPrimariesConversion == 1) linear = bt2020ToBt709(linear);
                 vec3 encoded = encodeTransfer(clamp(linear, 0.0, 1.0));
                 float luma = dot(encoded, vec3(0.2126, 0.7152, 0.0722));
                 encoded = mix(vec3(luma), encoded, uSaturation);
@@ -1190,3 +1440,22 @@ private fun ColorSpaceTransform.toFloatMatrix(): FloatArray = FloatArray(9) { in
 
 private fun isHdrTransfer(transfer: VideoColorTransfer): Boolean =
     transfer == VideoColorTransfer.HLG || transfer == VideoColorTransfer.ST2084
+
+private fun encodeRec709(value: Float): Float = when {
+    value < 0.018f -> 4.5f * value
+    else -> 1.099f * value.toDouble().pow(0.45).toFloat() - 0.099f
+}
+
+private fun encodeHlg(value: Float): Float {
+    val x = value.toDouble()
+    return if (x <= 1.0 / 12.0) {
+        sqrt(3.0 * x).toFloat()
+    } else {
+        (0.17883277 * ln(12.0 * x - 0.28466892) + 0.55991073).toFloat()
+    }
+}
+
+private fun encodePq(value: Float): Float {
+    val p = (value.toDouble() * 0.1).coerceIn(0.0, 1.0).pow(0.1593017578125)
+    return ((0.8359375 + 18.8515625 * p) / (1.0 + 18.6875 * p)).pow(78.84375).toFloat()
+}

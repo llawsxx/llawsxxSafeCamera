@@ -6,6 +6,7 @@ import android.hardware.camera2.CameraCharacteristics
 
 object ConfigPreferences {
     private const val NAME = "recording_config"
+    private val RAW_TRANSFER_LUT_SIZES = setOf(1024, 2048, 4096, 8192)
 
     fun load(context: Context): RecordingConfig = load(
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE),
@@ -42,6 +43,9 @@ object ConfigPreferences {
                 p.getString("rawDemosaicAlgorithm", null),
                 RawDemosaicAlgorithm.HIGH_QUALITY,
             ),
+            rawTransferLutEnabled = p.getBoolean("rawTransferLutEnabled", false),
+            rawTransferLutSize = p.getInt("rawTransferLutSize", 4096)
+                .takeIf { it in RAW_TRANSFER_LUT_SIZES } ?: 4096,
             rawFrameBufferCapacity = p.getInt("rawFrameBufferCapacity", 2).coerceIn(1, 6),
             rawThreeAAuxiliaryYuvEnabled = p.getBoolean("rawThreeAAuxiliaryYuvEnabled", true),
             rawLensShadingCorrectionEnabled = p.getBoolean("rawLensShadingCorrectionEnabled", true),
@@ -183,6 +187,11 @@ object ConfigPreferences {
             .putInt("rawHeight", c.rawHeight)
             .putString("rawScalingQuality", c.rawScalingQuality.name)
             .putString("rawDemosaicAlgorithm", c.rawDemosaicAlgorithm.name)
+            .putBoolean("rawTransferLutEnabled", c.rawTransferLutEnabled)
+            .putInt(
+                "rawTransferLutSize",
+                c.rawTransferLutSize.takeIf { it in RAW_TRANSFER_LUT_SIZES } ?: 4096,
+            )
             .putInt("rawFrameBufferCapacity", c.rawFrameBufferCapacity.coerceIn(1, 6))
             .putBoolean("rawThreeAAuxiliaryYuvEnabled", c.rawThreeAAuxiliaryYuvEnabled)
             .putBoolean("rawLensShadingCorrectionEnabled", c.rawLensShadingCorrectionEnabled)

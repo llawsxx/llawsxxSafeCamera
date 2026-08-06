@@ -183,6 +183,8 @@ data class RecordingConfig(
     val rawHeight: Int = 0,
     val rawScalingQuality: RawScalingQuality = RawScalingQuality.HIGH_QUALITY,
     val rawDemosaicAlgorithm: RawDemosaicAlgorithm = RawDemosaicAlgorithm.HIGH_QUALITY,
+    val rawTransferLutEnabled: Boolean = false,
+    val rawTransferLutSize: Int = 4096,
     val rawFrameBufferCapacity: Int = 2,
     val rawThreeAAuxiliaryYuvEnabled: Boolean = true,
     val rawLensShadingCorrectionEnabled: Boolean = true,

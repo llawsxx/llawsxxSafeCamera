@@ -588,6 +588,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.rawHeight,
         config.rawScalingQuality,
         config.rawDemosaicAlgorithm,
+        config.rawTransferLutEnabled,
+        config.rawTransferLutSize,
         config.rawFrameBufferCapacity,
         config.rawThreeAAuxiliaryYuvEnabled,
         config.rawLensShadingCorrectionEnabled,
@@ -1021,6 +1023,21 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                         { it.label },
                                         !recording,
                                     ) { config = config.copy(rawDemosaicAlgorithm = it) }
+                                }
+                                ToggleLine(
+                                    "Transfer LUT",
+                                    config.rawTransferLutEnabled,
+                                    !recording,
+                                ) { enabled -> config = config.copy(rawTransferLutEnabled = enabled) }
+                                if (config.rawTransferLutEnabled) {
+                                    Labeled("Transfer LUT 项数") {
+                                        ChoiceRow(
+                                            listOf(1024, 2048, 4096, 8192),
+                                            config.rawTransferLutSize,
+                                            { "$it 项" },
+                                            !recording,
+                                        ) { config = config.copy(rawTransferLutSize = it) }
+                                    }
                                 }
                                 Labeled("RAW 帧缓存") {
                                     ChoiceRow(

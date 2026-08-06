@@ -63,6 +63,8 @@ class RecordingConfigTest {
         assertTrue(defaults.rawThreeAAuxiliaryYuvEnabled)
         assertEquals(RawScalingQuality.HIGH_QUALITY, defaults.rawScalingQuality)
         assertEquals(RawDemosaicAlgorithm.HIGH_QUALITY, defaults.rawDemosaicAlgorithm)
+        assertTrue(!defaults.rawTransferLutEnabled)
+        assertEquals(4096, defaults.rawTransferLutSize)
         assertEquals(2, defaults.rawFrameBufferCapacity)
         assertEquals(RawColorStyle.STANDARD_DIRECT, defaults.rawColorStyle)
         assertEquals(1.08f, defaults.effectiveRawContrast, 0f)
@@ -77,7 +79,7 @@ class RecordingConfigTest {
             rawCustomHighlightCompression = 2f,
         )
         assertEquals(1f, invalid.effectiveRawSharpeningStrength, 0f)
-        assertEquals(1.3f, invalid.effectiveRawContrast, 0f)
+        assertEquals(1.5f, invalid.effectiveRawContrast, 0f)
         assertEquals(0f, invalid.effectiveRawSaturation, 0f)
         assertEquals(1f, invalid.effectiveRawHighlightCompression, 0f)
 
