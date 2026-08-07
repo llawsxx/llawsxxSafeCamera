@@ -560,7 +560,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.rawSharpeningEnabled,
         config.rawSharpeningStrength,
         config.rawColorStyle,
-        config.rawCustomContrast,
         config.rawCustomSaturation,
     ) {
         if (state is RecorderState.Recording) {
@@ -638,8 +637,9 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.rawHeight,
         config.rawScalingQuality,
         config.rawDemosaicAlgorithm,
-        config.rawTransferLutEnabled,
-        config.rawTransferLutSize,
+        config.rawPboEnabled,
+        config.rawColorLutEnabled,
+        config.rawColorLutSize,
         config.rawFrameBufferCapacity,
         config.rawThreeAAuxiliaryYuvEnabled,
         config.rawLensShadingCorrectionEnabled,
@@ -647,7 +647,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.rawSharpeningEnabled,
         config.rawSharpeningStrength,
         config.rawColorStyle,
-        config.rawCustomContrast,
         config.rawCustomSaturation,
         config.colorStandard,
         config.colorTransfer,
@@ -1134,18 +1133,18 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                     !recording,
                                 ) { enabled -> config = config.copy(rawPboEnabled = enabled) }
                                 ToggleLine(
-                                    "Transfer LUT",
-                                    config.rawTransferLutEnabled,
+                                    "3D Color LUT",
+                                    config.rawColorLutEnabled,
                                     !recording,
-                                ) { enabled -> config = config.copy(rawTransferLutEnabled = enabled) }
-                                if (config.rawTransferLutEnabled) {
-                                    Labeled("Transfer LUT 项数") {
+                                ) { enabled -> config = config.copy(rawColorLutEnabled = enabled) }
+                                if (config.rawColorLutEnabled) {
+                                    Labeled("3D Color LUT 尺寸") {
                                         ChoiceRow(
-                                            listOf(1024, 2048, 4096, 8192),
-                                            config.rawTransferLutSize,
-                                            { "$it 项" },
+                                            listOf(17, 33, 65),
+                                            config.rawColorLutSize,
+                                            { "$it³" },
                                             !recording,
-                                        ) { config = config.copy(rawTransferLutSize = it) }
+                                        ) { config = config.copy(rawColorLutSize = it) }
                                     }
                                 }
                                 Labeled("RAW 帧缓存") {
@@ -1196,14 +1195,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                     ) { config = config.copy(rawColorStyle = it) }
                                 }
                                 if (config.rawColorStyle == RawColorStyle.CUSTOM) {
-                                    Text("对比度 ${(config.effectiveRawContrast * 100f).format0()}%")
-                                    Slider(
-                                        value = config.effectiveRawContrast,
-                                        onValueChange = { config = config.copy(rawCustomContrast = it) },
-                                        valueRange = 0.5f..1.5f,
-                                        steps = 19,
-                                        enabled = !recording,
-                                    )
                                     Text("饱和度 ${(config.effectiveRawSaturation * 100f).format0()}%")
                                     Slider(
                                         value = config.effectiveRawSaturation,

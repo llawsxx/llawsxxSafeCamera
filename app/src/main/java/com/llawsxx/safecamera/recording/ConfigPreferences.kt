@@ -6,7 +6,7 @@ import android.hardware.camera2.CameraCharacteristics
 
 object ConfigPreferences {
     private const val NAME = "recording_config"
-    private val RAW_TRANSFER_LUT_SIZES = setOf(1024, 2048, 4096, 8192)
+    private val RAW_COLOR_LUT_SIZES = setOf(17, 33, 65)
 
     fun load(context: Context): RecordingConfig = load(
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE),
@@ -43,10 +43,13 @@ object ConfigPreferences {
                 p.getString("rawDemosaicAlgorithm", null),
                 RawDemosaicAlgorithm.HIGH_QUALITY,
             ),
-            rawPboEnabled = p.getBoolean("rawPboEnabled", true),
-            rawTransferLutEnabled = p.getBoolean("rawTransferLutEnabled", false),
-            rawTransferLutSize = p.getInt("rawTransferLutSize", 4096)
-                .takeIf { it in RAW_TRANSFER_LUT_SIZES } ?: 4096,
+            rawPboEnabled = p.getBoolean("rawPboEnabled", false),
+            rawColorLutEnabled = p.getBoolean(
+                "rawColorLutEnabled",
+                p.getBoolean("rawTransferLutEnabled", false),
+            ),
+            rawColorLutSize = p.getInt("rawColorLutSize", 33)
+                .takeIf { it in RAW_COLOR_LUT_SIZES } ?: 33,
             rawFrameBufferCapacity = p.getInt("rawFrameBufferCapacity", 2).coerceIn(1, 6),
             rawThreeAAuxiliaryYuvEnabled = p.getBoolean("rawThreeAAuxiliaryYuvEnabled", true),
             rawLensShadingCorrectionEnabled = p.getBoolean("rawLensShadingCorrectionEnabled", true),
@@ -62,7 +65,6 @@ object ConfigPreferences {
             rawSharpeningEnabled = p.getBoolean("rawSharpeningEnabled", false),
             rawSharpeningStrength = p.getFloat("rawSharpeningStrength", 0.32f).coerceIn(0f, 1f),
             rawColorStyle = enumValue(p.getString("rawColorStyle", null), RawColorStyle.STANDARD_DIRECT),
-            rawCustomContrast = p.getFloat("rawCustomContrast", 1.08f).coerceIn(0.7f, 1.3f),
             rawCustomSaturation = p.getFloat("rawCustomSaturation", 1.08f).coerceIn(0f, 2f),
             videoBitrate = p.getInt("videoBitrate", 12_000_000),
             videoBitrateMode = enumValue(p.getString("videoBitrateMode", null), VideoBitrateMode.DEFAULT),
@@ -190,10 +192,10 @@ object ConfigPreferences {
             .putString("rawScalingQuality", c.rawScalingQuality.name)
             .putString("rawDemosaicAlgorithm", c.rawDemosaicAlgorithm.name)
             .putBoolean("rawPboEnabled", c.rawPboEnabled)
-            .putBoolean("rawTransferLutEnabled", c.rawTransferLutEnabled)
+            .putBoolean("rawColorLutEnabled", c.rawColorLutEnabled)
             .putInt(
-                "rawTransferLutSize",
-                c.rawTransferLutSize.takeIf { it in RAW_TRANSFER_LUT_SIZES } ?: 4096,
+                "rawColorLutSize",
+                c.rawColorLutSize.takeIf { it in RAW_COLOR_LUT_SIZES } ?: 33,
             )
             .putInt("rawFrameBufferCapacity", c.rawFrameBufferCapacity.coerceIn(1, 6))
             .putBoolean("rawThreeAAuxiliaryYuvEnabled", c.rawThreeAAuxiliaryYuvEnabled)
@@ -202,7 +204,6 @@ object ConfigPreferences {
             .putBoolean("rawSharpeningEnabled", c.rawSharpeningEnabled)
             .putFloat("rawSharpeningStrength", c.effectiveRawSharpeningStrength)
             .putString("rawColorStyle", c.rawColorStyle.name)
-            .putFloat("rawCustomContrast", c.rawCustomContrast.coerceIn(0.7f, 1.3f))
             .putFloat("rawCustomSaturation", c.rawCustomSaturation.coerceIn(0f, 2f))
             .putInt("videoBitrate", c.videoBitrate)
             .putString("videoBitrateMode", c.videoBitrateMode.name)

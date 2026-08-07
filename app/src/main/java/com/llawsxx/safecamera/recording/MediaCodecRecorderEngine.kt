@@ -265,12 +265,11 @@ class MediaCodecRecorderEngine(
                 scalingQuality = config.rawScalingQuality,
                 demosaicAlgorithm = config.rawDemosaicAlgorithm,
                 pboEnabled = config.rawPboEnabled,
-                transferLutEnabled = config.rawTransferLutEnabled,
-                transferLutSize = config.rawTransferLutSize,
+                colorLutEnabled = config.rawColorLutEnabled,
+                colorLutSize = config.rawColorLutSize,
                 rawFrameBufferCapacity = config.rawFrameBufferCapacity,
                 sharpeningEnabled = config.rawSharpeningEnabled,
                 sharpeningStrength = config.effectiveRawSharpeningStrength,
-                contrast = config.effectiveRawContrast,
                 saturation = config.effectiveRawSaturation,
                 outputColorStandard = config.effectiveRawColorStandard,
                 outputColorTransfer = config.effectiveRawColorTransfer,
@@ -791,7 +790,6 @@ class MediaCodecRecorderEngine(
                 rawSharpeningEnabled = updated.rawSharpeningEnabled,
                 rawSharpeningStrength = updated.rawSharpeningStrength,
                 rawColorStyle = updated.rawColorStyle,
-                rawCustomContrast = updated.rawCustomContrast,
                 rawCustomSaturation = updated.rawCustomSaturation,
             )
             rawRenderer?.updateProcessingParameters(
@@ -799,7 +797,6 @@ class MediaCodecRecorderEngine(
                 demosaicAlgorithm = config.rawDemosaicAlgorithm,
                 sharpeningEnabled = config.rawSharpeningEnabled,
                 sharpeningStrength = config.effectiveRawSharpeningStrength,
-                contrast = config.effectiveRawContrast,
                 saturation = config.effectiveRawSaturation,
             )
             if (previousConfig.cameraRequestControlsKey() != config.cameraRequestControlsKey()) {

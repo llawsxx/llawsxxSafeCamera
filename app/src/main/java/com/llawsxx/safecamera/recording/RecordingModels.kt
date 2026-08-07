@@ -193,9 +193,9 @@ data class RecordingConfig(
     val rawHeight: Int = 0,
     val rawScalingQuality: RawScalingQuality = RawScalingQuality.HIGH_QUALITY,
     val rawDemosaicAlgorithm: RawDemosaicAlgorithm = RawDemosaicAlgorithm.HIGH_QUALITY,
-    val rawPboEnabled: Boolean = true,
-    val rawTransferLutEnabled: Boolean = false,
-    val rawTransferLutSize: Int = 4096,
+    val rawPboEnabled: Boolean = false,
+    val rawColorLutEnabled: Boolean = false,
+    val rawColorLutSize: Int = 33,
     val rawFrameBufferCapacity: Int = 2,
     val rawThreeAAuxiliaryYuvEnabled: Boolean = true,
     val rawLensShadingCorrectionEnabled: Boolean = true,
@@ -203,7 +203,6 @@ data class RecordingConfig(
     val rawSharpeningEnabled: Boolean = false,
     val rawSharpeningStrength: Float = 0.32f,
     val rawColorStyle: RawColorStyle = RawColorStyle.STANDARD_DIRECT,
-    val rawCustomContrast: Float = 1.08f,
     val rawCustomSaturation: Float = 1.08f,
     val videoBitrate: Int = 12_000_000,
     val videoBitrateMode: VideoBitrateMode = VideoBitrateMode.DEFAULT,
@@ -308,11 +307,6 @@ data class RecordingConfig(
     val rawHdrOutput: Boolean get() = rawProcessingEnabled &&
         effectiveRawColorTransfer in setOf(VideoColorTransfer.HLG, VideoColorTransfer.ST2084)
     val effectiveRawSharpeningStrength: Float get() = rawSharpeningStrength.coerceIn(0f, 1f)
-    val effectiveRawContrast: Float get() = when (rawColorStyle) {
-        RawColorStyle.STANDARD_DIRECT -> 1.08f
-        RawColorStyle.FAITHFUL -> 1f
-        RawColorStyle.CUSTOM -> rawCustomContrast.coerceIn(0.5f, 1.5f)
-    }
     val effectiveRawSaturation: Float get() = when (rawColorStyle) {
         RawColorStyle.STANDARD_DIRECT -> 1.08f
         RawColorStyle.FAITHFUL -> 1f

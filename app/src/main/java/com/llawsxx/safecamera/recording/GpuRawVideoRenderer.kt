@@ -40,12 +40,11 @@ internal class GpuRawVideoRenderer(
     scalingQuality: RawScalingQuality,
     demosaicAlgorithm: RawDemosaicAlgorithm,
     pboEnabled: Boolean,
-    transferLutEnabled: Boolean,
-    transferLutSize: Int,
+    colorLutEnabled: Boolean,
+    colorLutSize: Int,
     rawFrameBufferCapacity: Int,
     sharpeningEnabled: Boolean,
     sharpeningStrength: Float,
-    contrast: Float,
     saturation: Float,
     outputColorStandard: VideoColorStandard,
     outputColorTransfer: VideoColorTransfer,
@@ -75,8 +74,8 @@ internal class GpuRawVideoRenderer(
     private var lensShadingCorrectionEnabled = lensShadingCorrectionEnabled
     private val scalingQuality = scalingQuality
     private var demosaicAlgorithm = demosaicAlgorithm
-    private val transferLutEnabled = transferLutEnabled
-    private val transferLutSize = transferLutSize.takeIf { it in TRANSFER_LUT_SIZES } ?: 4096
+    private val colorLutEnabled = colorLutEnabled
+    private val colorLutSize = colorLutSize.takeIf { it in COLOR_LUT_SIZES } ?: 33
     private val rawCrop = centeredCrop(rawWidth, rawHeight, outputWidth, outputHeight)
     private val intermediateWidth = if (scalingQuality == RawScalingQuality.HIGH_QUALITY) {
         minOf(rawCrop.second.first, (outputWidth * DEMOSAIC_SCALE_CAP).roundToInt())
@@ -86,13 +85,12 @@ internal class GpuRawVideoRenderer(
     } else outputHeight
     private var sharpeningEnabled = sharpeningEnabled
     private var sharpeningStrength = sharpeningStrength.coerceIn(0f, 1f)
-    private var contrast = contrast.coerceIn(0.7f, 1.3f)
     private var saturation = saturation.coerceIn(0f, 2f)
     private var outputColorStandard = outputColorStandard
     private val outputColorTransfer = outputColorTransfer
     private val rawTexture: Int
     private val lensShadingTexture: Int
-    private val transferLutTexture: Int
+    private val colorLutTexture: Int
     private val intermediateTexture: Int
     private val intermediateFramebuffer: Int
     private var lensShadingWidth = 1
@@ -117,7 +115,7 @@ internal class GpuRawVideoRenderer(
     private val outputColorRow0Location: Int
     private val outputColorRow1Location: Int
     private val outputColorRow2Location: Int
-    private val outputContrastLocation: Int
+    private val outputLumaCoefficientsLocation: Int
     private val outputSaturationLocation: Int
     private val outputImageSizeLocation: Int
     private val outputHighQualityScalingLocation: Int
@@ -235,6 +233,13 @@ internal class GpuRawVideoRenderer(
             "High-quality RAW intermediate ${intermediateWidth}x$intermediateHeight exceeds " +
                 "the GPU texture limit ${maximumTextureSize[0]}; select fast RAW scaling"
         }
+        if (colorLutEnabled) {
+            val maximum3dTextureSize = IntArray(1)
+            GLES30.glGetIntegerv(GLES30.GL_MAX_3D_TEXTURE_SIZE, maximum3dTextureSize, 0)
+            check(colorLutSize <= maximum3dTextureSize[0]) {
+                "3D Color LUT ${colorLutSize}³ exceeds the GPU limit ${maximum3dTextureSize[0]}³"
+            }
+        }
 
         rawTexture = IntArray(1).also { GLES30.glGenTextures(1, it, 0) }[0]
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, rawTexture)
@@ -260,8 +265,8 @@ internal class GpuRawVideoRenderer(
         )
         checkGl("allocate lens shading texture")
 
-        transferLutTexture = if (transferLutEnabled) {
-            createTransferLutTexture()
+        colorLutTexture = if (colorLutEnabled) {
+            createColorLutTexture()
         } else {
             0
         }
@@ -278,7 +283,7 @@ internal class GpuRawVideoRenderer(
                 lmmse = false,
                 combinedFinalOutput = false,
                 applyColorTransform = scalingQuality == RawScalingQuality.FAST,
-                useTransferLut = transferLutEnabled,
+                useColorLut = colorLutEnabled,
             ),
         )
         fastFinalRawProgram = if (hasEncoderOutput && scalingQuality == RawScalingQuality.FAST) {
@@ -288,7 +293,7 @@ internal class GpuRawVideoRenderer(
                     lmmse = false,
                     combinedFinalOutput = true,
                     applyColorTransform = true,
-                    useTransferLut = transferLutEnabled,
+                    useColorLut = colorLutEnabled,
                 ),
             )
         } else {
@@ -300,7 +305,7 @@ internal class GpuRawVideoRenderer(
                 lmmse = false,
                 combinedFinalOutput = false,
                 applyColorTransform = scalingQuality == RawScalingQuality.FAST,
-                useTransferLut = transferLutEnabled,
+                useColorLut = colorLutEnabled,
             ),
         )
         highQualityFinalRawProgram = if (hasEncoderOutput && scalingQuality == RawScalingQuality.FAST) {
@@ -310,7 +315,7 @@ internal class GpuRawVideoRenderer(
                     lmmse = false,
                     combinedFinalOutput = true,
                     applyColorTransform = true,
-                    useTransferLut = transferLutEnabled,
+                    useColorLut = colorLutEnabled,
                 ),
             )
         } else {
@@ -322,7 +327,7 @@ internal class GpuRawVideoRenderer(
                 lmmse = true,
                 combinedFinalOutput = false,
                 applyColorTransform = scalingQuality == RawScalingQuality.FAST,
-                useTransferLut = transferLutEnabled,
+                useColorLut = colorLutEnabled,
             ),
         )
         lmmseFinalRawProgram = if (hasEncoderOutput && scalingQuality == RawScalingQuality.FAST) {
@@ -332,7 +337,7 @@ internal class GpuRawVideoRenderer(
                     lmmse = true,
                     combinedFinalOutput = true,
                     applyColorTransform = true,
-                    useTransferLut = transferLutEnabled,
+                    useColorLut = colorLutEnabled,
                 ),
             )
         } else {
@@ -343,7 +348,7 @@ internal class GpuRawVideoRenderer(
             VERTEX_SHADER,
             outputFragmentShader(
                 applyColorTransform = scalingQuality == RawScalingQuality.HIGH_QUALITY,
-                useTransferLut = transferLutEnabled,
+                useColorLut = colorLutEnabled,
             ),
         )
         outputPositionLocation = GLES30.glGetAttribLocation(outputProgram, "aPosition")
@@ -352,14 +357,14 @@ internal class GpuRawVideoRenderer(
         outputColorRow0Location = GLES30.glGetUniformLocation(outputProgram, "uColorRow0")
         outputColorRow1Location = GLES30.glGetUniformLocation(outputProgram, "uColorRow1")
         outputColorRow2Location = GLES30.glGetUniformLocation(outputProgram, "uColorRow2")
-        outputContrastLocation = GLES30.glGetUniformLocation(outputProgram, "uContrast")
+        outputLumaCoefficientsLocation = GLES30.glGetUniformLocation(outputProgram, "uLumaCoefficients")
         outputSaturationLocation = GLES30.glGetUniformLocation(outputProgram, "uSaturation")
         outputImageSizeLocation = GLES30.glGetUniformLocation(outputProgram, "uLinearImageSize")
         outputHighQualityScalingLocation = GLES30.glGetUniformLocation(outputProgram, "uHighQualityScaling")
         GLES30.glUseProgram(outputProgram)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(outputProgram, "uLinearImage"), 2)
-        if (transferLutEnabled) {
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(outputProgram, "uTransferLut"), 4)
+        if (colorLutEnabled) {
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(outputProgram, "uColorLut"), 4)
         }
 
         if (hasEncoderOutput) {
@@ -452,7 +457,6 @@ internal class GpuRawVideoRenderer(
         demosaicAlgorithm: RawDemosaicAlgorithm,
         sharpeningEnabled: Boolean,
         sharpeningStrength: Float,
-        contrast: Float,
         saturation: Float,
     ) {
         handler.post {
@@ -461,7 +465,6 @@ internal class GpuRawVideoRenderer(
             this.demosaicAlgorithm = demosaicAlgorithm
             this.sharpeningEnabled = sharpeningEnabled
             this.sharpeningStrength = sharpeningStrength.coerceIn(0f, 1f)
-            this.contrast = contrast.coerceIn(0.7f, 1.3f)
             this.saturation = saturation.coerceIn(0f, 2f)
         }
     }
@@ -532,10 +535,10 @@ internal class GpuRawVideoRenderer(
         GLES30.glUniform1f(raw.sharpeningStrengthLocation, sharpeningStrength)
         if (combinedFinalOutput) {
             GLES30.glUniform1i(raw.outputTransferLocation, transferValue(outputColorTransfer))
-            GLES30.glUniform1f(raw.outputContrastLocation, contrast)
+            GLES30.glUniform3fv(raw.outputLumaCoefficientsLocation, 1, lumaCoefficients(), 0)
             GLES30.glUniform1f(raw.outputSaturationLocation, saturation)
         }
-        bindTransferLut()
+        bindColorLut()
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, lensShadingTexture)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
@@ -679,7 +682,7 @@ internal class GpuRawVideoRenderer(
             colorTransform[7],
             colorTransform[8],
         )
-        GLES30.glUniform1f(outputContrastLocation, contrast)
+        GLES30.glUniform3fv(outputLumaCoefficientsLocation, 1, lumaCoefficients(), 0)
         GLES30.glUniform1f(outputSaturationLocation, saturation)
         GLES30.glUniform2f(outputImageSizeLocation, intermediateWidth.toFloat(), intermediateHeight.toFloat())
         GLES30.glUniform1i(
@@ -688,7 +691,7 @@ internal class GpuRawVideoRenderer(
                 (width != intermediateWidth || height != intermediateHeight)
             ) 1 else 0,
         )
-        bindTransferLut()
+        bindColorLut()
         GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, intermediateTexture)
         bindVertices(outputVertices, outputPositionLocation, outputTexCoordLocation)
@@ -708,10 +711,10 @@ internal class GpuRawVideoRenderer(
         checkGl("copy final RAW output frame")
     }
 
-    private fun bindTransferLut() {
-        if (!transferLutEnabled) return
+    private fun bindColorLut() {
+        if (!colorLutEnabled) return
         GLES30.glActiveTexture(GLES30.GL_TEXTURE4)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, transferLutTexture)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, colorLutTexture)
     }
 
     private fun bindVertices(buffer: FloatBuffer, position: Int, texCoord: Int) {
@@ -781,39 +784,53 @@ internal class GpuRawVideoRenderer(
         checkGl("allocate final RAW output framebuffer")
     }
 
-    private fun createTransferLutTexture(): Int {
+    private fun createColorLutTexture(): Int {
         val encode: (Float) -> Float = when (outputColorTransfer) {
             VideoColorTransfer.HLG -> ::encodeHlg
             VideoColorTransfer.ST2084 -> ::encodePq
             else -> ::encodeRec709
         }
-        val values = FloatArray(transferLutSize)
-        for (index in 0 until transferLutSize) {
-            val linear = index.toFloat() / (transferLutSize - 1).coerceAtLeast(1)
-            values[index] = encode(linear)
+        val values = FloatArray(colorLutSize * colorLutSize * colorLutSize * 3)
+        val lumaCoefficients = lumaCoefficients()
+        var offset = 0
+        for (blueIndex in 0 until colorLutSize) {
+            val blue = blueIndex.toFloat() / (colorLutSize - 1)
+            for (greenIndex in 0 until colorLutSize) {
+                val green = greenIndex.toFloat() / (colorLutSize - 1)
+                for (redIndex in 0 until colorLutSize) {
+                    val red = redIndex.toFloat() / (colorLutSize - 1)
+                    val luma = lumaCoefficients[0] * red +
+                        lumaCoefficients[1] * green + lumaCoefficients[2] * blue
+                    values[offset++] = encode((luma + (red - luma) * saturation).coerceIn(0f, 1f))
+                    values[offset++] = encode((luma + (green - luma) * saturation).coerceIn(0f, 1f))
+                    values[offset++] = encode((luma + (blue - luma) * saturation).coerceIn(0f, 1f))
+                }
+            }
         }
         val buffer = ByteBuffer.allocateDirect(values.size * 4)
             .order(ByteOrder.nativeOrder())
             .asFloatBuffer()
             .apply { put(values); position(0) }
         return IntArray(1).also { GLES30.glGenTextures(1, it, 0) }[0].also { texture ->
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-            GLES30.glTexImage2D(
-                GLES30.GL_TEXTURE_2D,
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, texture)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_3D, GLES30.GL_TEXTURE_WRAP_R, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexImage3D(
+                GLES30.GL_TEXTURE_3D,
                 0,
-                GLES30.GL_R16F,
-                transferLutSize,
-                1,
+                GLES30.GL_RGB16F,
+                colorLutSize,
+                colorLutSize,
+                colorLutSize,
                 0,
-                GLES30.GL_RED,
+                GLES30.GL_RGB,
                 GLES30.GL_FLOAT,
                 buffer,
             )
-            checkGl("upload RAW transfer LUT")
+            checkGl("upload RAW 3D color LUT")
         }
     }
 
@@ -891,7 +908,7 @@ internal class GpuRawVideoRenderer(
         }
         GLES30.glDeleteTextures(3, intArrayOf(rawTexture, lensShadingTexture, intermediateTexture), 0)
         GLES30.glDeleteBuffers(PBO_COUNT, pboIds, 0)
-        if (transferLutTexture != 0) GLES30.glDeleteTextures(1, intArrayOf(transferLutTexture), 0)
+        if (colorLutTexture != 0) GLES30.glDeleteTextures(1, intArrayOf(colorLutTexture), 0)
         if (finalOutputTexture != 0) GLES30.glDeleteTextures(1, intArrayOf(finalOutputTexture), 0)
         releaseCurrent()
         EGL14.eglDestroySurface(display, previewEglSurface)
@@ -945,8 +962,8 @@ internal class GpuRawVideoRenderer(
         GLES30.glUseProgram(program)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uRaw"), 0)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLensShading"), 1)
-        if (transferLutEnabled) {
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uTransferLut"), 4)
+        if (colorLutEnabled) {
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uColorLut"), 4)
         }
         return RawShaderProgram(
             program = program,
@@ -964,7 +981,7 @@ internal class GpuRawVideoRenderer(
             sharpeningEnabledLocation = GLES30.glGetUniformLocation(program, "uSharpeningEnabled"),
             sharpeningStrengthLocation = GLES30.glGetUniformLocation(program, "uSharpeningStrength"),
             outputTransferLocation = GLES30.glGetUniformLocation(program, "uOutputTransfer"),
-            outputContrastLocation = GLES30.glGetUniformLocation(program, "uContrast"),
+            outputLumaCoefficientsLocation = GLES30.glGetUniformLocation(program, "uLumaCoefficients"),
             outputSaturationLocation = GLES30.glGetUniformLocation(program, "uSaturation"),
         )
     }
@@ -985,7 +1002,7 @@ internal class GpuRawVideoRenderer(
         val sharpeningEnabledLocation: Int,
         val sharpeningStrengthLocation: Int,
         val outputTransferLocation: Int,
-        val outputContrastLocation: Int,
+        val outputLumaCoefficientsLocation: Int,
         val outputSaturationLocation: Int,
     )
 
@@ -1030,6 +1047,12 @@ internal class GpuRawVideoRenderer(
         else -> TRANSFER_REC709
     }
 
+    private fun lumaCoefficients(): FloatArray = if (outputColorStandard == VideoColorStandard.BT2020) {
+        BT2020_LUMA_COEFFICIENTS
+    } else {
+        BT709_LUMA_COEFFICIENTS
+    }
+
     private companion object {
         const val EGL_RECORDABLE_ANDROID = 0x3142
         const val EGL_OPENGL_ES3_BIT_KHR = 0x0040
@@ -1040,10 +1063,12 @@ internal class GpuRawVideoRenderer(
         const val TRANSFER_REC709 = 0
         const val TRANSFER_HLG = 1
         const val TRANSFER_PQ = 2
-        val TRANSFER_LUT_SIZES = setOf(1024, 2048, 4096, 8192)
+        val COLOR_LUT_SIZES = setOf(17, 33, 65)
         const val MAX_RAW_FRAME_BUFFER_CAPACITY = 6
         const val PBO_COUNT = 3
         const val DEMOSAIC_SCALE_CAP = 2.0f
+        val BT709_LUMA_COEFFICIENTS = floatArrayOf(0.2126f, 0.7152f, 0.0722f)
+        val BT2020_LUMA_COEFFICIENTS = floatArrayOf(0.2627f, 0.6780f, 0.0593f)
         const val VERTEX_SHADER = """#version 300 es
             in vec4 aPosition;
             in vec2 aTexCoord;
@@ -1055,13 +1080,13 @@ internal class GpuRawVideoRenderer(
             lmmse: Boolean,
             combinedFinalOutput: Boolean,
             applyColorTransform: Boolean,
-            useTransferLut: Boolean,
+            useColorLut: Boolean,
         ): String = """#version 300 es
             #define HIGH_QUALITY_DEMOSAIC ${if (highQuality) 1 else 0}
             #define LMMSE_DEMOSAIC ${if (lmmse) 1 else 0}
             #define COMBINED_FINAL_OUTPUT ${if (combinedFinalOutput) 1 else 0}
             #define APPLY_COLOR_TRANSFORM ${if (applyColorTransform) 1 else 0}
-            #define USE_TRANSFER_LUT ${if (useTransferLut) 1 else 0}
+            #define USE_COLOR_LUT ${if (useColorLut) 1 else 0}
             precision highp float;
             precision highp int;
             precision highp usampler2D;
@@ -1084,10 +1109,10 @@ internal class GpuRawVideoRenderer(
             uniform float uSharpeningStrength;
             #if COMBINED_FINAL_OUTPUT
                 uniform int uOutputTransfer;
-                uniform float uContrast;
+                uniform vec3 uLumaCoefficients;
                 uniform float uSaturation;
-                #if USE_TRANSFER_LUT
-                    uniform sampler2D uTransferLut;
+                #if USE_COLOR_LUT
+                    uniform sampler3D uColorLut;
                 #endif
             #endif
 
@@ -1270,7 +1295,7 @@ internal class GpuRawVideoRenderer(
             }
 
             #if COMBINED_FINAL_OUTPUT
-                #if !USE_TRANSFER_LUT
+                #if !USE_COLOR_LUT
                     float rec709(float value) {
                         value = clamp(value, 0.0, 1.0);
                         return value < 0.018 ? 4.5 * value : 1.099 * pow(value, 0.45) - 0.099;
@@ -1292,17 +1317,16 @@ internal class GpuRawVideoRenderer(
                         return pow((c1 + c2 * p) / (1.0 + c3 * p), m2);
                     }
                 #endif
-                vec3 encodeTransfer(vec3 value) {
-                    #if USE_TRANSFER_LUT
+                vec3 applyColorProcessing(vec3 value) {
+                    #if USE_COLOR_LUT
                         value = clamp(value, 0.0, 1.0);
-                        float width = float(textureSize(uTransferLut, 0).x);
-                        value = (value * (width - 1.0) + 0.5) / width;
-                        return vec3(
-                            texture(uTransferLut, vec2(value.r, 0.5)).r,
-                            texture(uTransferLut, vec2(value.g, 0.5)).r,
-                            texture(uTransferLut, vec2(value.b, 0.5)).r
-                        );
+                        float size = float(textureSize(uColorLut, 0).x);
+                        vec3 uvw = (value * (size - 1.0) + 0.5) / size;
+                        return texture(uColorLut, uvw).rgb;
                     #else
+                        value = clamp(value, 0.0, 1.0);
+                        float luma = dot(value, uLumaCoefficients);
+                        value = mix(vec3(luma), value, uSaturation);
                         if (uOutputTransfer == 1) return vec3(hlg(value.r), hlg(value.g), hlg(value.b));
                         if (uOutputTransfer == 2) return vec3(pq(value.r), pq(value.g), pq(value.b));
                         return vec3(rec709(value.r), rec709(value.g), rec709(value.b));
@@ -1321,10 +1345,7 @@ internal class GpuRawVideoRenderer(
                     vec3 corrected = rgb;
                 #endif
                 #if COMBINED_FINAL_OUTPUT
-                    vec3 encoded = encodeTransfer(clamp(corrected, 0.0, 1.0));
-                    float luma = dot(encoded, vec3(0.2126, 0.7152, 0.0722));
-                    encoded = mix(vec3(luma), encoded, uSaturation);
-                    encoded = (encoded - vec3(0.5)) * uContrast + vec3(0.5);
+                    vec3 encoded = applyColorProcessing(corrected);
                     outColor = vec4(clamp(encoded, 0.0, 1.0), 1.0);
                 #else
                     outColor = vec4(corrected, 1.0);
@@ -1338,23 +1359,23 @@ internal class GpuRawVideoRenderer(
             uniform sampler2D uImage;
             void main() { outColor = texture(uImage, vTexCoord); }
         """
-        fun outputFragmentShader(applyColorTransform: Boolean, useTransferLut: Boolean): String = """#version 300 es
+        fun outputFragmentShader(applyColorTransform: Boolean, useColorLut: Boolean): String = """#version 300 es
             #define APPLY_COLOR_TRANSFORM ${if (applyColorTransform) 1 else 0}
-            #define USE_TRANSFER_LUT ${if (useTransferLut) 1 else 0}
+            #define USE_COLOR_LUT ${if (useColorLut) 1 else 0}
             precision highp float;
             in vec2 vTexCoord;
             layout(location = 0) out vec4 outColor;
             uniform sampler2D uLinearImage;
             uniform int uOutputTransfer;
-            #if USE_TRANSFER_LUT
-                uniform sampler2D uTransferLut;
+            uniform vec3 uLumaCoefficients;
+            #if USE_COLOR_LUT
+                uniform sampler3D uColorLut;
             #endif
             #if APPLY_COLOR_TRANSFORM
                 uniform vec3 uColorRow0;
                 uniform vec3 uColorRow1;
                 uniform vec3 uColorRow2;
             #endif
-            uniform float uContrast;
             uniform float uSaturation;
             uniform vec2 uLinearImageSize;
             uniform int uHighQualityScaling;
@@ -1384,7 +1405,7 @@ internal class GpuRawVideoRenderer(
                     texture(uLinearImage, vec2(h1.x, h1.y)).rgb * g1.x * g1.y;
             }
 
-            #if !USE_TRANSFER_LUT
+            #if !USE_COLOR_LUT
                 float rec709(float value) {
                     value = clamp(value, 0.0, 1.0);
                     return value < 0.018 ? 4.5 * value : 1.099 * pow(value, 0.45) - 0.099;
@@ -1406,17 +1427,16 @@ internal class GpuRawVideoRenderer(
                     return pow((c1 + c2 * p) / (1.0 + c3 * p), m2);
                 }
             #endif
-            vec3 encodeTransfer(vec3 value) {
-                #if USE_TRANSFER_LUT
+            vec3 applyColorProcessing(vec3 value) {
+                #if USE_COLOR_LUT
                     value = clamp(value, 0.0, 1.0);
-                    float width = float(textureSize(uTransferLut, 0).x);
-                    value = (value * (width - 1.0) + 0.5) / width;
-                    return vec3(
-                        texture(uTransferLut, vec2(value.r, 0.5)).r,
-                        texture(uTransferLut, vec2(value.g, 0.5)).r,
-                        texture(uTransferLut, vec2(value.b, 0.5)).r
-                    );
+                    float size = float(textureSize(uColorLut, 0).x);
+                    vec3 uvw = (value * (size - 1.0) + 0.5) / size;
+                    return texture(uColorLut, uvw).rgb;
                 #else
+                    value = clamp(value, 0.0, 1.0);
+                    float luma = dot(value, uLumaCoefficients);
+                    value = mix(vec3(luma), value, uSaturation);
                     if (uOutputTransfer == 1) return vec3(hlg(value.r), hlg(value.g), hlg(value.b));
                     if (uOutputTransfer == 2) return vec3(pq(value.r), pq(value.g), pq(value.b));
                     return vec3(rec709(value.r), rec709(value.g), rec709(value.b));
@@ -1434,10 +1454,7 @@ internal class GpuRawVideoRenderer(
                     linear = max(linear, vec3(0.0));
                 #endif
                 linear = max(linear, vec3(0.0));
-                vec3 encoded = encodeTransfer(clamp(linear, 0.0, 1.0));
-                float luma = dot(encoded, vec3(0.2126, 0.7152, 0.0722));
-                encoded = mix(vec3(luma), encoded, uSaturation);
-                encoded = (encoded - vec3(0.5)) * uContrast + vec3(0.5);
+                vec3 encoded = applyColorProcessing(linear);
                 outColor = vec4(clamp(encoded, 0.0, 1.0), 1.0);
             }
         """
