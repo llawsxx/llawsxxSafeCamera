@@ -2073,7 +2073,7 @@ private fun LandscapeMainRecorderScreen(
                 onChange = onConfigChange,
                 presetControl = presetControl,
                 onPresetControlChange = onPresetControlChange,
-                modifier = Modifier.width(356.dp).fillMaxHeight(),
+                modifier = Modifier,
             )
             RemainingSpacePreview(
                 config = config,
@@ -2457,7 +2457,7 @@ private fun FullscreenRecorder(
                         presetControl = presetControl,
                         onPresetControlChange = { presetControl = it },
                         overlay = true,
-                        modifier = Modifier.width(356.dp).fillMaxHeight(),
+                        modifier = Modifier,
                     )
                     presetControl?.let { control ->
                         CameraPresetOverlay(
@@ -3230,6 +3230,7 @@ private fun LandscapeCameraControls(
     var selected by remember { mutableStateOf(FullscreenControl.ISO) }
     var whiteBalanceExpanded by remember { mutableStateOf(false) }
     var apertureExpanded by remember { mutableStateOf(false) }
+    var rulerExpanded by remember { mutableStateOf(true) }
     val displayedIso = if (config.manualExposure) config.iso else liveExposure?.iso ?: config.iso
     val displayedExposureNs = if (config.manualExposure) config.exposureNs else liveExposure?.exposureNs ?: config.exposureNs
     val displayedAperture = if (config.manualExposure) config.aperture else liveExposure?.aperture ?: config.aperture
@@ -3238,19 +3239,34 @@ private fun LandscapeCameraControls(
     val supportsManualFocus = (
         camera.minimumFocusDistance > 0f && camera.afModes.contains(CameraCharacteristics.CONTROL_AF_MODE_OFF)
         ) || config.focusDistancePresets.isNotEmpty()
+    val showingRuler = when (selected) {
+        FullscreenControl.ISO -> camera.isoRange != null
+        FullscreenControl.SHUTTER -> camera.exposureRange != null
+        FullscreenControl.EV -> camera.exposureCompensationRange != null
+        FullscreenControl.WB -> config.manualWhiteBalance
+        FullscreenControl.FOCUS ->
+            config.focusMode == FocusMode.MANUAL && supportsManualFocus && camera.minimumFocusDistance > 0f
+        else -> false
+    }
+    val compact = !showingRuler || !rulerExpanded
     val foreground = if (overlay) Color.White else Color.Unspecified
     Card(
-        modifier = modifier,
+        modifier = modifier
+            .width(if (compact) 178.dp else 356.dp)
+            .then(if (!compact) Modifier.fillMaxHeight() else Modifier),
         colors = CardDefaults.cardColors(
-            containerColor = if (overlay) Color(0x66000000) else MaterialTheme.colorScheme.surfaceContainer,
+            containerColor = if (overlay) Color(0x33000000) else MaterialTheme.colorScheme.surfaceContainer,
         ),
     ) {
         Row(
-            Modifier.fillMaxSize().padding(6.dp),
+            Modifier.fillMaxWidth()
+                .then(if (!compact) Modifier.fillMaxHeight() else Modifier)
+                .padding(6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Column(
-                Modifier.width(166.dp).fillMaxHeight(),
+                Modifier.width(166.dp)
+                    .then(if (!compact) Modifier.fillMaxHeight() else Modifier),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Row(
@@ -3277,6 +3293,19 @@ private fun LandscapeCameraControls(
                         enabled = enabled && (
                             camera.isoRange != null || config.isoPresets.isNotEmpty() || config.shutterPresets.isNotEmpty()
                             ),
+                        modifier = Modifier.size(30.dp).scale(0.65f),
+                    )
+                }
+                Row(
+                    Modifier.fillMaxWidth().height(28.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("刻度尺", color = foreground, style = MaterialTheme.typography.labelSmall)
+                    Switch(
+                        checked = rulerExpanded && showingRuler,
+                        onCheckedChange = { rulerExpanded = it },
+                        enabled = showingRuler,
                         modifier = Modifier.size(30.dp).scale(0.65f),
                     )
                 }
@@ -3373,6 +3402,7 @@ private fun LandscapeCameraControls(
                                             } else awbLabel(config.awbMode)
                                             FullscreenControl.FOCUS -> if (config.focusMode == FocusMode.MANUAL) "MF" else "AF"
                                         },
+                                        color = foreground,
                                         style = MaterialTheme.typography.labelSmall,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
@@ -3419,82 +3449,84 @@ private fun LandscapeCameraControls(
                     }
                 }
             }
-            Box(Modifier.weight(1f).fillMaxHeight()) {
-                when (selected) {
-                    FullscreenControl.ISO -> camera.isoRange?.let { range ->
-                        LandscapeSliderColumns {
-                            VerticalValueSlider(
-                                label = "ISO",
-                                valueText = displayedIso.toString(),
-                                value = displayedIso.coerceIn(range.lower, range.upper).toFloat(),
-                                onValueChange = { onChange(config.copy(manualExposure = true, iso = it.toInt(), unrestrictedIso = false)) },
-                                valueRange = range.lower.toFloat()..range.upper.toFloat(),
-                                enabled = enabled && config.manualExposure,
-                                lightText = overlay,
-                                tickLabel = { it.roundToInt().toString() },
-                            )
-                        }
-                    }
-                    FullscreenControl.SHUTTER -> camera.exposureRange?.let { range ->
-                        val maximum = minOf(range.upper, config.maximumExposureNs).coerceAtLeast(range.lower)
-                        LandscapeSliderColumns {
-                            VerticalValueSlider(
-                                label = "快门",
-                                valueText = formatShutter(displayedExposureNs),
-                                value = (displayedExposureNs / 1_000f).coerceIn(range.lower / 1_000f, maximum / 1_000f),
-                                onValueChange = { onChange(config.copy(manualExposure = true, exposureNs = (it * 1_000).toLong(), unrestrictedExposure = false)) },
-                                valueRange = range.lower / 1_000f..maximum / 1_000f,
-                                enabled = enabled && config.manualExposure,
-                                lightText = overlay,
-                                tickLabel = { formatShutter((it * 1_000).toLong()) },
-                            )
-                        }
-                    }
-                    FullscreenControl.EV -> camera.exposureCompensationRange?.let { range ->
-                        LandscapeSliderColumns {
-                            VerticalValueSlider(
-                                label = "EV",
-                                valueText = exposureCompensationLabel(camera, config.exposureCompensation),
-                                value = config.exposureCompensation.coerceIn(range.lower, range.upper).toFloat(),
-                                onValueChange = { onChange(config.copy(exposureCompensation = it.toInt())) },
-                                valueRange = range.lower.toFloat()..range.upper.toFloat(),
-                                steps = (range.upper - range.lower - 1).coerceAtLeast(0),
-                                enabled = enabled && !config.manualExposure,
-                                lightText = overlay,
-                                tickLabel = { exposureCompensationLabel(camera, it.roundToInt()) },
-                            )
-                        }
-                    }
-                    FullscreenControl.WB -> LandscapeWhiteBalanceSliders(config, enabled, overlay, onChange)
-                    FullscreenControl.FOCUS -> if (config.focusMode == FocusMode.MANUAL && supportsManualFocus) {
-                        if (camera.minimumFocusDistance > 0f) {
+            if (!compact) {
+                Box(Modifier.weight(1f).fillMaxHeight()) {
+                    when (selected) {
+                        FullscreenControl.ISO -> camera.isoRange?.let { range ->
                             LandscapeSliderColumns {
                                 VerticalValueSlider(
-                                    label = "对焦",
-                                    valueText = focusDistanceLabel(displayedFocusDistance),
-                                    value = focusSliderPosition(displayedFocusDistance, camera.minimumFocusDistance),
-                                    onValueChange = {
-                                        onChange(config.copy(
-                                            focusDistanceDiopters = focusDistanceFromSlider(it, camera.minimumFocusDistance),
-                                            unrestrictedFocus = false,
-                                        ))
-                                    },
-                                    valueRange = 0f..1f,
-                                    enabled = enabled,
+                                    label = "ISO",
+                                    valueText = displayedIso.toString(),
+                                    value = displayedIso.coerceIn(range.lower, range.upper).toFloat(),
+                                    onValueChange = { onChange(config.copy(manualExposure = true, iso = it.toInt(), unrestrictedIso = false)) },
+                                    valueRange = range.lower.toFloat()..range.upper.toFloat(),
+                                    enabled = enabled && config.manualExposure,
                                     lightText = overlay,
-                                    tickLabel = { focusDistanceLabel(focusDistanceFromSlider(it, camera.minimumFocusDistance)) },
+                                    tickLabel = { it.roundToInt().toString() },
                                 )
                             }
-                        } else {
-                            Text("使用右侧对焦预设", color = foreground, modifier = Modifier.align(Alignment.Center))
                         }
+                        FullscreenControl.SHUTTER -> camera.exposureRange?.let { range ->
+                            val maximum = minOf(range.upper, config.maximumExposureNs).coerceAtLeast(range.lower)
+                            LandscapeSliderColumns {
+                                VerticalValueSlider(
+                                    label = "快门",
+                                    valueText = formatShutter(displayedExposureNs),
+                                    value = (displayedExposureNs / 1_000f).coerceIn(range.lower / 1_000f, maximum / 1_000f),
+                                    onValueChange = { onChange(config.copy(manualExposure = true, exposureNs = (it * 1_000).toLong(), unrestrictedExposure = false)) },
+                                    valueRange = range.lower / 1_000f..maximum / 1_000f,
+                                    enabled = enabled && config.manualExposure,
+                                    lightText = overlay,
+                                    tickLabel = { formatShutter((it * 1_000).toLong()) },
+                                )
+                            }
+                        }
+                        FullscreenControl.EV -> camera.exposureCompensationRange?.let { range ->
+                            LandscapeSliderColumns {
+                                VerticalValueSlider(
+                                    label = "EV",
+                                    valueText = exposureCompensationLabel(camera, config.exposureCompensation),
+                                    value = config.exposureCompensation.coerceIn(range.lower, range.upper).toFloat(),
+                                    onValueChange = { onChange(config.copy(exposureCompensation = it.toInt())) },
+                                    valueRange = range.lower.toFloat()..range.upper.toFloat(),
+                                    steps = (range.upper - range.lower - 1).coerceAtLeast(0),
+                                    enabled = enabled && !config.manualExposure,
+                                    lightText = overlay,
+                                    tickLabel = { exposureCompensationLabel(camera, it.roundToInt()) },
+                                )
+                            }
+                        }
+                        FullscreenControl.WB -> LandscapeWhiteBalanceSliders(config, enabled, overlay, onChange)
+                        FullscreenControl.FOCUS -> if (config.focusMode == FocusMode.MANUAL && supportsManualFocus) {
+                            if (camera.minimumFocusDistance > 0f) {
+                                LandscapeSliderColumns {
+                                    VerticalValueSlider(
+                                        label = "对焦",
+                                        valueText = focusDistanceLabel(displayedFocusDistance),
+                                        value = focusSliderPosition(displayedFocusDistance, camera.minimumFocusDistance),
+                                        onValueChange = {
+                                            onChange(config.copy(
+                                                focusDistanceDiopters = focusDistanceFromSlider(it, camera.minimumFocusDistance),
+                                                unrestrictedFocus = false,
+                                            ))
+                                        },
+                                        valueRange = 0f..1f,
+                                        enabled = enabled,
+                                        lightText = overlay,
+                                        tickLabel = { focusDistanceLabel(focusDistanceFromSlider(it, camera.minimumFocusDistance)) },
+                                    )
+                                }
+                            } else {
+                                Text("使用右侧对焦预设", color = foreground, modifier = Modifier.align(Alignment.Center))
+                            }
+                        }
+                        FullscreenControl.APERTURE -> Text(
+                            "点击左侧光圈按钮选择档位",
+                            color = foreground,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.align(Alignment.Center),
+                        )
                     }
-                    FullscreenControl.APERTURE -> Text(
-                        "点击左侧光圈按钮选择档位",
-                        color = foreground,
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.align(Alignment.Center),
-                    )
                 }
             }
         }
