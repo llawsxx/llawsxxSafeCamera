@@ -3,6 +3,7 @@ package com.llawsxx.safecamera.recording
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.params.ColorSpaceTransform
 import android.hardware.camera2.params.RggbChannelVector
 import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.TonemapCurve
@@ -149,11 +150,17 @@ object CameraRequestControls {
                 manualWhiteBalanceGains(config.whiteBalanceTemperature, config.whiteBalanceTint)
             }
             builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF)
-            builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
-            builder.set(
-                CaptureRequest.COLOR_CORRECTION_GAINS,
-                RggbChannelVector(gains.red, gains.greenEven, gains.greenOdd, gains.blue),
-            )
+            val transform = config.whiteBalanceColorTransform.toColorSpaceTransformOrNull()
+            if (transform != null) {
+                builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+                builder.set(
+                    CaptureRequest.COLOR_CORRECTION_GAINS,
+                    RggbChannelVector(gains.red, gains.greenEven, gains.greenOdd, gains.blue),
+                )
+                builder.set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, transform)
+            } else {
+                builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
+            }
         } else {
             builder.set(
                 CaptureRequest.CONTROL_AWB_MODE,
@@ -402,6 +409,7 @@ internal fun RecordingConfig.cameraRequestControlsKey(): List<Any?> = listOf(
     whiteBalanceGreenEvenGain,
     whiteBalanceGreenOddGain,
     whiteBalanceBlueGain,
+    whiteBalanceColorTransform,
     focusMode,
     focusDistanceDiopters,
     unrestrictedFocus,
@@ -417,6 +425,14 @@ internal fun RecordingConfig.cameraRequestControlsKey(): List<Any?> = listOf(
     noiseReductionMode,
     edgeMode,
 )
+
+internal fun ColorSpaceTransform.toPackedIntList(): List<Int> = IntArray(18).also {
+    copyElements(it, 0)
+}.toList()
+
+internal fun List<Int>.toColorSpaceTransformOrNull(): ColorSpaceTransform? = takeIf {
+    it.size == 18 && (1 until 18 step 2).all { index -> it[index] != 0 }
+}?.let { ColorSpaceTransform(it.toIntArray()) }
 
 internal fun createTonemapCurve(mode: CameraTonemapCurve, maximumPoints: Int): TonemapCurve {
     val points = maximumPoints.coerceIn(2, 256)

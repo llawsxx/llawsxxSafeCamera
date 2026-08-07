@@ -265,6 +265,7 @@ data class RecordingConfig(
     val whiteBalanceGreenEvenGain: Float = 1f,
     val whiteBalanceGreenOddGain: Float = 1f,
     val whiteBalanceBlueGain: Float = 1f,
+    val whiteBalanceColorTransform: List<Int> = emptyList(),
     val focusMode: FocusMode = FocusMode.CONTINUOUS,
     val focusDistanceDiopters: Float = 0f,
     val touchFocusEnabled: Boolean = false,
@@ -463,6 +464,7 @@ data class CameraExposureState(
     val whiteBalanceGreenEvenGain: Float? = null,
     val whiteBalanceGreenOddGain: Float? = null,
     val whiteBalanceBlueGain: Float? = null,
+    val whiteBalanceColorTransform: List<Int>? = null,
     val touchFocusRequestId: Long = 0L,
     val touchFocusState: TouchFocusState? = null,
 )

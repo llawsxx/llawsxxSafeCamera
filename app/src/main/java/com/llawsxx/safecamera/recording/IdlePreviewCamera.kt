@@ -335,6 +335,7 @@ class IdlePreviewCamera(context: Context) {
             if (session !== this@IdlePreviewCamera.session || camera == null) return
             val cameraId = activeCameraId ?: return
             val whiteBalanceGains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
+            val whiteBalanceTransform = result.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
             updateTouchFocusResult(request, result)
             result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.takeIf(Float::isFinite)?.let {
                 lastReportedFocusDistance = it
@@ -358,6 +359,7 @@ class IdlePreviewCamera(context: Context) {
                 whiteBalanceGreenEvenGain = whiteBalanceGains?.greenEven,
                 whiteBalanceGreenOddGain = whiteBalanceGains?.greenOdd,
                 whiteBalanceBlueGain = whiteBalanceGains?.blue,
+                whiteBalanceColorTransform = whiteBalanceTransform?.toPackedIntList(),
                 touchFocusRequestId = activeConfig?.touchFocusRequestId ?: 0L,
                 touchFocusState = touchFocusState,
             )

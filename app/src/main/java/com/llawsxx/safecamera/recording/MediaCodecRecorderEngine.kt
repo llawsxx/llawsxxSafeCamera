@@ -620,6 +620,7 @@ class MediaCodecRecorderEngine(
         ) {
             if (!running.get() || session !== this@MediaCodecRecorderEngine.session || camera == null) return
             val whiteBalanceGains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
+            val whiteBalanceTransform = result.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
             updateTouchFocusResult(request, result)
             result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.takeIf(Float::isFinite)?.let {
                 lastReportedFocusDistance = it
@@ -637,6 +638,7 @@ class MediaCodecRecorderEngine(
                     whiteBalanceGreenEvenGain = whiteBalanceGains?.greenEven,
                     whiteBalanceGreenOddGain = whiteBalanceGains?.greenOdd,
                     whiteBalanceBlueGain = whiteBalanceGains?.blue,
+                    whiteBalanceColorTransform = whiteBalanceTransform?.toPackedIntList(),
                     touchFocusRequestId = config.touchFocusRequestId,
                     touchFocusState = touchFocusState,
                 )
@@ -659,6 +661,7 @@ class MediaCodecRecorderEngine(
                 whiteBalanceGreenEvenGain = whiteBalanceGains?.greenEven,
                 whiteBalanceGreenOddGain = whiteBalanceGains?.greenOdd,
                 whiteBalanceBlueGain = whiteBalanceGains?.blue,
+                whiteBalanceColorTransform = whiteBalanceTransform?.toPackedIntList(),
                 touchFocusRequestId = config.touchFocusRequestId,
                 touchFocusState = touchFocusState,
             )
@@ -773,6 +776,7 @@ class MediaCodecRecorderEngine(
                 whiteBalanceGreenEvenGain = updated.whiteBalanceGreenEvenGain,
                 whiteBalanceGreenOddGain = updated.whiteBalanceGreenOddGain,
                 whiteBalanceBlueGain = updated.whiteBalanceBlueGain,
+                whiteBalanceColorTransform = updated.whiteBalanceColorTransform,
                 focusMode = updated.focusMode,
                 focusDistanceDiopters = updated.focusDistanceDiopters,
                 unrestrictedFocus = updated.unrestrictedFocus,

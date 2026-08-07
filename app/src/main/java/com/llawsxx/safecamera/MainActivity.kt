@@ -540,6 +540,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.whiteBalanceGreenEvenGain,
         config.whiteBalanceGreenOddGain,
         config.whiteBalanceBlueGain,
+        config.whiteBalanceColorTransform,
         config.focusMode,
         config.focusDistanceDiopters,
         config.unrestrictedFocus,
@@ -626,6 +627,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.whiteBalanceGreenEvenGain,
         config.whiteBalanceGreenOddGain,
         config.whiteBalanceBlueGain,
+        config.whiteBalanceColorTransform,
         config.focusMode,
         config.focusDistanceDiopters,
         config.unrestrictedFocus,
@@ -4365,7 +4367,7 @@ private fun RecordingConfig.withManualWhiteBalanceFromLive(
     live: CameraExposureState?,
     advanced: Boolean,
 ): RecordingConfig {
-    val liveGains = if (!manualWhiteBalance) {
+    val liveGains = if (!manualWhiteBalance && live?.cameraId == cameraId) {
         listOfNotNull(
             live?.whiteBalanceRedGain,
             live?.whiteBalanceGreenEvenGain,
@@ -4375,10 +4377,17 @@ private fun RecordingConfig.withManualWhiteBalanceFromLive(
     } else {
         null
     }
+    val candidateTransform = if (!manualWhiteBalance && live?.cameraId == cameraId) {
+        live?.whiteBalanceColorTransform?.takeIf {
+            it.size == 18 && (1 until 18 step 2).all { index -> it[index] != 0 }
+        }
+    } else null
+    val liveTransform = candidateTransform.takeIf { liveGains != null }
     if (liveGains == null) {
         return if (advanced) withAdvancedWhiteBalanceFromTemperature() else copy(
             manualWhiteBalance = true,
             advancedWhiteBalance = false,
+            whiteBalanceColorTransform = liveTransform ?: whiteBalanceColorTransform,
         )
     }
 
@@ -4394,6 +4403,7 @@ private fun RecordingConfig.withManualWhiteBalanceFromLive(
             whiteBalanceGreenEvenGain = liveGreenEven,
             whiteBalanceGreenOddGain = liveGreenOdd,
             whiteBalanceBlueGain = liveBlue,
+            whiteBalanceColorTransform = liveTransform ?: whiteBalanceColorTransform,
         )
     }
 
@@ -4429,6 +4439,7 @@ private fun RecordingConfig.withManualWhiteBalanceFromLive(
         whiteBalanceGreenEvenGain = liveGreenEven,
         whiteBalanceGreenOddGain = liveGreenOdd,
         whiteBalanceBlueGain = liveBlue,
+        whiteBalanceColorTransform = liveTransform ?: whiteBalanceColorTransform,
     )
 }
 

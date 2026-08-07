@@ -114,6 +114,7 @@ object RecorderController {
         whiteBalanceGreenEvenGain: Float?,
         whiteBalanceGreenOddGain: Float?,
         whiteBalanceBlueGain: Float?,
+        whiteBalanceColorTransform: List<Int>? = null,
         touchFocusRequestId: Long = 0L,
         touchFocusState: TouchFocusState? = null,
     ) {
@@ -135,6 +136,7 @@ object RecorderController {
             whiteBalanceGreenEvenGain,
             whiteBalanceGreenOddGain,
             whiteBalanceBlueGain,
+            whiteBalanceColorTransform,
             touchFocusRequestId,
             touchFocusState,
         )
