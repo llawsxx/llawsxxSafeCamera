@@ -46,6 +46,10 @@ internal class GpuRawVideoRenderer(
     sharpeningEnabled: Boolean,
     sharpeningStrength: Float,
     saturation: Float,
+    shadowLiftEnabled: Boolean,
+    shadowLiftKnee: Float,
+    shadowLiftTarget: Float,
+    shadowLiftSmoothness: Float,
     outputColorStandard: VideoColorStandard,
     outputColorTransfer: VideoColorTransfer,
     private val onError: (String) -> Unit,
@@ -86,6 +90,10 @@ internal class GpuRawVideoRenderer(
     private var sharpeningEnabled = sharpeningEnabled
     private var sharpeningStrength = sharpeningStrength.coerceIn(0f, 1f)
     private var saturation = saturation.coerceIn(0f, 2f)
+    private var shadowLiftEnabled = shadowLiftEnabled
+    private var shadowLiftKnee = shadowLiftKnee.coerceIn(0.1f, 0.9f)
+    private var shadowLiftTarget = shadowLiftTarget.coerceIn(this.shadowLiftKnee, 1f)
+    private var shadowLiftSmoothness = shadowLiftSmoothness.coerceIn(0f, 1f)
     private var outputColorStandard = outputColorStandard
     private val outputColorTransfer = outputColorTransfer
     private val rawTexture: Int
@@ -117,6 +125,8 @@ internal class GpuRawVideoRenderer(
     private val outputColorRow2Location: Int
     private val outputLumaCoefficientsLocation: Int
     private val outputSaturationLocation: Int
+    private val outputShadowLiftEnabledLocation: Int
+    private val outputShadowLiftParametersLocation: Int
     private val outputImageSizeLocation: Int
     private val outputHighQualityScalingLocation: Int
     private val finalOutputTexture: Int
@@ -359,6 +369,8 @@ internal class GpuRawVideoRenderer(
         outputColorRow2Location = GLES30.glGetUniformLocation(outputProgram, "uColorRow2")
         outputLumaCoefficientsLocation = GLES30.glGetUniformLocation(outputProgram, "uLumaCoefficients")
         outputSaturationLocation = GLES30.glGetUniformLocation(outputProgram, "uSaturation")
+        outputShadowLiftEnabledLocation = GLES30.glGetUniformLocation(outputProgram, "uShadowLiftEnabled")
+        outputShadowLiftParametersLocation = GLES30.glGetUniformLocation(outputProgram, "uShadowLiftParameters")
         outputImageSizeLocation = GLES30.glGetUniformLocation(outputProgram, "uLinearImageSize")
         outputHighQualityScalingLocation = GLES30.glGetUniformLocation(outputProgram, "uHighQualityScaling")
         GLES30.glUseProgram(outputProgram)
@@ -458,6 +470,10 @@ internal class GpuRawVideoRenderer(
         sharpeningEnabled: Boolean,
         sharpeningStrength: Float,
         saturation: Float,
+        shadowLiftEnabled: Boolean,
+        shadowLiftKnee: Float,
+        shadowLiftTarget: Float,
+        shadowLiftSmoothness: Float,
     ) {
         handler.post {
             if (released.get()) return@post
@@ -466,6 +482,10 @@ internal class GpuRawVideoRenderer(
             this.sharpeningEnabled = sharpeningEnabled
             this.sharpeningStrength = sharpeningStrength.coerceIn(0f, 1f)
             this.saturation = saturation.coerceIn(0f, 2f)
+            this.shadowLiftEnabled = shadowLiftEnabled
+            this.shadowLiftKnee = shadowLiftKnee.coerceIn(0.1f, 0.9f)
+            this.shadowLiftTarget = shadowLiftTarget.coerceIn(this.shadowLiftKnee, 1f)
+            this.shadowLiftSmoothness = shadowLiftSmoothness.coerceIn(0f, 1f)
         }
     }
 
@@ -537,6 +557,13 @@ internal class GpuRawVideoRenderer(
             GLES30.glUniform1i(raw.outputTransferLocation, transferValue(outputColorTransfer))
             GLES30.glUniform3fv(raw.outputLumaCoefficientsLocation, 1, lumaCoefficients(), 0)
             GLES30.glUniform1f(raw.outputSaturationLocation, saturation)
+            GLES30.glUniform1i(raw.outputShadowLiftEnabledLocation, if (shadowLiftEnabled) 1 else 0)
+            GLES30.glUniform3f(
+                raw.outputShadowLiftParametersLocation,
+                shadowLiftKnee,
+                shadowLiftTarget,
+                shadowLiftSmoothness,
+            )
         }
         bindColorLut()
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
@@ -684,6 +711,13 @@ internal class GpuRawVideoRenderer(
         )
         GLES30.glUniform3fv(outputLumaCoefficientsLocation, 1, lumaCoefficients(), 0)
         GLES30.glUniform1f(outputSaturationLocation, saturation)
+        GLES30.glUniform1i(outputShadowLiftEnabledLocation, if (shadowLiftEnabled) 1 else 0)
+        GLES30.glUniform3f(
+            outputShadowLiftParametersLocation,
+            shadowLiftKnee,
+            shadowLiftTarget,
+            shadowLiftSmoothness,
+        )
         GLES30.glUniform2f(outputImageSizeLocation, intermediateWidth.toFloat(), intermediateHeight.toFloat())
         GLES30.glUniform1i(
             outputHighQualityScalingLocation,
@@ -801,9 +835,24 @@ internal class GpuRawVideoRenderer(
                     val red = redIndex.toFloat() / (colorLutSize - 1)
                     val luma = lumaCoefficients[0] * red +
                         lumaCoefficients[1] * green + lumaCoefficients[2] * blue
-                    values[offset++] = encode((luma + (red - luma) * saturation).coerceIn(0f, 1f))
-                    values[offset++] = encode((luma + (green - luma) * saturation).coerceIn(0f, 1f))
-                    values[offset++] = encode((luma + (blue - luma) * saturation).coerceIn(0f, 1f))
+                    val mappedLuma = if (shadowLiftEnabled) {
+                        rawShadowLiftValue(luma, shadowLiftKnee, shadowLiftTarget, shadowLiftSmoothness)
+                    } else {
+                        luma
+                    }
+                    val lumaScale = if (luma > 0.000001f) mappedLuma / luma else 0f
+                    val liftedRed = red * lumaScale
+                    val liftedGreen = green * lumaScale
+                    val liftedBlue = blue * lumaScale
+                    values[offset++] = encode(
+                        (mappedLuma + (liftedRed - mappedLuma) * saturation).coerceIn(0f, 1f),
+                    )
+                    values[offset++] = encode(
+                        (mappedLuma + (liftedGreen - mappedLuma) * saturation).coerceIn(0f, 1f),
+                    )
+                    values[offset++] = encode(
+                        (mappedLuma + (liftedBlue - mappedLuma) * saturation).coerceIn(0f, 1f),
+                    )
                 }
             }
         }
@@ -983,6 +1032,8 @@ internal class GpuRawVideoRenderer(
             outputTransferLocation = GLES30.glGetUniformLocation(program, "uOutputTransfer"),
             outputLumaCoefficientsLocation = GLES30.glGetUniformLocation(program, "uLumaCoefficients"),
             outputSaturationLocation = GLES30.glGetUniformLocation(program, "uSaturation"),
+            outputShadowLiftEnabledLocation = GLES30.glGetUniformLocation(program, "uShadowLiftEnabled"),
+            outputShadowLiftParametersLocation = GLES30.glGetUniformLocation(program, "uShadowLiftParameters"),
         )
     }
 
@@ -1004,6 +1055,8 @@ internal class GpuRawVideoRenderer(
         val outputTransferLocation: Int,
         val outputLumaCoefficientsLocation: Int,
         val outputSaturationLocation: Int,
+        val outputShadowLiftEnabledLocation: Int,
+        val outputShadowLiftParametersLocation: Int,
     )
 
     private fun checkGl(operation: String) {
@@ -1111,6 +1164,8 @@ internal class GpuRawVideoRenderer(
                 uniform int uOutputTransfer;
                 uniform vec3 uLumaCoefficients;
                 uniform float uSaturation;
+                uniform int uShadowLiftEnabled;
+                uniform vec3 uShadowLiftParameters;
                 #if USE_COLOR_LUT
                     uniform sampler3D uColorLut;
                 #endif
@@ -1296,6 +1351,16 @@ internal class GpuRawVideoRenderer(
 
             #if COMBINED_FINAL_OUTPUT
                 #if !USE_COLOR_LUT
+                    float shadowLift(float value) {
+                        float knee = uShadowLiftParameters.x;
+                        float target = uShadowLiftParameters.y;
+                        float halfWidth = min(knee, 1.0 - knee) * uShadowLiftParameters.z * 0.5;
+                        float low = value * target / knee;
+                        float high = target + (value - knee) * (1.0 - target) / (1.0 - knee);
+                        if (halfWidth <= 0.000001) return value <= knee ? low : high;
+                        float blend = smoothstep(knee - halfWidth, knee + halfWidth, value);
+                        return clamp(mix(low, high, blend), 0.0, 1.0);
+                    }
                     float rec709(float value) {
                         value = clamp(value, 0.0, 1.0);
                         return value < 0.018 ? 4.5 * value : 1.099 * pow(value, 0.45) - 0.099;
@@ -1326,7 +1391,9 @@ internal class GpuRawVideoRenderer(
                     #else
                         value = clamp(value, 0.0, 1.0);
                         float luma = dot(value, uLumaCoefficients);
-                        value = mix(vec3(luma), value, uSaturation);
+                        float mappedLuma = uShadowLiftEnabled != 0 ? shadowLift(luma) : luma;
+                        value *= luma > 0.000001 ? mappedLuma / luma : 0.0;
+                        value = mix(vec3(mappedLuma), value, uSaturation);
                         if (uOutputTransfer == 1) return vec3(hlg(value.r), hlg(value.g), hlg(value.b));
                         if (uOutputTransfer == 2) return vec3(pq(value.r), pq(value.g), pq(value.b));
                         return vec3(rec709(value.r), rec709(value.g), rec709(value.b));
@@ -1368,6 +1435,8 @@ internal class GpuRawVideoRenderer(
             uniform sampler2D uLinearImage;
             uniform int uOutputTransfer;
             uniform vec3 uLumaCoefficients;
+            uniform int uShadowLiftEnabled;
+            uniform vec3 uShadowLiftParameters;
             #if USE_COLOR_LUT
                 uniform sampler3D uColorLut;
             #endif
@@ -1406,6 +1475,16 @@ internal class GpuRawVideoRenderer(
             }
 
             #if !USE_COLOR_LUT
+                float shadowLift(float value) {
+                    float knee = uShadowLiftParameters.x;
+                    float target = uShadowLiftParameters.y;
+                    float halfWidth = min(knee, 1.0 - knee) * uShadowLiftParameters.z * 0.5;
+                    float low = value * target / knee;
+                    float high = target + (value - knee) * (1.0 - target) / (1.0 - knee);
+                    if (halfWidth <= 0.000001) return value <= knee ? low : high;
+                    float blend = smoothstep(knee - halfWidth, knee + halfWidth, value);
+                    return clamp(mix(low, high, blend), 0.0, 1.0);
+                }
                 float rec709(float value) {
                     value = clamp(value, 0.0, 1.0);
                     return value < 0.018 ? 4.5 * value : 1.099 * pow(value, 0.45) - 0.099;
@@ -1436,7 +1515,9 @@ internal class GpuRawVideoRenderer(
                 #else
                     value = clamp(value, 0.0, 1.0);
                     float luma = dot(value, uLumaCoefficients);
-                    value = mix(vec3(luma), value, uSaturation);
+                    float mappedLuma = uShadowLiftEnabled != 0 ? shadowLift(luma) : luma;
+                    value *= luma > 0.000001 ? mappedLuma / luma : 0.0;
+                    value = mix(vec3(mappedLuma), value, uSaturation);
                     if (uOutputTransfer == 1) return vec3(hlg(value.r), hlg(value.g), hlg(value.b));
                     if (uOutputTransfer == 2) return vec3(pq(value.r), pq(value.g), pq(value.b));
                     return vec3(rec709(value.r), rec709(value.g), rec709(value.b));
@@ -1588,6 +1669,28 @@ private fun ColorSpaceTransform.toFloatMatrix(): FloatArray = FloatArray(9) { in
 
 private fun isHdrTransfer(transfer: VideoColorTransfer): Boolean =
     transfer == VideoColorTransfer.HLG || transfer == VideoColorTransfer.ST2084
+
+internal fun rawShadowLiftValue(
+    value: Float,
+    knee: Float,
+    target: Float,
+    smoothness: Float,
+): Float {
+    val safeKnee = knee.coerceIn(0.1f, 0.9f)
+    val safeTarget = target.coerceIn(safeKnee, 1f)
+    val x = value.coerceIn(0f, 1f)
+    val low = x * safeTarget / safeKnee
+    val high = safeTarget + (x - safeKnee) * (1f - safeTarget) / (1f - safeKnee)
+    val halfWidth = minOf(safeKnee, 1f - safeKnee) * smoothness.coerceIn(0f, 1f) * 0.5f
+    if (halfWidth <= 0.000001f) return if (x <= safeKnee) low else high
+    val blend = smoothStep(safeKnee - halfWidth, safeKnee + halfWidth, x)
+    return (low + (high - low) * blend).coerceIn(0f, 1f)
+}
+
+private fun smoothStep(edge0: Float, edge1: Float, value: Float): Float {
+    val t = ((value - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
+    return t * t * (3f - 2f * t)
+}
 
 private fun encodeRec709(value: Float): Float = when {
     value < 0.018f -> 4.5f * value

@@ -271,6 +271,10 @@ class MediaCodecRecorderEngine(
                 sharpeningEnabled = config.rawSharpeningEnabled,
                 sharpeningStrength = config.effectiveRawSharpeningStrength,
                 saturation = config.effectiveRawSaturation,
+                shadowLiftEnabled = config.rawShadowLiftEnabled,
+                shadowLiftKnee = config.effectiveRawShadowLiftKnee,
+                shadowLiftTarget = config.effectiveRawShadowLiftTarget,
+                shadowLiftSmoothness = config.effectiveRawShadowLiftSmoothness,
                 outputColorStandard = config.effectiveRawColorStandard,
                 outputColorTransfer = config.effectiveRawColorTransfer,
                 onError = ::fail,
@@ -791,6 +795,10 @@ class MediaCodecRecorderEngine(
                 rawSharpeningStrength = updated.rawSharpeningStrength,
                 rawColorStyle = updated.rawColorStyle,
                 rawCustomSaturation = updated.rawCustomSaturation,
+                rawShadowLiftEnabled = updated.rawShadowLiftEnabled,
+                rawShadowLiftKnee = updated.rawShadowLiftKnee,
+                rawShadowLiftTarget = updated.rawShadowLiftTarget,
+                rawShadowLiftSmoothness = updated.rawShadowLiftSmoothness,
             )
             rawRenderer?.updateProcessingParameters(
                 lensShadingCorrectionEnabled = config.rawLensShadingCorrectionEnabled,
@@ -798,6 +806,10 @@ class MediaCodecRecorderEngine(
                 sharpeningEnabled = config.rawSharpeningEnabled,
                 sharpeningStrength = config.effectiveRawSharpeningStrength,
                 saturation = config.effectiveRawSaturation,
+                shadowLiftEnabled = config.rawShadowLiftEnabled,
+                shadowLiftKnee = config.effectiveRawShadowLiftKnee,
+                shadowLiftTarget = config.effectiveRawShadowLiftTarget,
+                shadowLiftSmoothness = config.effectiveRawShadowLiftSmoothness,
             )
             if (previousConfig.cameraRequestControlsKey() != config.cameraRequestControlsKey()) {
                 cameraControlsPending = config.cameraRequestControlsKey() != submittedCameraControlsKey

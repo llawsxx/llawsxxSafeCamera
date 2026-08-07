@@ -204,6 +204,10 @@ data class RecordingConfig(
     val rawSharpeningStrength: Float = 0.32f,
     val rawColorStyle: RawColorStyle = RawColorStyle.STANDARD_DIRECT,
     val rawCustomSaturation: Float = 1.08f,
+    val rawShadowLiftEnabled: Boolean = false,
+    val rawShadowLiftKnee: Float = 0.65f,
+    val rawShadowLiftTarget: Float = 0.80f,
+    val rawShadowLiftSmoothness: Float = 0.50f,
     val videoBitrate: Int = 12_000_000,
     val videoBitrateMode: VideoBitrateMode = VideoBitrateMode.DEFAULT,
     val videoKeyFrameIntervalSeconds: Int = 2,
@@ -312,6 +316,10 @@ data class RecordingConfig(
         RawColorStyle.FAITHFUL -> 1f
         RawColorStyle.CUSTOM -> rawCustomSaturation.coerceIn(0f, 3f)
     }
+    val effectiveRawShadowLiftKnee: Float get() = rawShadowLiftKnee.coerceIn(0.1f, 0.9f)
+    val effectiveRawShadowLiftTarget: Float get() =
+        rawShadowLiftTarget.coerceIn(effectiveRawShadowLiftKnee, 1f)
+    val effectiveRawShadowLiftSmoothness: Float get() = rawShadowLiftSmoothness.coerceIn(0f, 1f)
     val requires10BitEncoding: Boolean get() = dynamicRange.is10Bit || rawHdrOutput
     val rawOutputPreset: RawOutputPreset? get() = RawOutputPreset.entries.firstOrNull {
         it.standard == effectiveRawColorStandard && it.transfer == effectiveRawColorTransfer &&

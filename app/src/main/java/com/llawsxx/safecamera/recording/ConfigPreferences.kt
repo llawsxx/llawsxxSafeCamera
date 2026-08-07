@@ -66,6 +66,10 @@ object ConfigPreferences {
             rawSharpeningStrength = p.getFloat("rawSharpeningStrength", 0.32f).coerceIn(0f, 1f),
             rawColorStyle = enumValue(p.getString("rawColorStyle", null), RawColorStyle.STANDARD_DIRECT),
             rawCustomSaturation = p.getFloat("rawCustomSaturation", 1.08f).coerceIn(0f, 2f),
+            rawShadowLiftEnabled = p.getBoolean("rawShadowLiftEnabled", false),
+            rawShadowLiftKnee = p.getFloat("rawShadowLiftKnee", 0.65f).coerceIn(0.1f, 0.9f),
+            rawShadowLiftTarget = p.getFloat("rawShadowLiftTarget", 0.80f).coerceIn(0.1f, 1f),
+            rawShadowLiftSmoothness = p.getFloat("rawShadowLiftSmoothness", 0.50f).coerceIn(0f, 1f),
             videoBitrate = p.getInt("videoBitrate", 12_000_000),
             videoBitrateMode = enumValue(p.getString("videoBitrateMode", null), VideoBitrateMode.DEFAULT),
             videoKeyFrameIntervalSeconds = p.getInt("videoKeyFrameIntervalSeconds", 2).coerceIn(0, 60),
@@ -205,6 +209,10 @@ object ConfigPreferences {
             .putFloat("rawSharpeningStrength", c.effectiveRawSharpeningStrength)
             .putString("rawColorStyle", c.rawColorStyle.name)
             .putFloat("rawCustomSaturation", c.rawCustomSaturation.coerceIn(0f, 2f))
+            .putBoolean("rawShadowLiftEnabled", c.rawShadowLiftEnabled)
+            .putFloat("rawShadowLiftKnee", c.effectiveRawShadowLiftKnee)
+            .putFloat("rawShadowLiftTarget", c.effectiveRawShadowLiftTarget)
+            .putFloat("rawShadowLiftSmoothness", c.effectiveRawShadowLiftSmoothness)
             .putInt("videoBitrate", c.videoBitrate)
             .putString("videoBitrateMode", c.videoBitrateMode.name)
             .putInt("videoKeyFrameIntervalSeconds", c.videoKeyFrameIntervalSeconds)

@@ -16,6 +16,7 @@ import com.llawsxx.safecamera.recording.ContainerFormat
 import com.llawsxx.safecamera.recording.LINEAR_BT709_TO_BT2020
 import com.llawsxx.safecamera.recording.multiply3x3
 import com.llawsxx.safecamera.recording.mapTouchFocusPoint
+import com.llawsxx.safecamera.recording.rawShadowLiftValue
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -85,6 +86,10 @@ class RecordingConfigTest {
         assertEquals(2, defaults.rawFrameBufferCapacity)
         assertEquals(RawColorStyle.STANDARD_DIRECT, defaults.rawColorStyle)
         assertEquals(1.08f, defaults.effectiveRawSaturation, 0f)
+        assertTrue(!defaults.rawShadowLiftEnabled)
+        assertEquals(0.65f, defaults.effectiveRawShadowLiftKnee, 0f)
+        assertEquals(0.80f, defaults.effectiveRawShadowLiftTarget, 0f)
+        assertEquals(0.50f, defaults.effectiveRawShadowLiftSmoothness, 0f)
         assertEquals("高质量（5×5 线性滤波）", RawDemosaicAlgorithm.LMMSE.label)
 
         val invalid = RecordingConfig(
@@ -97,6 +102,20 @@ class RecordingConfigTest {
 
         val faithful = RecordingConfig(rawColorStyle = RawColorStyle.FAITHFUL)
         assertEquals(1f, faithful.effectiveRawSaturation, 0f)
+    }
+
+    @Test
+    fun shadowLiftCurvePreservesEndpointsMapsKneeAndRemainsMonotonic() {
+        assertEquals(0f, rawShadowLiftValue(0f, 0.65f, 0.80f, 0.5f), 0.0001f)
+        assertEquals(0.80f, rawShadowLiftValue(0.65f, 0.65f, 0.80f, 0.5f), 0.0001f)
+        assertEquals(1f, rawShadowLiftValue(1f, 0.65f, 0.80f, 0.5f), 0.0001f)
+
+        var previous = 0f
+        for (step in 0..100) {
+            val value = rawShadowLiftValue(step / 100f, 0.65f, 0.80f, 1f)
+            assertTrue(value >= previous - 0.0001f)
+            previous = value
+        }
     }
 
     @Test

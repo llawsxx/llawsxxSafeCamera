@@ -63,6 +63,10 @@ class IdlePreviewCamera(context: Context) {
                 sharpeningEnabled = config.rawSharpeningEnabled,
                 sharpeningStrength = config.effectiveRawSharpeningStrength,
                 saturation = config.effectiveRawSaturation,
+                shadowLiftEnabled = config.rawShadowLiftEnabled,
+                shadowLiftKnee = config.effectiveRawShadowLiftKnee,
+                shadowLiftTarget = config.effectiveRawShadowLiftTarget,
+                shadowLiftSmoothness = config.effectiveRawShadowLiftSmoothness,
             )
             when {
                 config.rawProcessingEnabled &&
@@ -488,6 +492,10 @@ class IdlePreviewCamera(context: Context) {
                 sharpeningEnabled = config.rawSharpeningEnabled,
                 sharpeningStrength = config.effectiveRawSharpeningStrength,
                 saturation = config.effectiveRawSaturation,
+                shadowLiftEnabled = config.rawShadowLiftEnabled,
+                shadowLiftKnee = config.effectiveRawShadowLiftKnee,
+                shadowLiftTarget = config.effectiveRawShadowLiftTarget,
+                shadowLiftSmoothness = config.effectiveRawShadowLiftSmoothness,
                 outputColorStandard = config.effectiveRawColorStandard,
                 outputColorTransfer = config.effectiveRawColorTransfer,
                 onError = { message -> Log.w(TAG, message) },
@@ -530,6 +538,10 @@ private fun previousPipelineKey(config: RecordingConfig?): String? = config?.run
         rawColorLutEnabled,
         rawColorLutSize,
         effectiveRawSaturation,
+        rawShadowLiftEnabled,
+        effectiveRawShadowLiftKnee,
+        effectiveRawShadowLiftTarget,
+        effectiveRawShadowLiftSmoothness,
         rawFrameBufferCapacity,
         rawThreeAAuxiliaryYuvEnabled,
         effectiveRawColorStandard,

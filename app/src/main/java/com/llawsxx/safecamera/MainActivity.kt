@@ -561,6 +561,10 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.rawSharpeningStrength,
         config.rawColorStyle,
         config.rawCustomSaturation,
+        config.rawShadowLiftEnabled,
+        config.rawShadowLiftKnee,
+        config.rawShadowLiftTarget,
+        config.rawShadowLiftSmoothness,
     ) {
         if (state is RecorderState.Recording) {
             RecorderController.updateCameraControls(context, config)
@@ -648,6 +652,10 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.rawSharpeningStrength,
         config.rawColorStyle,
         config.rawCustomSaturation,
+        config.rawShadowLiftEnabled,
+        config.rawShadowLiftKnee,
+        config.rawShadowLiftTarget,
+        config.rawShadowLiftSmoothness,
         config.colorStandard,
         config.colorTransfer,
         config.previewMode,
@@ -1204,6 +1212,40 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                         enabled = !recording,
                                     )
                                 }
+                                ToggleLine(
+                                    "暗部提亮",
+                                    config.rawShadowLiftEnabled,
+                                    !recording,
+                                ) { enabled -> config = config.copy(rawShadowLiftEnabled = enabled) }
+                                Text("暗部范围 ${(config.effectiveRawShadowLiftKnee * 100f).format0()}%")
+                                Slider(
+                                    value = config.effectiveRawShadowLiftKnee,
+                                    onValueChange = { value ->
+                                        config = config.copy(
+                                            rawShadowLiftKnee = value,
+                                            rawShadowLiftTarget = maxOf(value, config.rawShadowLiftTarget),
+                                        )
+                                    },
+                                    valueRange = 0.1f..0.9f,
+                                    steps = 15,
+                                    enabled = !recording && config.rawShadowLiftEnabled,
+                                )
+                                Text("暗部目标 ${(config.effectiveRawShadowLiftTarget * 100f).format0()}%")
+                                Slider(
+                                    value = config.effectiveRawShadowLiftTarget,
+                                    onValueChange = { config = config.copy(rawShadowLiftTarget = it) },
+                                    valueRange = config.effectiveRawShadowLiftKnee..1f,
+                                    steps = 19,
+                                    enabled = !recording && config.rawShadowLiftEnabled,
+                                )
+                                Text("转折平滑 ${(config.effectiveRawShadowLiftSmoothness * 100f).format0()}%")
+                                Slider(
+                                    value = config.effectiveRawShadowLiftSmoothness,
+                                    onValueChange = { config = config.copy(rawShadowLiftSmoothness = it) },
+                                    valueRange = 0f..1f,
+                                    steps = 19,
+                                    enabled = !recording && config.rawShadowLiftEnabled,
+                                )
                                 Labeled("RAW 输出预设") {
                                     ChoiceRow(
                                         RawOutputPreset.entries,
