@@ -272,7 +272,6 @@ class MediaCodecRecorderEngine(
                 sharpeningStrength = config.effectiveRawSharpeningStrength,
                 contrast = config.effectiveRawContrast,
                 saturation = config.effectiveRawSaturation,
-                highlightCompression = config.effectiveRawHighlightCompression,
                 outputColorStandard = config.effectiveRawColorStandard,
                 outputColorTransfer = config.effectiveRawColorTransfer,
                 onError = ::fail,
@@ -794,7 +793,6 @@ class MediaCodecRecorderEngine(
                 rawColorStyle = updated.rawColorStyle,
                 rawCustomContrast = updated.rawCustomContrast,
                 rawCustomSaturation = updated.rawCustomSaturation,
-                rawCustomHighlightCompression = updated.rawCustomHighlightCompression,
             )
             rawRenderer?.updateProcessingParameters(
                 lensShadingCorrectionEnabled = config.rawLensShadingCorrectionEnabled,
@@ -803,7 +801,6 @@ class MediaCodecRecorderEngine(
                 sharpeningStrength = config.effectiveRawSharpeningStrength,
                 contrast = config.effectiveRawContrast,
                 saturation = config.effectiveRawSaturation,
-                highlightCompression = config.effectiveRawHighlightCompression,
             )
             if (previousConfig.cameraRequestControlsKey() != config.cameraRequestControlsKey()) {
                 cameraControlsPending = config.cameraRequestControlsKey() != submittedCameraControlsKey

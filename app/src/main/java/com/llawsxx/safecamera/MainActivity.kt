@@ -562,7 +562,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.rawColorStyle,
         config.rawCustomContrast,
         config.rawCustomSaturation,
-        config.rawCustomHighlightCompression,
     ) {
         if (state is RecorderState.Recording) {
             RecorderController.updateCameraControls(context, config)
@@ -650,7 +649,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.rawColorStyle,
         config.rawCustomContrast,
         config.rawCustomSaturation,
-        config.rawCustomHighlightCompression,
         config.colorStandard,
         config.colorTransfer,
         config.previewMode,
@@ -1212,16 +1210,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                         onValueChange = { config = config.copy(rawCustomSaturation = it) },
                                         valueRange = 0f..3f,
                                         steps = 29,
-                                        enabled = !recording,
-                                    )
-                                    Text("高光压缩 ${(config.effectiveRawHighlightCompression * 100f).format0()}%")
-                                    Slider(
-                                        value = config.effectiveRawHighlightCompression,
-                                        onValueChange = {
-                                            config = config.copy(rawCustomHighlightCompression = it)
-                                        },
-                                        valueRange = 0f..1f,
-                                        steps = 19,
                                         enabled = !recording,
                                     )
                                 }

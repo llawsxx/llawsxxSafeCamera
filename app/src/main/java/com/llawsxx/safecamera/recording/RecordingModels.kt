@@ -205,7 +205,6 @@ data class RecordingConfig(
     val rawColorStyle: RawColorStyle = RawColorStyle.STANDARD_DIRECT,
     val rawCustomContrast: Float = 1.08f,
     val rawCustomSaturation: Float = 1.08f,
-    val rawCustomHighlightCompression: Float = 0.45f,
     val videoBitrate: Int = 12_000_000,
     val videoBitrateMode: VideoBitrateMode = VideoBitrateMode.DEFAULT,
     val videoKeyFrameIntervalSeconds: Int = 2,
@@ -318,11 +317,6 @@ data class RecordingConfig(
         RawColorStyle.STANDARD_DIRECT -> 1.08f
         RawColorStyle.FAITHFUL -> 1f
         RawColorStyle.CUSTOM -> rawCustomSaturation.coerceIn(0f, 3f)
-    }
-    val effectiveRawHighlightCompression: Float get() = when (rawColorStyle) {
-        RawColorStyle.STANDARD_DIRECT -> 0.45f
-        RawColorStyle.FAITHFUL -> 0f
-        RawColorStyle.CUSTOM -> rawCustomHighlightCompression.coerceIn(0f, 1f)
     }
     val requires10BitEncoding: Boolean get() = dynamicRange.is10Bit || rawHdrOutput
     val rawOutputPreset: RawOutputPreset? get() = RawOutputPreset.entries.firstOrNull {

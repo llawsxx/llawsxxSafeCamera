@@ -47,7 +47,6 @@ internal class GpuRawVideoRenderer(
     sharpeningStrength: Float,
     contrast: Float,
     saturation: Float,
-    highlightCompression: Float,
     outputColorStandard: VideoColorStandard,
     outputColorTransfer: VideoColorTransfer,
     private val onError: (String) -> Unit,
@@ -89,7 +88,6 @@ internal class GpuRawVideoRenderer(
     private var sharpeningStrength = sharpeningStrength.coerceIn(0f, 1f)
     private var contrast = contrast.coerceIn(0.7f, 1.3f)
     private var saturation = saturation.coerceIn(0f, 2f)
-    private var highlightCompression = highlightCompression.coerceIn(0f, 1f)
     private var outputColorStandard = outputColorStandard
     private val outputColorTransfer = outputColorTransfer
     private val rawTexture: Int
@@ -121,7 +119,6 @@ internal class GpuRawVideoRenderer(
     private val outputColorRow2Location: Int
     private val outputContrastLocation: Int
     private val outputSaturationLocation: Int
-    private val outputHighlightCompressionLocation: Int
     private val outputImageSizeLocation: Int
     private val outputHighQualityScalingLocation: Int
     private val finalOutputTexture: Int
@@ -357,7 +354,6 @@ internal class GpuRawVideoRenderer(
         outputColorRow2Location = GLES30.glGetUniformLocation(outputProgram, "uColorRow2")
         outputContrastLocation = GLES30.glGetUniformLocation(outputProgram, "uContrast")
         outputSaturationLocation = GLES30.glGetUniformLocation(outputProgram, "uSaturation")
-        outputHighlightCompressionLocation = GLES30.glGetUniformLocation(outputProgram, "uHighlightCompression")
         outputImageSizeLocation = GLES30.glGetUniformLocation(outputProgram, "uLinearImageSize")
         outputHighQualityScalingLocation = GLES30.glGetUniformLocation(outputProgram, "uHighQualityScaling")
         GLES30.glUseProgram(outputProgram)
@@ -458,7 +454,6 @@ internal class GpuRawVideoRenderer(
         sharpeningStrength: Float,
         contrast: Float,
         saturation: Float,
-        highlightCompression: Float,
     ) {
         handler.post {
             if (released.get()) return@post
@@ -468,7 +463,6 @@ internal class GpuRawVideoRenderer(
             this.sharpeningStrength = sharpeningStrength.coerceIn(0f, 1f)
             this.contrast = contrast.coerceIn(0.7f, 1.3f)
             this.saturation = saturation.coerceIn(0f, 2f)
-            this.highlightCompression = highlightCompression.coerceIn(0f, 1f)
         }
     }
 
@@ -540,7 +534,6 @@ internal class GpuRawVideoRenderer(
             GLES30.glUniform1i(raw.outputTransferLocation, transferValue(outputColorTransfer))
             GLES30.glUniform1f(raw.outputContrastLocation, contrast)
             GLES30.glUniform1f(raw.outputSaturationLocation, saturation)
-            GLES30.glUniform1f(raw.outputHighlightCompressionLocation, highlightCompression)
         }
         bindTransferLut()
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
@@ -688,7 +681,6 @@ internal class GpuRawVideoRenderer(
         )
         GLES30.glUniform1f(outputContrastLocation, contrast)
         GLES30.glUniform1f(outputSaturationLocation, saturation)
-        GLES30.glUniform1f(outputHighlightCompressionLocation, highlightCompression)
         GLES30.glUniform2f(outputImageSizeLocation, intermediateWidth.toFloat(), intermediateHeight.toFloat())
         GLES30.glUniform1i(
             outputHighQualityScalingLocation,
@@ -974,7 +966,6 @@ internal class GpuRawVideoRenderer(
             outputTransferLocation = GLES30.glGetUniformLocation(program, "uOutputTransfer"),
             outputContrastLocation = GLES30.glGetUniformLocation(program, "uContrast"),
             outputSaturationLocation = GLES30.glGetUniformLocation(program, "uSaturation"),
-            outputHighlightCompressionLocation = GLES30.glGetUniformLocation(program, "uHighlightCompression"),
         )
     }
 
@@ -996,7 +987,6 @@ internal class GpuRawVideoRenderer(
         val outputTransferLocation: Int,
         val outputContrastLocation: Int,
         val outputSaturationLocation: Int,
-        val outputHighlightCompressionLocation: Int,
     )
 
     private fun checkGl(operation: String) {
@@ -1096,7 +1086,6 @@ internal class GpuRawVideoRenderer(
                 uniform int uOutputTransfer;
                 uniform float uContrast;
                 uniform float uSaturation;
-                uniform float uHighlightCompression;
                 #if USE_TRANSFER_LUT
                     uniform sampler2D uTransferLut;
                 #endif
@@ -1319,15 +1308,6 @@ internal class GpuRawVideoRenderer(
                         return vec3(rec709(value.r), rec709(value.g), rec709(value.b));
                     #endif
                 }
-                vec3 compressHighlights(vec3 value) {
-                    const float knee = 0.65;
-                    float peak = max(value.r, max(value.g, value.b));
-                    if (peak <= knee || uHighlightCompression <= 0.0) return value;
-                    float excess = peak - knee;
-                    float compressedPeak = knee + excess /
-                        (1.0 + 2.0 * uHighlightCompression * excess);
-                    return value * (compressedPeak / peak);
-                }
             #endif
 
             void main() {
@@ -1341,7 +1321,6 @@ internal class GpuRawVideoRenderer(
                     vec3 corrected = rgb;
                 #endif
                 #if COMBINED_FINAL_OUTPUT
-                    corrected = compressHighlights(corrected);
                     vec3 encoded = encodeTransfer(clamp(corrected, 0.0, 1.0));
                     float luma = dot(encoded, vec3(0.2126, 0.7152, 0.0722));
                     encoded = mix(vec3(luma), encoded, uSaturation);
@@ -1377,7 +1356,6 @@ internal class GpuRawVideoRenderer(
             #endif
             uniform float uContrast;
             uniform float uSaturation;
-            uniform float uHighlightCompression;
             uniform vec2 uLinearImageSize;
             uniform int uHighQualityScaling;
 
@@ -1444,15 +1422,6 @@ internal class GpuRawVideoRenderer(
                     return vec3(rec709(value.r), rec709(value.g), rec709(value.b));
                 #endif
             }
-            vec3 compressHighlights(vec3 value) {
-                const float knee = 0.65;
-                float peak = max(value.r, max(value.g, value.b));
-                if (peak <= knee || uHighlightCompression <= 0.0) return value;
-                float excess = peak - knee;
-                float compressedPeak = knee + excess /
-                    (1.0 + 2.0 * uHighlightCompression * excess);
-                return value * (compressedPeak / peak);
-            }
             void main() {
                 vec3 linear = uHighQualityScaling != 0 ?
                     sampleBicubic(vTexCoord) : texture(uLinearImage, vTexCoord).rgb;
@@ -1464,7 +1433,7 @@ internal class GpuRawVideoRenderer(
                     );
                     linear = max(linear, vec3(0.0));
                 #endif
-                linear = compressHighlights(max(linear, vec3(0.0)));
+                linear = max(linear, vec3(0.0));
                 vec3 encoded = encodeTransfer(clamp(linear, 0.0, 1.0));
                 float luma = dot(encoded, vec3(0.2126, 0.7152, 0.0722));
                 encoded = mix(vec3(luma), encoded, uSaturation);

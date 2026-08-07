@@ -64,8 +64,6 @@ object ConfigPreferences {
             rawColorStyle = enumValue(p.getString("rawColorStyle", null), RawColorStyle.STANDARD_DIRECT),
             rawCustomContrast = p.getFloat("rawCustomContrast", 1.08f).coerceIn(0.7f, 1.3f),
             rawCustomSaturation = p.getFloat("rawCustomSaturation", 1.08f).coerceIn(0f, 2f),
-            rawCustomHighlightCompression =
-                p.getFloat("rawCustomHighlightCompression", 0.45f).coerceIn(0f, 1f),
             videoBitrate = p.getInt("videoBitrate", 12_000_000),
             videoBitrateMode = enumValue(p.getString("videoBitrateMode", null), VideoBitrateMode.DEFAULT),
             videoKeyFrameIntervalSeconds = p.getInt("videoKeyFrameIntervalSeconds", 2).coerceIn(0, 60),
@@ -206,7 +204,6 @@ object ConfigPreferences {
             .putString("rawColorStyle", c.rawColorStyle.name)
             .putFloat("rawCustomContrast", c.rawCustomContrast.coerceIn(0.7f, 1.3f))
             .putFloat("rawCustomSaturation", c.rawCustomSaturation.coerceIn(0f, 2f))
-            .putFloat("rawCustomHighlightCompression", c.rawCustomHighlightCompression.coerceIn(0f, 1f))
             .putInt("videoBitrate", c.videoBitrate)
             .putString("videoBitrateMode", c.videoBitrateMode.name)
             .putInt("videoKeyFrameIntervalSeconds", c.videoKeyFrameIntervalSeconds)
