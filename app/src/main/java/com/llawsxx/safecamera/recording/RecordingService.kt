@@ -13,6 +13,8 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.NoiseSuppressor
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.llawsxx.safecamera.MainActivity
@@ -88,21 +90,29 @@ class RecordingService : Service() {
             finishWithError("中心裁切录制需要 Android 8.0 或更高版本")
             return
         }
-        if (config.audioAutomaticGainControl) {
+        if (config.audioSessionEffectsRequested) {
             if (!config.hasAudio) {
-                finishWithError("当前录制模式不包含音频，无法启用自动增益控制（AGC）")
+                finishWithError("当前录制模式不包含音频，无法控制音频效果")
                 return
             }
             if (config.highSpeedMode) {
-                finishWithError("高速录像模式不支持自动增益控制（AGC）")
+                finishWithError("高速录像模式不支持控制音频效果")
                 return
             }
-            if (!AutomaticGainControl.isAvailable()) {
+            if (config.audioAutomaticGainControl && !AutomaticGainControl.isAvailable()) {
                 finishWithError("当前设备不支持自动增益控制（AGC）")
                 return
             }
+            if (config.audioDisableNoiseSuppressor && !NoiseSuppressor.isAvailable()) {
+                finishWithError("当前设备不支持系统降噪（NS）控制")
+                return
+            }
+            if (config.audioDisableEchoCanceler && !AcousticEchoCanceler.isAvailable()) {
+                finishWithError("当前设备不支持回声消除（AEC）控制")
+                return
+            }
             if (!config.hasVideo && config.container != ContainerFormat.MPEG_TS) {
-                finishWithError("纯音频 MP4 录制不支持自动增益控制（AGC）")
+                finishWithError("纯音频 MP4 录制不支持绑定系统音频效果")
                 return
             }
         }

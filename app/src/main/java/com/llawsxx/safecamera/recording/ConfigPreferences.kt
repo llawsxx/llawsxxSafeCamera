@@ -87,6 +87,9 @@ object ConfigPreferences {
             audioSampleRate = p.getInt("audioSampleRate", 48_000),
             audioChannelCount = p.getInt("audioChannelCount", 2).coerceIn(1, 2),
             audioAutomaticGainControl = p.getBoolean("audioAutomaticGainControl", false),
+            audioDisableNoiseSuppressor = p.getBoolean("audioDisableNoiseSuppressor", false),
+            audioDisableEchoCanceler = p.getBoolean("audioDisableEchoCanceler", false),
+            audioInputSource = enumValue(p.getString("audioInputSource", null), AudioInputSource.MIC),
             audioInputDeviceId = p.getInt("audioInputDeviceId", -1).takeIf { it >= 0 },
             videoCodec = enumValue(p.getString("videoCodec", null), VideoCodec.H264),
             dynamicRange = enumValue(p.getString("dynamicRange", null), VideoDynamicRange.SDR),
@@ -240,6 +243,9 @@ object ConfigPreferences {
             .putInt("audioSampleRate", c.audioSampleRate)
             .putInt("audioChannelCount", c.audioChannelCount)
             .putBoolean("audioAutomaticGainControl", c.audioAutomaticGainControl)
+            .putBoolean("audioDisableNoiseSuppressor", c.audioDisableNoiseSuppressor)
+            .putBoolean("audioDisableEchoCanceler", c.audioDisableEchoCanceler)
+            .putString("audioInputSource", c.audioInputSource.name)
             .putInt("audioInputDeviceId", c.audioInputDeviceId ?: -1)
             .putString("videoCodec", c.videoCodec.name)
             .putString("dynamicRange", c.dynamicRange.name)

@@ -396,7 +396,7 @@ class CameraRecorderEngine(
         outputPath = null
         val activeRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) MediaRecorder(context) else @Suppress("DEPRECATION") MediaRecorder()
         recorder = activeRecorder
-        if (config.hasAudio) activeRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+        if (config.hasAudio) activeRecorder.setAudioSource(config.audioInputSource.mediaRecorderValue)
         config.audioInputDeviceId?.takeIf { config.hasAudio }?.let { selectedId ->
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 val device = AudioInputDevices.find(context, selectedId)

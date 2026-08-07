@@ -210,6 +210,30 @@ class RecordingConfigTest {
     }
 
     @Test
+    fun audioEffectOverridesRequestMediaCodecEngineForVideoRecording() {
+        assertTrue(
+            RecordingConfig(audioDisableNoiseSuppressor = true).mediaCodecEngineRequested,
+        )
+        assertTrue(
+            RecordingConfig(audioDisableEchoCanceler = true).mediaCodecEngineRequested,
+        )
+        assertTrue(
+            !RecordingConfig(
+                mode = com.llawsxx.safecamera.recording.RecordingMode.AUDIO,
+                audioDisableNoiseSuppressor = true,
+                audioDisableEchoCanceler = true,
+            ).mediaCodecEngineRequested,
+        )
+        assertTrue(
+            !RecordingConfig(
+                mode = com.llawsxx.safecamera.recording.RecordingMode.VIDEO,
+                audioDisableNoiseSuppressor = true,
+                audioDisableEchoCanceler = true,
+            ).mediaCodecEngineRequested,
+        )
+    }
+
+    @Test
     fun mpegTsUsesAacLcProfile() {
         val config = RecordingConfig(
             container = ContainerFormat.MPEG_TS,

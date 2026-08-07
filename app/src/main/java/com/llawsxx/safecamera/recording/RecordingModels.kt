@@ -37,6 +37,11 @@ enum class AudioAacProfile(
     ELD("AAC-ELD", MediaCodecInfo.CodecProfileLevel.AACObjectELD, MediaRecorder.AudioEncoder.AAC_ELD),
 }
 
+enum class AudioInputSource(val label: String, val mediaRecorderValue: Int) : Serializable {
+    MIC("MIC（标准麦克风）", MediaRecorder.AudioSource.MIC),
+    UNPROCESSED("UNPROCESSED（未经处理）", MediaRecorder.AudioSource.UNPROCESSED),
+}
+
 enum class VideoDynamicRange(
     val label: String,
     val cameraProfile: Long,
@@ -225,6 +230,9 @@ data class RecordingConfig(
     val audioSampleRate: Int = 48_000,
     val audioChannelCount: Int = 2,
     val audioAutomaticGainControl: Boolean = false,
+    val audioDisableNoiseSuppressor: Boolean = false,
+    val audioDisableEchoCanceler: Boolean = false,
+    val audioInputSource: AudioInputSource = AudioInputSource.MIC,
     val audioInputDeviceId: Int? = null,
     val videoCodec: VideoCodec = VideoCodec.H264,
     val dynamicRange: VideoDynamicRange = VideoDynamicRange.SDR,
@@ -350,8 +358,10 @@ data class RecordingConfig(
         videoKeyFrameIntervalSeconds != 2 || videoMaxBFrames != 0
     val effectiveAudioAacProfile: AudioAacProfile get() =
         if (container == ContainerFormat.MPEG_TS) AudioAacProfile.LC else audioAacProfile
+    val audioSessionEffectsRequested: Boolean get() =
+        audioAutomaticGainControl || audioDisableNoiseSuppressor || audioDisableEchoCanceler
     val mediaCodecEngineRequested: Boolean get() = mediaCodecMode || customVideoEncoderParameters ||
-        (hasVideo && hasAudio && audioAutomaticGainControl) ||
+        (hasVideo && hasAudio && audioSessionEffectsRequested) ||
         customColorMetadata || videoTransformEnabled || rawProcessingEnabled ||
         dynamicRange != VideoDynamicRange.SDR || manualSpsVuiRewriteEnabled
     val transformWidth: Int get() = if (cropEnabled) cropWidth else width

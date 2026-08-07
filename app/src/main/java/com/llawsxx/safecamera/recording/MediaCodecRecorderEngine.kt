@@ -18,8 +18,6 @@ import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.media.MediaMuxer
-import android.media.MediaRecorder
-import android.media.audiofx.AutomaticGainControl
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
@@ -71,7 +69,7 @@ class MediaCodecRecorderEngine(
     @Volatile private var videoCodec: MediaCodec? = null
     @Volatile private var audioCodec: MediaCodec? = null
     @Volatile private var audioRecord: AudioRecord? = null
-    private var automaticGainControl: AutomaticGainControl? = null
+    private var audioCaptureEffects: AudioCaptureEffects? = null
     @Volatile private var output: OutputHandle? = null
     @Volatile private var mux: EncodedMuxCoordinator? = null
     @Volatile private var tsOutput: NativeTsOutput? = null
@@ -312,22 +310,15 @@ class MediaCodecRecorderEngine(
         require(minBuffer > 0) { "设备不支持 ${sampleRate / 1000.0} kHz、${if (channelCount == 1) "单声道" else "双声道"}录音" }
         @SuppressLint("MissingPermission")
         val record = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
+            config.audioInputSource.mediaRecorderValue,
             sampleRate,
             channelMask,
             AudioFormat.ENCODING_PCM_16BIT,
             max(minBuffer * 2, 16_384),
         )
+        audioRecord = record
         require(record.state == AudioRecord.STATE_INITIALIZED) { "无法初始化麦克风" }
-        if (config.audioAutomaticGainControl) {
-            require(AutomaticGainControl.isAvailable()) { "当前设备不支持自动增益控制（AGC）" }
-            automaticGainControl = requireNotNull(AutomaticGainControl.create(record.audioSessionId)) {
-                "无法为当前音频输入创建自动增益控制（AGC）"
-            }.apply {
-                enabled = true
-                require(this.enabled) { "当前音频输入无法启用自动增益控制（AGC）" }
-            }
-        }
+        audioCaptureEffects = AudioCaptureEffects.create(record.audioSessionId, config)
         config.audioInputDeviceId?.let { selectedId ->
             val device = AudioInputDevices.find(context, selectedId)
             when {
@@ -335,8 +326,6 @@ class MediaCodecRecorderEngine(
                 !record.setPreferredDevice(device) -> onNotice("无法使用所选麦克风，已使用系统默认麦克风")
             }
         }
-        audioRecord = record
-
         val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, channelCount).apply {
             setInteger(MediaFormat.KEY_AAC_PROFILE, config.effectiveAudioAacProfile.mediaCodecValue)
             setInteger(MediaFormat.KEY_BIT_RATE, config.audioBitrate)
@@ -976,8 +965,7 @@ class MediaCodecRecorderEngine(
         runCatching { transformRenderer?.release() }; transformRenderer = null
         runCatching { videoCodec?.stop() }; runCatching { videoCodec?.release() }; videoCodec = null
         runCatching { audioCodec?.stop() }; runCatching { audioCodec?.release() }; audioCodec = null
-        runCatching { automaticGainControl?.enabled = false }
-        runCatching { automaticGainControl?.release() }; automaticGainControl = null
+        audioCaptureEffects?.release(); audioCaptureEffects = null
         runCatching { audioRecord?.release() }; audioRecord = null
         runCatching { encoderSurface?.release() }; encoderSurface = null
     }

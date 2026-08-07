@@ -11,7 +11,9 @@ import android.hardware.display.DisplayManager
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -138,6 +140,7 @@ import com.llawsxx.safecamera.recording.RawDemosaicAlgorithm
 import com.llawsxx.safecamera.recording.RawScalingQuality
 import com.llawsxx.safecamera.recording.RawSensorInfo
 import com.llawsxx.safecamera.recording.AudioAacProfile
+import com.llawsxx.safecamera.recording.AudioInputSource
 import com.llawsxx.safecamera.recording.VideoBitrateMode
 import com.llawsxx.safecamera.recording.VideoCodec
 import com.llawsxx.safecamera.recording.VideoDynamicRange
@@ -428,11 +431,33 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             config = config.copy(audioAacProfile = AudioAacProfile.LC)
         }
     }
-    LaunchedEffect(config.mode, config.container, config.audioAutomaticGainControl) {
-        val agcPathSupported = config.hasAudio &&
+    LaunchedEffect(config.audioInputSource) {
+        val unprocessedAvailable = context.getSystemService(AudioManager::class.java).getProperty(
+            AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED,
+        ) == "true"
+        if (config.audioInputSource == AudioInputSource.UNPROCESSED && !unprocessedAvailable) {
+            config = config.copy(audioInputSource = AudioInputSource.MIC)
+        }
+    }
+    LaunchedEffect(
+        config.mode,
+        config.container,
+        config.audioAutomaticGainControl,
+        config.audioDisableNoiseSuppressor,
+        config.audioDisableEchoCanceler,
+    ) {
+        val effectPathSupported = config.hasAudio &&
             (config.hasVideo || config.container == ContainerFormat.MPEG_TS) && !config.highSpeedMode
-        if (config.audioAutomaticGainControl && (!agcPathSupported || !AutomaticGainControl.isAvailable())) {
-            config = config.copy(audioAutomaticGainControl = false)
+        val normalized = config.copy(
+            audioAutomaticGainControl = config.audioAutomaticGainControl &&
+                effectPathSupported && AutomaticGainControl.isAvailable(),
+            audioDisableNoiseSuppressor = config.audioDisableNoiseSuppressor &&
+                effectPathSupported && NoiseSuppressor.isAvailable(),
+            audioDisableEchoCanceler = config.audioDisableEchoCanceler &&
+                effectPathSupported && AcousticEchoCanceler.isAvailable(),
+        )
+        if (normalized != config) {
+            config = normalized
         }
     }
     LaunchedEffect(config.mediaCodecEngineRequested, config.dynamicRange) {
@@ -456,6 +481,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 segmentMinutes = 0,
                 streamEnabled = false,
                 audioAutomaticGainControl = false,
+                audioDisableNoiseSuppressor = false,
+                audioDisableEchoCanceler = false,
                 rotateImagePixels = false,
                 manualExposure = false,
                 dynamicRange = VideoDynamicRange.SDR,
@@ -1327,6 +1354,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 videoKeyFrameIntervalSeconds = 2,
                                 videoMaxBFrames = 0,
                                 audioAutomaticGainControl = false,
+                                audioDisableNoiseSuppressor = false,
+                                audioDisableEchoCanceler = false,
                             ) else config.copy(highSpeedMode = false)
                         }
                         if (config.highSpeedMode) {
@@ -1832,20 +1861,66 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                         valueRange = 64f..512f,
                         enabled = !recording,
                     )
-                    val agcPathSupported = config.hasAudio &&
+                    val unprocessedAvailable = remember(context) {
+                        context.getSystemService(AudioManager::class.java).getProperty(
+                            AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED,
+                        ) == "true"
+                    }
+                    val inputSources = if (unprocessedAvailable) {
+                        AudioInputSource.entries
+                    } else {
+                        listOf(AudioInputSource.MIC)
+                    }
+                    Labeled("音频输入源") {
+                        ChoiceRow(
+                            inputSources,
+                            config.audioInputSource.takeIf(inputSources::contains) ?: AudioInputSource.MIC,
+                            { it.label },
+                            !recording,
+                        ) { config = config.copy(audioInputSource = it) }
+                    }
+                    Text(
+                        if (unprocessedAvailable) {
+                            "UNPROCESSED 会请求未经系统处理的麦克风信号；厂商 HAL/DSP 仍可能保留固定处理。"
+                        } else {
+                            "当前设备未声明支持 UNPROCESSED 音频输入。"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    val effectPathSupported = config.hasAudio &&
                         (config.hasVideo || config.container == ContainerFormat.MPEG_TS) && !config.highSpeedMode
                     val agcAvailable = AutomaticGainControl.isAvailable()
                     ToggleLine(
                         "自动增益控制（AGC）",
                         config.audioAutomaticGainControl,
-                        !recording && agcPathSupported && agcAvailable,
+                        !recording && effectPathSupported && agcAvailable,
                     ) { config = config.copy(audioAutomaticGainControl = it) }
                     Text(
                         when {
                             !agcAvailable -> "当前设备未提供系统 AGC。"
-                            !agcPathSupported -> "纯音频 MP4 使用 MediaRecorder，无法绑定系统 AGC；纯音频 MPEG-TS 支持。"
+                            !effectPathSupported -> "纯音频 MP4 使用 MediaRecorder，无法绑定系统 AGC；纯音频 MPEG-TS 支持。"
                             config.audioAutomaticGainControl -> "已请求系统 AGC；实际增益策略和效果由设备音频实现决定。"
                             else -> "AGC 会根据输入响度自动调整麦克风增益，可能产生音量抽吸感。"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    val nsAvailable = NoiseSuppressor.isAvailable()
+                    ToggleLine(
+                        "关闭系统降噪（NS）",
+                        config.audioDisableNoiseSuppressor,
+                        !recording && effectPathSupported && nsAvailable,
+                    ) { config = config.copy(audioDisableNoiseSuppressor = it) }
+                    val aecAvailable = AcousticEchoCanceler.isAvailable()
+                    ToggleLine(
+                        "关闭回声消除（AEC）",
+                        config.audioDisableEchoCanceler,
+                        !recording && effectPathSupported && aecAvailable,
+                    ) { config = config.copy(audioDisableEchoCanceler = it) }
+                    Text(
+                        when {
+                            !effectPathSupported -> "纯音频 MP4 无法绑定系统 NS/AEC；纯音频 MPEG-TS 支持。"
+                            !nsAvailable && !aecAvailable -> "当前设备未提供系统 NS/AEC 控制。"
+                            else -> "这些开关只控制 Android 音频效果链，无法保证关闭厂商 HAL/DSP 内置处理。"
                         },
                         style = MaterialTheme.typography.bodySmall,
                     )
