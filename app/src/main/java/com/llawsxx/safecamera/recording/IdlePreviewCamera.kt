@@ -483,6 +483,7 @@ class IdlePreviewCamera(context: Context) {
                 lensShadingCorrectionEnabled = config.rawLensShadingCorrectionEnabled,
                 scalingQuality = config.rawScalingQuality,
                 demosaicAlgorithm = config.rawDemosaicAlgorithm,
+                pboEnabled = config.rawPboEnabled,
                 transferLutEnabled = config.rawTransferLutEnabled,
                 transferLutSize = config.rawTransferLutSize,
                 rawFrameBufferCapacity = config.rawFrameBufferCapacity,

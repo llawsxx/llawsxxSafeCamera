@@ -1131,6 +1131,11 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                     ) { config = config.copy(rawDemosaicAlgorithm = it) }
                                 }
                                 ToggleLine(
+                                    "PBO RAW 上传",
+                                    config.rawPboEnabled,
+                                    !recording,
+                                ) { enabled -> config = config.copy(rawPboEnabled = enabled) }
+                                ToggleLine(
                                     "Transfer LUT",
                                     config.rawTransferLutEnabled,
                                     !recording,

@@ -169,6 +169,7 @@ enum class RawScalingQuality(val label: String) : Serializable {
 enum class RawDemosaicAlgorithm(val label: String) : Serializable {
     FAST("快速（双线性）"),
     HIGH_QUALITY("高质量（边缘感知）"),
+    LMMSE("高质量（5×5 线性滤波）"),
 }
 
 data class RecordingConfig(
@@ -192,6 +193,7 @@ data class RecordingConfig(
     val rawHeight: Int = 0,
     val rawScalingQuality: RawScalingQuality = RawScalingQuality.HIGH_QUALITY,
     val rawDemosaicAlgorithm: RawDemosaicAlgorithm = RawDemosaicAlgorithm.HIGH_QUALITY,
+    val rawPboEnabled: Boolean = true,
     val rawTransferLutEnabled: Boolean = false,
     val rawTransferLutSize: Int = 4096,
     val rawFrameBufferCapacity: Int = 2,

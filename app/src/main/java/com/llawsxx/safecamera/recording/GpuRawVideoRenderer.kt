@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.ln
 import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /** Uploads RAW16 Bayer data once and performs the complete ISP pass in an ES 3 fragment shader. */
@@ -38,6 +39,7 @@ internal class GpuRawVideoRenderer(
     lensShadingCorrectionEnabled: Boolean,
     scalingQuality: RawScalingQuality,
     demosaicAlgorithm: RawDemosaicAlgorithm,
+    pboEnabled: Boolean,
     transferLutEnabled: Boolean,
     transferLutSize: Int,
     rawFrameBufferCapacity: Int,
@@ -78,10 +80,10 @@ internal class GpuRawVideoRenderer(
     private val transferLutSize = transferLutSize.takeIf { it in TRANSFER_LUT_SIZES } ?: 4096
     private val rawCrop = centeredCrop(rawWidth, rawHeight, outputWidth, outputHeight)
     private val intermediateWidth = if (scalingQuality == RawScalingQuality.HIGH_QUALITY) {
-        rawCrop.second.first
+        minOf(rawCrop.second.first, (outputWidth * DEMOSAIC_SCALE_CAP).roundToInt())
     } else outputWidth
     private val intermediateHeight = if (scalingQuality == RawScalingQuality.HIGH_QUALITY) {
-        rawCrop.second.second
+        minOf(rawCrop.second.second, (outputHeight * DEMOSAIC_SCALE_CAP).roundToInt())
     } else outputHeight
     private var sharpeningEnabled = sharpeningEnabled
     private var sharpeningStrength = sharpeningStrength.coerceIn(0f, 1f)
@@ -105,6 +107,11 @@ internal class GpuRawVideoRenderer(
     private val fastFinalRawProgram: RawShaderProgram?
     private val highQualityRawProgram: RawShaderProgram
     private val highQualityFinalRawProgram: RawShaderProgram?
+    private val lmmseRawProgram: RawShaderProgram
+    private val lmmseFinalRawProgram: RawShaderProgram?
+    private val pboIds = IntArray(PBO_COUNT)
+    private var pboEnabled = pboEnabled
+    private var uploadIndex = 0
     private val outputProgram: Int
     private val outputPositionLocation: Int
     private val outputTexCoordLocation: Int
@@ -266,9 +273,12 @@ internal class GpuRawVideoRenderer(
         intermediateFramebuffer = IntArray(1).also { GLES30.glGenFramebuffers(1, it, 0) }[0]
         allocateIntermediateTarget()
 
+        GLES30.glGenBuffers(PBO_COUNT, pboIds, 0)
+
         fastRawProgram = createRawShaderProgram(
             rawFragmentShader(
                 highQuality = false,
+                lmmse = false,
                 combinedFinalOutput = false,
                 applyColorTransform = scalingQuality == RawScalingQuality.FAST,
                 useTransferLut = transferLutEnabled,
@@ -278,6 +288,7 @@ internal class GpuRawVideoRenderer(
             createRawShaderProgram(
                 rawFragmentShader(
                     highQuality = false,
+                    lmmse = false,
                     combinedFinalOutput = true,
                     applyColorTransform = true,
                     useTransferLut = transferLutEnabled,
@@ -289,6 +300,7 @@ internal class GpuRawVideoRenderer(
         highQualityRawProgram = createRawShaderProgram(
             rawFragmentShader(
                 highQuality = true,
+                lmmse = false,
                 combinedFinalOutput = false,
                 applyColorTransform = scalingQuality == RawScalingQuality.FAST,
                 useTransferLut = transferLutEnabled,
@@ -298,6 +310,29 @@ internal class GpuRawVideoRenderer(
             createRawShaderProgram(
                 rawFragmentShader(
                     highQuality = true,
+                    lmmse = false,
+                    combinedFinalOutput = true,
+                    applyColorTransform = true,
+                    useTransferLut = transferLutEnabled,
+                ),
+            )
+        } else {
+            null
+        }
+        lmmseRawProgram = createRawShaderProgram(
+            rawFragmentShader(
+                highQuality = false,
+                lmmse = true,
+                combinedFinalOutput = false,
+                applyColorTransform = scalingQuality == RawScalingQuality.FAST,
+                useTransferLut = transferLutEnabled,
+            ),
+        )
+        lmmseFinalRawProgram = if (hasEncoderOutput && scalingQuality == RawScalingQuality.FAST) {
+            createRawShaderProgram(
+                rawFragmentShader(
+                    highQuality = false,
+                    lmmse = true,
                     combinedFinalOutput = true,
                     applyColorTransform = true,
                     useTransferLut = transferLutEnabled,
@@ -453,16 +488,7 @@ internal class GpuRawVideoRenderer(
         require(plane.rowStride % plane.pixelStride == 0) { "Invalid RAW row stride" }
         val source = plane.buffer.duplicate().order(ByteOrder.nativeOrder()).apply { position(0) }
         makePrimaryCurrent()
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, rawTexture)
-        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
-        GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, plane.rowStride / plane.pixelStride)
-        GLES30.glTexSubImage2D(
-            GLES30.GL_TEXTURE_2D, 0, 0, 0, rawWidth, rawHeight,
-            GLES30.GL_RED_INTEGER, GLES30.GL_UNSIGNED_SHORT, source,
-        )
-        GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, 0)
-        checkGl("upload RAW16 frame")
+        uploadRawFrame(source, plane.rowStride / plane.pixelStride)
 
         val useLensShading = lensShadingCorrectionEnabled && metadata.lensShadingMap != null
         if (useLensShading) uploadLensShading(checkNotNull(metadata.lensShadingMap))
@@ -479,9 +505,12 @@ internal class GpuRawVideoRenderer(
         }
         val combinedFinalOutput = hasEncoderOutput && scalingQuality == RawScalingQuality.FAST
         val raw = when {
+            combinedFinalOutput && demosaicAlgorithm == RawDemosaicAlgorithm.LMMSE ->
+                checkNotNull(lmmseFinalRawProgram)
             combinedFinalOutput && demosaicAlgorithm == RawDemosaicAlgorithm.HIGH_QUALITY ->
                 checkNotNull(highQualityFinalRawProgram)
             combinedFinalOutput -> checkNotNull(fastFinalRawProgram)
+            demosaicAlgorithm == RawDemosaicAlgorithm.LMMSE -> lmmseRawProgram
             demosaicAlgorithm == RawDemosaicAlgorithm.HIGH_QUALITY -> highQualityRawProgram
             else -> fastRawProgram
         }
@@ -564,6 +593,70 @@ internal class GpuRawVideoRenderer(
         EGLExt.eglPresentationTimeANDROID(display, previewEglSurface, timestampNs)
         check(EGL14.eglSwapBuffers(display, previewEglSurface)) { "Unable to submit GPU RAW preview frame" }
         releaseCurrent()
+    }
+
+    private fun uploadRawFrame(source: ByteBuffer, rowLength: Int) {
+        val bufferSize = rowLength * rawHeight * 2
+        source.position(0)
+        source.limit(minOf(bufferSize, source.capacity()))
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, rawTexture)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, rowLength)
+        val uploaded = pboEnabled && uploadRawFrameWithPbo(source, bufferSize)
+        if (!uploaded) {
+            // A GL error is sticky. Clear the PBO error before retrying with a client buffer,
+            // otherwise the fallback would report the original PBO failure as its own error.
+            pboEnabled = false
+            clearGlErrors()
+            source.position(0)
+            GLES30.glTexSubImage2D(
+                GLES30.GL_TEXTURE_2D, 0, 0, 0, rawWidth, rawHeight,
+                GLES30.GL_RED_INTEGER, GLES30.GL_UNSIGNED_SHORT, source,
+            )
+        } else {
+            // PBO upload succeeded and the source buffer is no longer needed for this frame.
+        }
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, 0)
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_UNPACK_BUFFER, 0)
+        checkGl("upload RAW16 frame")
+    }
+
+    /**
+     * Uploads one frame through a pixel-unpack buffer. GLES errors are returned by glGetError()
+     * rather than thrown as Kotlin exceptions, so the result must be checked explicitly.
+     */
+    private fun uploadRawFrameWithPbo(source: ByteBuffer, bufferSize: Int): Boolean {
+        clearGlErrors()
+        val pbo = pboIds[uploadIndex % PBO_COUNT]
+        uploadIndex++
+        return try {
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_UNPACK_BUFFER, pbo)
+            GLES30.glBufferData(
+                GLES30.GL_PIXEL_UNPACK_BUFFER,
+                bufferSize,
+                null,
+                GLES30.GL_STREAM_DRAW,
+            )
+            GLES30.glBufferSubData(GLES30.GL_PIXEL_UNPACK_BUFFER, 0, bufferSize, source)
+            GLES30.glTexSubImage2D(
+                GLES30.GL_TEXTURE_2D, 0, 0, 0, rawWidth, rawHeight,
+                GLES30.GL_RED_INTEGER, GLES30.GL_UNSIGNED_SHORT, null,
+            )
+            val error = GLES30.glGetError()
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_UNPACK_BUFFER, 0)
+            val unbindError = GLES30.glGetError()
+            if (error != GLES30.GL_NO_ERROR || unbindError != GLES30.GL_NO_ERROR) {
+                clearGlErrors()
+                false
+            } else {
+                true
+            }
+        } catch (_: RuntimeException) {
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_UNPACK_BUFFER, 0)
+            clearGlErrors()
+            false
+        }
     }
 
     private fun drawOutput(
@@ -796,6 +889,8 @@ internal class GpuRawVideoRenderer(
         fastFinalRawProgram?.let { GLES30.glDeleteProgram(it.program) }
         GLES30.glDeleteProgram(highQualityRawProgram.program)
         highQualityFinalRawProgram?.let { GLES30.glDeleteProgram(it.program) }
+        GLES30.glDeleteProgram(lmmseRawProgram.program)
+        lmmseFinalRawProgram?.let { GLES30.glDeleteProgram(it.program) }
         GLES30.glDeleteProgram(outputProgram)
         if (copyProgram != 0) GLES30.glDeleteProgram(copyProgram)
         GLES30.glDeleteFramebuffers(1, intArrayOf(intermediateFramebuffer), 0)
@@ -803,6 +898,7 @@ internal class GpuRawVideoRenderer(
             GLES30.glDeleteFramebuffers(1, intArrayOf(finalOutputFramebuffer), 0)
         }
         GLES30.glDeleteTextures(3, intArrayOf(rawTexture, lensShadingTexture, intermediateTexture), 0)
+        GLES30.glDeleteBuffers(PBO_COUNT, pboIds, 0)
         if (transferLutTexture != 0) GLES30.glDeleteTextures(1, intArrayOf(transferLutTexture), 0)
         if (finalOutputTexture != 0) GLES30.glDeleteTextures(1, intArrayOf(finalOutputTexture), 0)
         releaseCurrent()
@@ -908,6 +1004,12 @@ internal class GpuRawVideoRenderer(
         check(error == GLES30.GL_NO_ERROR) { "$operation failed with GL error 0x${error.toString(16)}" }
     }
 
+    private fun clearGlErrors() {
+        while (GLES30.glGetError() != GLES30.GL_NO_ERROR) {
+            // Drain all pending errors so a retry starts from a clean GL state.
+        }
+    }
+
     private fun chooseEglConfig(
         componentBits: Int,
         recordable: Boolean,
@@ -950,6 +1052,8 @@ internal class GpuRawVideoRenderer(
         const val TRANSFER_PQ = 2
         val TRANSFER_LUT_SIZES = setOf(1024, 2048, 4096, 8192)
         const val MAX_RAW_FRAME_BUFFER_CAPACITY = 6
+        const val PBO_COUNT = 3
+        const val DEMOSAIC_SCALE_CAP = 2.0f
         const val VERTEX_SHADER = """#version 300 es
             in vec4 aPosition;
             in vec2 aTexCoord;
@@ -958,11 +1062,13 @@ internal class GpuRawVideoRenderer(
         """
         fun rawFragmentShader(
             highQuality: Boolean,
+            lmmse: Boolean,
             combinedFinalOutput: Boolean,
             applyColorTransform: Boolean,
             useTransferLut: Boolean,
         ): String = """#version 300 es
             #define HIGH_QUALITY_DEMOSAIC ${if (highQuality) 1 else 0}
+            #define LMMSE_DEMOSAIC ${if (lmmse) 1 else 0}
             #define COMBINED_FINAL_OUTPUT ${if (combinedFinalOutput) 1 else 0}
             #define APPLY_COLOR_TRANSFORM ${if (applyColorTransform) 1 else 0}
             #define USE_TRANSFER_LUT ${if (useTransferLut) 1 else 0}
@@ -1042,6 +1148,61 @@ internal class GpuRawVideoRenderer(
                     (horizontalCost + verticalCost));
             }
             vec3 demosaicAt(ivec2 p) {
+                #if LMMSE_DEMOSAIC
+                ivec2 sourceSize = textureSize(uRaw, 0);
+                p = clamp(p, ivec2(2), sourceSize - ivec2(3));
+                vec2 lensUv = (vec2(p) + 0.5) / vec2(sourceSize);
+                vec4 lensGains = texture(uLensShading, lensUv);
+                float center = rawAt(p, lensGains);
+                float left = rawAt(p + ivec2(-1, 0), lensGains);
+                float right = rawAt(p + ivec2(1, 0), lensGains);
+                float up = rawAt(p + ivec2(0, -1), lensGains);
+                float down = rawAt(p + ivec2(0, 1), lensGains);
+                float left2 = rawAt(p + ivec2(-2, 0), lensGains);
+                float right2 = rawAt(p + ivec2(2, 0), lensGains);
+                float up2 = rawAt(p + ivec2(0, -2), lensGains);
+                float down2 = rawAt(p + ivec2(0, 2), lensGains);
+                float northwest = rawAt(p + ivec2(-1, -1), lensGains);
+                float northeast = rawAt(p + ivec2(1, -1), lensGains);
+                float southwest = rawAt(p + ivec2(-1, 1), lensGains);
+                float southeast = rawAt(p + ivec2(1, 1), lensGains);
+                if (uSharpeningEnabled != 0) {
+                    float sameColorBase = 0.25 * (left2 + right2 + up2 + down2);
+                    float detail = center - sameColorBase;
+                    detail = sign(detail) * min(max(abs(detail) - 0.0015, 0.0), 0.035);
+                    center = max(0.0, center + uSharpeningStrength * detail);
+                }
+                int color = colorAt(p);
+                if (color == 1) {
+                    bool leftIsRed = colorAt(p + ivec2(-1, 0)) == 0;
+                    float red;
+                    float blue;
+                    if (leftIsRed) {
+                        red = 5.0 * center + 4.0 * (left + right) - (left2 + right2) +
+                            0.5 * (up2 + down2) - (northwest + northeast + southwest + southeast);
+                        blue = 5.0 * center + 4.0 * (up + down) - (up2 + down2) +
+                            0.5 * (left2 + right2) - (northwest + northeast + southwest + southeast);
+                    } else {
+                        red = 5.0 * center + 4.0 * (up + down) - (up2 + down2) +
+                            0.5 * (left2 + right2) - (northwest + northeast + southwest + southeast);
+                        blue = 5.0 * center + 4.0 * (left + right) - (left2 + right2) +
+                            0.5 * (up2 + down2) - (northwest + northeast + southwest + southeast);
+                    }
+                    return vec3(max(red * 0.125, 0.0), center, max(blue * 0.125, 0.0));
+                }
+                if (color == 0) {
+                    float green = 4.0 * center + 2.0 * (left + right + up + down) -
+                        (left2 + right2 + up2 + down2);
+                    float blue = 6.0 * center - 1.5 * (left2 + right2 + up2 + down2) +
+                        2.0 * (northwest + northeast + southwest + southeast);
+                    return vec3(center, max(green * 0.125, 0.0), max(blue * 0.125, 0.0));
+                }
+                float green = 4.0 * center + 2.0 * (left + right + up + down) -
+                    (left2 + right2 + up2 + down2);
+                float red = 6.0 * center - 1.5 * (left2 + right2 + up2 + down2) +
+                    2.0 * (northwest + northeast + southwest + southeast);
+                return vec3(max(red * 0.125, 0.0), max(green * 0.125, 0.0), center);
+                #else
                 ivec2 sourceSize = textureSize(uRaw, 0);
                 p = clamp(p, ivec2(2), sourceSize - ivec2(3));
                 vec2 lensUv = (vec2(p) + 0.5) / vec2(sourceSize);
@@ -1115,6 +1276,7 @@ internal class GpuRawVideoRenderer(
                     else rgb = vec3(opposite, green, center);
                 }
                 return rgb;
+                #endif
                 #endif
             }
 

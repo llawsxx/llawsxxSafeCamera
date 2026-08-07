@@ -43,6 +43,7 @@ object ConfigPreferences {
                 p.getString("rawDemosaicAlgorithm", null),
                 RawDemosaicAlgorithm.HIGH_QUALITY,
             ),
+            rawPboEnabled = p.getBoolean("rawPboEnabled", true),
             rawTransferLutEnabled = p.getBoolean("rawTransferLutEnabled", false),
             rawTransferLutSize = p.getInt("rawTransferLutSize", 4096)
                 .takeIf { it in RAW_TRANSFER_LUT_SIZES } ?: 4096,
@@ -190,6 +191,7 @@ object ConfigPreferences {
             .putInt("rawHeight", c.rawHeight)
             .putString("rawScalingQuality", c.rawScalingQuality.name)
             .putString("rawDemosaicAlgorithm", c.rawDemosaicAlgorithm.name)
+            .putBoolean("rawPboEnabled", c.rawPboEnabled)
             .putBoolean("rawTransferLutEnabled", c.rawTransferLutEnabled)
             .putInt(
                 "rawTransferLutSize",
