@@ -17,6 +17,8 @@ import com.llawsxx.safecamera.recording.LINEAR_BT709_TO_BT2020
 import com.llawsxx.safecamera.recording.multiply3x3
 import com.llawsxx.safecamera.recording.mapTouchFocusPoint
 import com.llawsxx.safecamera.recording.rawShadowLiftValue
+import com.llawsxx.safecamera.recording.CameraTonemapCurve
+import com.llawsxx.safecamera.recording.cameraTonemapValue
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -90,6 +92,12 @@ class RecordingConfigTest {
         assertEquals(0.65f, defaults.effectiveRawShadowLiftKnee, 0f)
         assertEquals(0.80f, defaults.effectiveRawShadowLiftTarget, 0f)
         assertEquals(0.50f, defaults.effectiveRawShadowLiftSmoothness, 0f)
+        assertEquals(CameraTonemapCurve.OFF, defaults.cameraTonemapCurve)
+        assertEquals(android.hardware.camera2.CameraCharacteristics.HOT_PIXEL_MODE_FAST, defaults.hotPixelMode)
+        assertEquals(
+            android.hardware.camera2.CameraCharacteristics.COLOR_CORRECTION_ABERRATION_MODE_FAST,
+            defaults.aberrationCorrectionMode,
+        )
         assertEquals("高质量（5×5 线性滤波）", RawDemosaicAlgorithm.LMMSE.label)
 
         val invalid = RecordingConfig(
@@ -102,6 +110,17 @@ class RecordingConfigTest {
 
         val faithful = RecordingConfig(rawColorStyle = RawColorStyle.FAITHFUL)
         assertEquals(1f, faithful.effectiveRawSaturation, 0f)
+    }
+
+    @Test
+    fun cameraTonemapCurvesPreserveEndpointsAndFollowReferenceValues() {
+        CameraTonemapCurve.entries.forEach { mode ->
+            assertEquals(0f, cameraTonemapValue(mode, 0f), 0.0001f)
+            assertEquals(1f, cameraTonemapValue(mode, 1f), 0.0001f)
+        }
+        assertEquals(0.45f, cameraTonemapValue(CameraTonemapCurve.LINEAR, 0.45f), 0.0001f)
+        assertEquals(0.409f, cameraTonemapValue(CameraTonemapCurve.BT709, 0.18f), 0.002f)
+        assertEquals(0.672f, cameraTonemapValue(CameraTonemapCurve.HLG, 0.18f), 0.002f)
     }
 
     @Test

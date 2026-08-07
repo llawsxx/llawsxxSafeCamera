@@ -131,6 +131,7 @@ import com.llawsxx.safecamera.recording.RecorderMessage
 import com.llawsxx.safecamera.recording.RecorderState
 import com.llawsxx.safecamera.recording.RecordingConfig
 import com.llawsxx.safecamera.recording.RecordingMode
+import com.llawsxx.safecamera.recording.CameraTonemapCurve
 import com.llawsxx.safecamera.recording.RawOutputPreset
 import com.llawsxx.safecamera.recording.RawColorStyle
 import com.llawsxx.safecamera.recording.RawDemosaicAlgorithm
@@ -554,9 +555,13 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.antibandingMode,
         config.noiseReductionMode,
         config.edgeMode,
+        config.hotPixelMode,
+        config.aberrationCorrectionMode,
+        config.distortionCorrectionMode,
         config.rawThreeAAuxiliaryYuvEnabled,
         config.rawLensShadingCorrectionEnabled,
         config.cameraShadingMode,
+        config.cameraTonemapCurve,
         config.rawSharpeningEnabled,
         config.rawSharpeningStrength,
         config.rawColorStyle,
@@ -4582,6 +4587,41 @@ private fun CameraProcessingControls(
             ::shadingModeLabel,
             enabled,
         ) { onChange(config.copy(cameraShadingMode = it)) }
+    }
+    Labeled(
+        if (camera.customTonemapCurveAvailable) {
+            "TONEMAP_CURVE（最多 ${camera.maximumTonemapCurvePoints} 点）"
+        } else {
+            "TONEMAP_CURVE（不支持）"
+        },
+    ) {
+        ChoiceRow(
+            CameraTonemapCurve.entries,
+            config.cameraTonemapCurve,
+            { it.label },
+            enabled && camera.customTonemapCurveAvailable,
+        ) { onChange(config.copy(cameraTonemapCurve = it)) }
+    }
+    Labeled("热像素修正") {
+        ChoiceRow(camera.hotPixelModes, config.hotPixelMode, ::processingModeLabel, enabled) {
+            onChange(config.copy(hotPixelMode = it))
+        }
+    }
+    Labeled("色差修正") {
+        ChoiceRow(
+            camera.aberrationCorrectionModes,
+            config.aberrationCorrectionMode,
+            ::processingModeLabel,
+            enabled,
+        ) { onChange(config.copy(aberrationCorrectionMode = it)) }
+    }
+    Labeled("镜头畸变修正") {
+        ChoiceRow(
+            camera.distortionCorrectionModes,
+            config.distortionCorrectionMode,
+            ::processingModeLabel,
+            enabled,
+        ) { onChange(config.copy(distortionCorrectionMode = it)) }
     }
 }
 

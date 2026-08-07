@@ -323,6 +323,10 @@ class CameraRecorderEngine(
             noiseReductionMode = updated.noiseReductionMode,
             edgeMode = updated.edgeMode,
             cameraShadingMode = updated.cameraShadingMode,
+            cameraTonemapCurve = updated.cameraTonemapCurve,
+            hotPixelMode = updated.hotPixelMode,
+            aberrationCorrectionMode = updated.aberrationCorrectionMode,
+            distortionCorrectionMode = updated.distortionCorrectionMode,
         )
         if (previousConfig.cameraRequestControlsKey() != config.cameraRequestControlsKey()) {
             cameraControlsPending = config.cameraRequestControlsKey() != submittedCameraControlsKey

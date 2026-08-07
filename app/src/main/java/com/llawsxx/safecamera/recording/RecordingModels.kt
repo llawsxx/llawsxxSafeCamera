@@ -130,6 +130,13 @@ enum class RawColorStyle(val label: String) : Serializable {
     CUSTOM("自定义"),
 }
 
+enum class CameraTonemapCurve(val label: String) : Serializable {
+    OFF("关闭（相机默认）"),
+    LINEAR("线性"),
+    BT709("BT.709"),
+    HLG("HLG"),
+}
+
 enum class OrientationMode(val label: String) : Serializable {
     FOLLOW_SENSOR("跟随设备"), LANDSCAPE("固定横屏"), PORTRAIT("固定竖屏")
 }
@@ -200,6 +207,7 @@ data class RecordingConfig(
     val rawThreeAAuxiliaryYuvEnabled: Boolean = true,
     val rawLensShadingCorrectionEnabled: Boolean = true,
     val cameraShadingMode: Int = CameraCharacteristics.SHADING_MODE_FAST,
+    val cameraTonemapCurve: CameraTonemapCurve = CameraTonemapCurve.OFF,
     val rawSharpeningEnabled: Boolean = false,
     val rawSharpeningStrength: Float = 0.32f,
     val rawColorStyle: RawColorStyle = RawColorStyle.STANDARD_DIRECT,
@@ -280,6 +288,9 @@ data class RecordingConfig(
     val opticalStabilization: Boolean = true,
     val noiseReductionMode: Int = CameraCharacteristics.NOISE_REDUCTION_MODE_FAST,
     val edgeMode: Int = CameraCharacteristics.EDGE_MODE_FAST,
+    val hotPixelMode: Int = CameraCharacteristics.HOT_PIXEL_MODE_FAST,
+    val aberrationCorrectionMode: Int = CameraCharacteristics.COLOR_CORRECTION_ABERRATION_MODE_FAST,
+    val distortionCorrectionMode: Int = CameraCharacteristics.DISTORTION_CORRECTION_MODE_OFF,
     val streamEnabled: Boolean = false,
     val streamHost: String = "239.10.10.10",
     val streamPort: Int = 5000,
@@ -411,7 +422,12 @@ data class CameraInfo(
     val oisAvailable: Boolean,
     val noiseReductionModes: List<Int>,
     val edgeModes: List<Int>,
+    val hotPixelModes: List<Int>,
+    val aberrationCorrectionModes: List<Int>,
+    val distortionCorrectionModes: List<Int>,
     val shadingModes: List<Int>,
+    val customTonemapCurveAvailable: Boolean,
+    val maximumTonemapCurvePoints: Int,
     val afModes: List<Int>,
     val maxAfRegions: Int,
     val minimumFocusDistance: Float,

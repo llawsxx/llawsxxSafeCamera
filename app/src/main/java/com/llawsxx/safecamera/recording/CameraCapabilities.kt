@@ -120,6 +120,13 @@ object CameraCapabilities {
                     )
                 }
                 val shadingModes = c.get(CameraCharacteristics.SHADING_AVAILABLE_MODES)?.toList().orEmpty()
+                val customTonemapCurveAvailable = c.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)
+                    ?.contains(CameraCharacteristics.TONEMAP_MODE_CONTRAST_CURVE) == true
+                val maximumTonemapCurvePoints = if (customTonemapCurveAvailable) {
+                    c.get(CameraCharacteristics.TONEMAP_MAX_CURVE_POINTS)?.coerceAtLeast(2) ?: 0
+                } else {
+                    0
+                }
                 val surfaceViewSizes = streamMap
                     ?.getOutputSizes(SurfaceHolder::class.java)
                     ?.sortedWith(compareByDescending<Size> { it.width.toLong() * it.height }.thenBy { it.width })
@@ -187,7 +194,19 @@ object CameraCapabilities {
                     noiseReductionModes = c.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)
                         ?.toList().orEmpty(),
                     edgeModes = c.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)?.toList().orEmpty(),
+                    hotPixelModes = c.get(CameraCharacteristics.HOT_PIXEL_AVAILABLE_HOT_PIXEL_MODES)
+                        ?.toList().orEmpty(),
+                    aberrationCorrectionModes = c.get(
+                        CameraCharacteristics.COLOR_CORRECTION_AVAILABLE_ABERRATION_MODES,
+                    )?.toList().orEmpty(),
+                    distortionCorrectionModes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        c.get(CameraCharacteristics.DISTORTION_CORRECTION_AVAILABLE_MODES)?.toList().orEmpty()
+                    } else {
+                        emptyList()
+                    },
                     shadingModes = shadingModes,
+                    customTonemapCurveAvailable = customTonemapCurveAvailable,
+                    maximumTonemapCurvePoints = maximumTonemapCurvePoints,
                     afModes = c.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)?.toList().orEmpty(),
                     maxAfRegions = c.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0,
                     minimumFocusDistance = c.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f,

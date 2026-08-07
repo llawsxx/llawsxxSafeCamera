@@ -62,6 +62,14 @@ object ConfigPreferences {
                     else -> CameraCharacteristics.SHADING_MODE_FAST
                 },
             ),
+            cameraTonemapCurve = enumValue(
+                p.getString("cameraTonemapCurve", null),
+                if (p.getBoolean("linearTonemapCurveEnabled", false)) {
+                    CameraTonemapCurve.LINEAR
+                } else {
+                    CameraTonemapCurve.OFF
+                },
+            ),
             rawSharpeningEnabled = p.getBoolean("rawSharpeningEnabled", false),
             rawSharpeningStrength = p.getFloat("rawSharpeningStrength", 0.32f).coerceIn(0f, 1f),
             rawColorStyle = enumValue(p.getString("rawColorStyle", null), RawColorStyle.STANDARD_DIRECT),
@@ -161,6 +169,15 @@ object ConfigPreferences {
             opticalStabilization = p.getBoolean("opticalStabilization", true),
             noiseReductionMode = p.getInt("noiseReductionMode", android.hardware.camera2.CameraCharacteristics.NOISE_REDUCTION_MODE_FAST),
             edgeMode = p.getInt("edgeMode", android.hardware.camera2.CameraCharacteristics.EDGE_MODE_FAST),
+            hotPixelMode = p.getInt("hotPixelMode", CameraCharacteristics.HOT_PIXEL_MODE_FAST),
+            aberrationCorrectionMode = p.getInt(
+                "aberrationCorrectionMode",
+                CameraCharacteristics.COLOR_CORRECTION_ABERRATION_MODE_FAST,
+            ),
+            distortionCorrectionMode = p.getInt(
+                "distortionCorrectionMode",
+                CameraCharacteristics.DISTORTION_CORRECTION_MODE_OFF,
+            ),
             streamEnabled = p.getBoolean("streamEnabled", false),
             streamHost = p.getString("streamHost", "239.10.10.10") ?: "239.10.10.10",
             streamPort = p.getInt("streamPort", 5000),
@@ -205,6 +222,7 @@ object ConfigPreferences {
             .putBoolean("rawThreeAAuxiliaryYuvEnabled", c.rawThreeAAuxiliaryYuvEnabled)
             .putBoolean("rawLensShadingCorrectionEnabled", c.rawLensShadingCorrectionEnabled)
             .putInt("cameraShadingMode", c.cameraShadingMode)
+            .putString("cameraTonemapCurve", c.cameraTonemapCurve.name)
             .putBoolean("rawSharpeningEnabled", c.rawSharpeningEnabled)
             .putFloat("rawSharpeningStrength", c.effectiveRawSharpeningStrength)
             .putString("rawColorStyle", c.rawColorStyle.name)
@@ -280,6 +298,9 @@ object ConfigPreferences {
             .putBoolean("opticalStabilization", c.opticalStabilization)
             .putInt("noiseReductionMode", c.noiseReductionMode)
             .putInt("edgeMode", c.edgeMode)
+            .putInt("hotPixelMode", c.hotPixelMode)
+            .putInt("aberrationCorrectionMode", c.aberrationCorrectionMode)
+            .putInt("distortionCorrectionMode", c.distortionCorrectionMode)
             .putBoolean("streamEnabled", c.streamEnabled)
             .putString("streamHost", c.streamHost)
             .putInt("streamPort", c.streamPort)

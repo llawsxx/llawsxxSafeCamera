@@ -5,11 +5,13 @@ import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.params.RggbChannelVector
 import android.hardware.camera2.params.MeteringRectangle
+import android.hardware.camera2.params.TonemapCurve
 import android.graphics.Rect
 import android.os.Build
 import android.util.Range
 import kotlin.math.ln
 import kotlin.math.pow
+import kotlin.math.sqrt
 
 object CameraRequestControls {
     fun apply(
@@ -37,6 +39,20 @@ object CameraRequestControls {
         config.cameraShadingMode.takeIf(shadingModes::contains)?.let {
             builder.set(CaptureRequest.SHADING_MODE, it)
         }
+        if (config.cameraTonemapCurve != CameraTonemapCurve.OFF) {
+            val tonemapModes = characteristics.get(
+                CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES,
+            ) ?: intArrayOf()
+            if (CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE in tonemapModes) {
+                val maximumPoints = characteristics.get(CameraCharacteristics.TONEMAP_MAX_CURVE_POINTS)
+                    ?.coerceAtLeast(2) ?: 64
+                builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
+                builder.set(
+                    CaptureRequest.TONEMAP_CURVE,
+                    createTonemapCurve(config.cameraTonemapCurve, maximumPoints),
+                )
+            }
+        }
         val videoStabilizationModes = characteristics.get(
             CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES,
         ) ?: intArrayOf()
@@ -52,14 +68,22 @@ object CameraRequestControls {
             val distortionModes = characteristics.get(
                 CameraCharacteristics.DISTORTION_CORRECTION_AVAILABLE_MODES,
             ) ?: intArrayOf()
-            val distortionMode = when {
-                distortionModes.contains(CaptureRequest.DISTORTION_CORRECTION_MODE_OFF) ->
-                    CaptureRequest.DISTORTION_CORRECTION_MODE_OFF
-                distortionModes.contains(CaptureRequest.DISTORTION_CORRECTION_MODE_FAST) ->
-                    CaptureRequest.DISTORTION_CORRECTION_MODE_FAST
-                else -> null
-            }
+            val distortionMode = config.distortionCorrectionMode.takeIf(distortionModes::contains)
+                ?: distortionModes.firstOrNull()
             distortionMode?.let { builder.set(CaptureRequest.DISTORTION_CORRECTION_MODE, it) }
+        }
+        val hotPixelModes = characteristics.get(
+            CameraCharacteristics.HOT_PIXEL_AVAILABLE_HOT_PIXEL_MODES,
+        ) ?: intArrayOf()
+        (config.hotPixelMode.takeIf(hotPixelModes::contains) ?: hotPixelModes.firstOrNull())?.let {
+            builder.set(CaptureRequest.HOT_PIXEL_MODE, it)
+        }
+        val aberrationModes = characteristics.get(
+            CameraCharacteristics.COLOR_CORRECTION_AVAILABLE_ABERRATION_MODES,
+        ) ?: intArrayOf()
+        (config.aberrationCorrectionMode.takeIf(aberrationModes::contains)
+            ?: aberrationModes.firstOrNull())?.let {
+            builder.set(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, it)
         }
         val targetFps = config.fps
         val availableFps = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
@@ -356,6 +380,10 @@ internal fun RecordingConfig.cameraRequestControlsKey(): List<Any?> = listOf(
     rawProcessingEnabled,
     rawLensShadingCorrectionEnabled,
     cameraShadingMode,
+    cameraTonemapCurve,
+    hotPixelMode,
+    aberrationCorrectionMode,
+    distortionCorrectionMode,
     manualExposure,
     iso,
     exposureNs,
@@ -389,6 +417,36 @@ internal fun RecordingConfig.cameraRequestControlsKey(): List<Any?> = listOf(
     noiseReductionMode,
     edgeMode,
 )
+
+internal fun createTonemapCurve(mode: CameraTonemapCurve, maximumPoints: Int): TonemapCurve {
+    val points = maximumPoints.coerceIn(2, 256)
+    val values = FloatArray(points * 2)
+    for (index in 0 until points) {
+        val input = index.toFloat() / (points - 1)
+        values[index * 2] = input
+        values[index * 2 + 1] = cameraTonemapValue(mode, input)
+    }
+    return TonemapCurve(values, values, values)
+}
+
+internal fun cameraTonemapValue(mode: CameraTonemapCurve, input: Float): Float {
+    val value = input.coerceIn(0f, 1f).toDouble()
+    return when (mode) {
+        CameraTonemapCurve.OFF,
+        CameraTonemapCurve.LINEAR,
+        -> value
+        CameraTonemapCurve.BT709 -> if (value < 0.018) {
+            4.5 * value
+        } else {
+            1.099 * value.pow(0.45) - 0.099
+        }
+        CameraTonemapCurve.HLG -> if (value <= 1.0 / 12.0) {
+            sqrt(3.0 * value)
+        } else {
+            0.17883277 * ln(12.0 * value - 0.28466892) + 0.55991073
+        }
+    }.toFloat().coerceIn(0f, 1f)
+}
 
 internal data class ManualWhiteBalanceGains(
     val red: Float,
