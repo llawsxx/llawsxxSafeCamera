@@ -89,7 +89,7 @@ object ConfigPreferences {
             audioAutomaticGainControl = p.getBoolean("audioAutomaticGainControl", false),
             audioDisableNoiseSuppressor = p.getBoolean("audioDisableNoiseSuppressor", false),
             audioDisableEchoCanceler = p.getBoolean("audioDisableEchoCanceler", false),
-            audioInputSource = enumValue(p.getString("audioInputSource", null), AudioInputSource.MIC),
+            audioInputSource = enumValue(p.getString("audioInputSource", null), AudioInputSource.CAMCORDER),
             audioInputDeviceId = p.getInt("audioInputDeviceId", -1).takeIf { it >= 0 },
             videoCodec = enumValue(p.getString("videoCodec", null), VideoCodec.H264),
             dynamicRange = enumValue(p.getString("dynamicRange", null), VideoDynamicRange.SDR),

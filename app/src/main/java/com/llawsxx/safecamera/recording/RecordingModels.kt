@@ -38,7 +38,9 @@ enum class AudioAacProfile(
 }
 
 enum class AudioInputSource(val label: String, val mediaRecorderValue: Int) : Serializable {
+    DEFAULT("DEFAULT（系统默认）", MediaRecorder.AudioSource.DEFAULT),
     MIC("MIC（标准麦克风）", MediaRecorder.AudioSource.MIC),
+    CAMCORDER("CAMCORDER（摄像机调优）", MediaRecorder.AudioSource.CAMCORDER),
     UNPROCESSED("UNPROCESSED（未经处理）", MediaRecorder.AudioSource.UNPROCESSED),
 }
 
@@ -243,7 +245,7 @@ data class RecordingConfig(
     val audioAutomaticGainControl: Boolean = false,
     val audioDisableNoiseSuppressor: Boolean = false,
     val audioDisableEchoCanceler: Boolean = false,
-    val audioInputSource: AudioInputSource = AudioInputSource.MIC,
+    val audioInputSource: AudioInputSource = AudioInputSource.CAMCORDER,
     val audioInputDeviceId: Int? = null,
     val videoCodec: VideoCodec = VideoCodec.H264,
     val dynamicRange: VideoDynamicRange = VideoDynamicRange.SDR,

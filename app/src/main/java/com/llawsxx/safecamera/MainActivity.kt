@@ -440,7 +440,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED,
         ) == "true"
         if (config.audioInputSource == AudioInputSource.UNPROCESSED && !unprocessedAvailable) {
-            config = config.copy(audioInputSource = AudioInputSource.MIC)
+            config = config.copy(audioInputSource = AudioInputSource.CAMCORDER)
         }
     }
     LaunchedEffect(
@@ -1905,15 +1905,13 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED,
                         ) == "true"
                     }
-                    val inputSources = if (unprocessedAvailable) {
-                        AudioInputSource.entries
-                    } else {
-                        listOf(AudioInputSource.MIC)
+                    val inputSources = AudioInputSource.entries.filter {
+                        it != AudioInputSource.UNPROCESSED || unprocessedAvailable
                     }
                     Labeled("音频输入源") {
                         ChoiceRow(
                             inputSources,
-                            config.audioInputSource.takeIf(inputSources::contains) ?: AudioInputSource.MIC,
+                            config.audioInputSource.takeIf(inputSources::contains) ?: AudioInputSource.CAMCORDER,
                             { it.label },
                             !recording,
                         ) { config = config.copy(audioInputSource = it) }

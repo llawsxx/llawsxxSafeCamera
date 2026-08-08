@@ -12,6 +12,7 @@ import com.llawsxx.safecamera.recording.VideoColorTransfer
 import com.llawsxx.safecamera.recording.VideoDynamicRange
 import com.llawsxx.safecamera.recording.VideoBitrateMode
 import com.llawsxx.safecamera.recording.AudioAacProfile
+import com.llawsxx.safecamera.recording.AudioInputSource
 import com.llawsxx.safecamera.recording.ContainerFormat
 import com.llawsxx.safecamera.recording.LINEAR_BT709_TO_BT2020
 import com.llawsxx.safecamera.recording.multiply3x3
@@ -26,6 +27,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RecordingConfigTest {
+    @Test
+    fun audioInputSourcesMapToMediaRecorderConstants() {
+        assertEquals(android.media.MediaRecorder.AudioSource.DEFAULT, AudioInputSource.DEFAULT.mediaRecorderValue)
+        assertEquals(android.media.MediaRecorder.AudioSource.MIC, AudioInputSource.MIC.mediaRecorderValue)
+        assertEquals(android.media.MediaRecorder.AudioSource.CAMCORDER, AudioInputSource.CAMCORDER.mediaRecorderValue)
+        assertEquals(android.media.MediaRecorder.AudioSource.UNPROCESSED, AudioInputSource.UNPROCESSED.mediaRecorderValue)
+        assertEquals(AudioInputSource.CAMCORDER, RecordingConfig().audioInputSource)
+    }
+
     @Test
     fun touchFocusMapsRotationMirrorAndPreviewCrop() {
         val cropped = mapTouchFocusPoint(0f, 0f, 0, false, 4f / 3f, 16f / 9f)
