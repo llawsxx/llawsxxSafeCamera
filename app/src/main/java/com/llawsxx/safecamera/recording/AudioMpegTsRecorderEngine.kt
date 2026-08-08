@@ -16,6 +16,8 @@ import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.log10
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 class AudioMpegTsRecorderEngine(
     private val context: Context,
@@ -31,6 +33,7 @@ class AudioMpegTsRecorderEngine(
     @Volatile private var config = initialConfig
     @Volatile private var record: AudioRecord? = null
     private var audioCaptureEffects: AudioCaptureEffects? = null
+    private var floatWavWriter: FloatWavWriter? = null
     @Volatile private var codec: MediaCodec? = null
     @Volatile private var mux: NativeTsMuxCoordinator? = null
     @Volatile private var output: NativeTsOutput? = null
@@ -66,11 +69,12 @@ class AudioMpegTsRecorderEngine(
         val sampleRate = config.audioSampleRate
         val channelCount = config.audioChannelCount
         val channelMask = if (channelCount == 1) AudioFormat.CHANNEL_IN_MONO else AudioFormat.CHANNEL_IN_STEREO
-        val minBuffer = AudioRecord.getMinBufferSize(sampleRate, channelMask, AudioFormat.ENCODING_PCM_16BIT)
+        val encoding = if (config.audioFloatSidecarEnabled) AudioFormat.ENCODING_PCM_FLOAT else AudioFormat.ENCODING_PCM_16BIT
+        val minBuffer = AudioRecord.getMinBufferSize(sampleRate, channelMask, encoding)
         check(minBuffer > 0) { "无法初始化音频输入" }
         val audioRecord = AudioRecord(
             config.audioInputSource.mediaRecorderValue, sampleRate, channelMask,
-            AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuffer * 2, 16_384),
+            encoding, maxOf(minBuffer * 2, 16_384),
         )
         record = audioRecord
         check(audioRecord.state == AudioRecord.STATE_INITIALIZED) { "无法初始化麦克风" }
@@ -98,6 +102,13 @@ class AudioMpegTsRecorderEngine(
             streamHost = config.streamHost.takeIf { config.streamEnabled },
             streamPort = config.streamPort,
         ) { index, path -> segment = index; currentPath = path }
+        if (config.audioFloatSidecarEnabled) {
+            floatWavWriter = FloatWavWriter(
+                outputStore.create("${baseName}_float.wav", "audio/wav"),
+                sampleRate,
+                channelCount,
+            )
+        }
         output = sink
         sink.start()
         val coordinator = NativeTsMuxCoordinator(
@@ -125,6 +136,7 @@ class AudioMpegTsRecorderEngine(
         channelCount: Int,
     ) {
         val input = ByteArray(maxOf(minBuffer, 16_384))
+        val floatInput = if (config.audioFloatSidecarEnabled) FloatArray(max(minBuffer / 4, 4096)) else null
         val info = MediaCodec.BufferInfo()
         var inputEnded = false
         try {
@@ -134,7 +146,29 @@ class AudioMpegTsRecorderEngine(
                     val inputIndex = codec.dequeueInputBuffer(10_000)
                     if (inputIndex >= 0) {
                         val buffer = codec.getInputBuffer(inputIndex) ?: continue
-                        val count = record.read(input, 0, input.size, AudioRecord.READ_BLOCKING)
+                        val byteCapacity = minOf(input.size, buffer.capacity())
+                        val count = if (floatInput != null) {
+                            val read = record.read(
+                                floatInput,
+                                0,
+                                minOf(floatInput.size, byteCapacity / 2),
+                                AudioRecord.READ_BLOCKING,
+                            )
+                            if (read > 0) {
+                                floatWavWriter?.write(floatInput, read)
+                                var peak = 0f
+                                for (i in 0 until read) {
+                                    val sample = floatInput[i].coerceIn(-1f, 1f)
+                                    peak = max(peak, kotlin.math.abs(sample))
+                                    val value = (sample * 32767f).roundToInt().coerceIn(-32768, 32767)
+                                    input[i * 2] = value.toByte()
+                                    input[i * 2 + 1] = (value shr 8).toByte()
+                                }
+                                read * 2
+                            } else read
+                        } else {
+                            record.read(input, 0, byteCapacity, AudioRecord.READ_BLOCKING)
+                        }
                         if (count > 0) {
                             buffer.clear(); buffer.put(input, 0, count)
                             levelDb = pcm16PeakDb(input, count)
@@ -220,6 +254,7 @@ class AudioMpegTsRecorderEngine(
             audioThread?.join()
             runCatching { codec?.stop() }; runCatching { codec?.release() }; codec = null
             audioCaptureEffects?.release(); audioCaptureEffects = null
+            floatWavWriter?.close(); floatWavWriter = null
             runCatching { record?.release() }; record = null
             runCatching { mux?.finish() }; mux = null
             runCatching { output?.close() }; output = null

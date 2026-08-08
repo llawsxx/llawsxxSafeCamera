@@ -443,6 +443,13 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
             config = config.copy(audioInputSource = AudioInputSource.MIC)
         }
     }
+    LaunchedEffect(config.mode, config.container, config.highSpeedMode, config.audioFloatSidecarEnabled) {
+        val floatSidecarSupported = config.hasAudio && !config.highSpeedMode &&
+            (config.hasVideo || config.container == ContainerFormat.MPEG_TS)
+        if (config.audioFloatSidecarEnabled && !floatSidecarSupported) {
+            config = config.copy(audioFloatSidecarEnabled = false)
+        }
+    }
     LaunchedEffect(
         config.mode,
         config.container,
@@ -487,6 +494,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 audioAutomaticGainControl = false,
                 audioDisableNoiseSuppressor = false,
                 audioDisableEchoCanceler = false,
+                audioFloatSidecarEnabled = false,
                 rotateImagePixels = false,
                 manualExposure = false,
                 dynamicRange = VideoDynamicRange.SDR,
@@ -1941,6 +1949,15 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             config.audioAutomaticGainControl -> "已请求系统 AGC；实际增益策略和效果由设备音频实现决定。"
                             else -> "AGC 会根据输入响度自动调整麦克风增益，可能产生音量抽吸感。"
                         },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    ToggleLine(
+                        "同步 32-bit Float WAV",
+                        config.audioFloatSidecarEnabled,
+                        !recording && (config.hasVideo || config.container == ContainerFormat.MPEG_TS) && !config.highSpeedMode,
+                    ) { config = config.copy(audioFloatSidecarEnabled = it) }
+                    Text(
+                        "启用后额外保存与录制同步的 Float WAV 边车文件；AAC/视频文件仍会正常生成。纯音频 MP4 不支持。",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     val nsAvailable = NoiseSuppressor.isAvailable()

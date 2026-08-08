@@ -33,6 +33,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.max
 import kotlin.math.log10
+import kotlin.math.roundToInt
 
 @RequiresApi(Build.VERSION_CODES.O)
 class MediaCodecRecorderEngine(
@@ -70,6 +71,7 @@ class MediaCodecRecorderEngine(
     @Volatile private var audioCodec: MediaCodec? = null
     @Volatile private var audioRecord: AudioRecord? = null
     private var audioCaptureEffects: AudioCaptureEffects? = null
+    private var floatWavWriter: FloatWavWriter? = null
     @Volatile private var output: OutputHandle? = null
     @Volatile private var mux: EncodedMuxCoordinator? = null
     @Volatile private var tsOutput: NativeTsOutput? = null
@@ -90,6 +92,7 @@ class MediaCodecRecorderEngine(
     private val audioRecordLock = Any()
     private var audioStopRequested = false
     private var audioRecordingStarted = false
+    private var audioMinBuffer = 16_384
     private val finalizationGate = FinalizationGate()
     private val preparing = AtomicBoolean(false)
     private var videoDrainThread: Thread? = null
@@ -192,6 +195,10 @@ class MediaCodecRecorderEngine(
                 mediaMuxer.setOrientationHint(recordingOrientationHint(context, config.cameraId, config.orientation))
             }
             coordinator = MediaMuxCoordinator(mediaMuxer, config.hasAudio) { markMuxStarted() }
+        }
+        if (config.audioFloatSidecarEnabled && config.hasAudio) {
+            val wav = outputStore.create("${baseName}_float.wav", "audio/wav")
+            floatWavWriter = FloatWavWriter(wav, config.audioSampleRate, config.audioChannelCount)
         }
         mux = if (config.spsVuiRewriteEnabled) {
             VuiRewritingMuxCoordinator(
@@ -306,15 +313,17 @@ class MediaCodecRecorderEngine(
         val sampleRate = config.audioSampleRate
         val channelCount = config.audioChannelCount
         val channelMask = if (channelCount == 1) AudioFormat.CHANNEL_IN_MONO else AudioFormat.CHANNEL_IN_STEREO
-        val minBuffer = AudioRecord.getMinBufferSize(sampleRate, channelMask, AudioFormat.ENCODING_PCM_16BIT)
+        val encoding = if (config.audioFloatSidecarEnabled) AudioFormat.ENCODING_PCM_FLOAT else AudioFormat.ENCODING_PCM_16BIT
+        val minBuffer = AudioRecord.getMinBufferSize(sampleRate, channelMask, encoding)
         require(minBuffer > 0) { "设备不支持 ${sampleRate / 1000.0} kHz、${if (channelCount == 1) "单声道" else "双声道"}录音" }
+        audioMinBuffer = max(minBuffer * 2, 16_384)
         @SuppressLint("MissingPermission")
         val record = AudioRecord(
             config.audioInputSource.mediaRecorderValue,
             sampleRate,
             channelMask,
-            AudioFormat.ENCODING_PCM_16BIT,
-            max(minBuffer * 2, 16_384),
+            encoding,
+            audioMinBuffer,
         )
         audioRecord = record
         require(record.state == AudioRecord.STATE_INITIALIZED) { "无法初始化麦克风" }
@@ -386,6 +395,8 @@ class MediaCodecRecorderEngine(
         val record = audioRecord ?: return
         audioThread = Thread({
             val outputInfo = MediaCodec.BufferInfo()
+            val floatInput = if (config.audioFloatSidecarEnabled) FloatArray(max(audioMinBuffer / 4, 4096)) else null
+            val pcmBytes = ByteArray(audioMinBuffer)
             var samplesRead = 0L
             var inputEnded = false
             try {
@@ -399,9 +410,29 @@ class MediaCodecRecorderEngine(
                         if (inputIndex >= 0) {
                             val buffer = codec.getInputBuffer(inputIndex) ?: continue
                             buffer.clear()
-                            val count = record.read(buffer, buffer.remaining(), AudioRecord.READ_BLOCKING)
+                            val count = if (floatInput != null) {
+                                val sampleCapacity = minOf(floatInput.size, buffer.remaining() / 2)
+                                val read = record.read(floatInput, 0, sampleCapacity, AudioRecord.READ_BLOCKING)
+                                if (read > 0) {
+                                    floatWavWriter?.write(floatInput, read)
+                                    var peak = 0f
+                                    for (i in 0 until read) {
+                                        val sample = floatInput[i].coerceIn(-1f, 1f)
+                                        peak = max(peak, kotlin.math.abs(sample))
+                                        val value = (sample * 32767f).roundToInt().coerceIn(-32768, 32767)
+                                        pcmBytes[i * 2] = (value and 0xff).toByte()
+                                        pcmBytes[i * 2 + 1] = (value shr 8).toByte()
+                                    }
+                                    buffer.put(pcmBytes, 0, read * 2)
+                                    audioLevelDb = if (peak > 0f) (20.0 * log10(peak.toDouble())).toFloat().coerceIn(-60f, 0f) else -60f
+                                    read * 2
+                                } else read
+                            } else {
+                                record.read(buffer, buffer.remaining(), AudioRecord.READ_BLOCKING).also { read ->
+                                    if (read > 0) audioLevelDb = pcm16PeakDb(buffer, read)
+                                }
+                            }
                             if (count > 0) {
-                                audioLevelDb = pcm16PeakDb(buffer, count)
                                 val frames = count / (2 * config.audioChannelCount)
                                 codec.queueInputBuffer(inputIndex, 0, count, realAudioPtsUs(samplesRead), 0)
                                 samplesRead += frames
@@ -966,6 +997,7 @@ class MediaCodecRecorderEngine(
         runCatching { videoCodec?.stop() }; runCatching { videoCodec?.release() }; videoCodec = null
         runCatching { audioCodec?.stop() }; runCatching { audioCodec?.release() }; audioCodec = null
         audioCaptureEffects?.release(); audioCaptureEffects = null
+        floatWavWriter?.close(); floatWavWriter = null
         runCatching { audioRecord?.release() }; audioRecord = null
         runCatching { encoderSurface?.release() }; encoderSurface = null
     }
