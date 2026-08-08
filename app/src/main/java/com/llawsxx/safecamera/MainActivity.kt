@@ -160,7 +160,9 @@ import com.llawsxx.safecamera.recording.rotatedDimensions
 import com.llawsxx.safecamera.ui.theme.LlawsxxSafeCameraTheme
 import java.util.Locale
 import kotlin.math.ceil
+import kotlin.math.exp
 import kotlin.math.floor
+import kotlin.math.ln
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
@@ -3183,14 +3185,18 @@ private fun CompactExposureControls(
                 }
             }
             camera.exposureRange?.let { range ->
-                val minUs = range.lower / 1_000f
-                val maxUs = minOf(range.upper, config.maximumExposureNs).coerceAtLeast(range.lower) / 1_000f
+                val maximum = minOf(range.upper, config.maximumExposureNs).coerceAtLeast(range.lower)
                 Column(Modifier.weight(1f)) {
                     Text("快门 ${formatShutter(config.exposureNs)}", style = MaterialTheme.typography.labelMedium)
                     Slider(
-                        value = (config.exposureNs / 1_000f).coerceIn(minUs, maxUs),
-                        onValueChange = { onChange(config.copy(exposureNs = (it * 1_000).toLong(), unrestrictedExposure = false)) },
-                        valueRange = minUs..maxUs,
+                        value = exposureSliderPosition(config.exposureNs, range.lower, maximum),
+                        onValueChange = {
+                            onChange(config.copy(
+                                exposureNs = exposureFromSliderPosition(it, range.lower, maximum),
+                                unrestrictedExposure = false,
+                            ))
+                        },
+                        valueRange = 0f..1f,
                         enabled = enabled,
                     )
                 }
@@ -3492,9 +3498,11 @@ private fun LandscapeCameraControls(
                                             }
                                             FullscreenControl.WB -> {
                                                 val slidersAlreadyVisible = selected == FullscreenControl.WB
+                                                val adjustableManualWhiteBalance = config.manualWhiteBalance &&
+                                                    config.colorCorrectionMode == ColorCorrectionMode.TRANSFORM_MATRIX
                                                 selected = control
                                                 onPresetControlChange(null)
-                                                whiteBalanceExpanded = !config.manualWhiteBalance || slidersAlreadyVisible
+                                                whiteBalanceExpanded = !adjustableManualWhiteBalance || slidersAlreadyVisible
                                             }
                                             FullscreenControl.APERTURE -> { selected = control; onPresetControlChange(null); apertureExpanded = true }
                                             FullscreenControl.FOCUS -> if (supportsManualFocus) {
@@ -3637,12 +3645,20 @@ private fun LandscapeCameraControls(
                                 VerticalValueSlider(
                                     label = "快门",
                                     valueText = formatShutter(displayedExposureNs),
-                                    value = (displayedExposureNs / 1_000f).coerceIn(range.lower / 1_000f, maximum / 1_000f),
-                                    onValueChange = { onChange(config.copy(manualExposure = true, exposureNs = (it * 1_000).toLong(), unrestrictedExposure = false)) },
-                                    valueRange = range.lower / 1_000f..maximum / 1_000f,
+                                    value = exposureSliderPosition(displayedExposureNs, range.lower, maximum),
+                                    onValueChange = {
+                                        onChange(config.copy(
+                                            manualExposure = true,
+                                            exposureNs = exposureFromSliderPosition(it, range.lower, maximum),
+                                            unrestrictedExposure = false,
+                                        ))
+                                    },
+                                    valueRange = 0f..1f,
                                     enabled = enabled && config.manualExposure,
                                     lightText = overlay,
-                                    tickLabel = { formatShutter((it * 1_000).toLong()) },
+                                    tickLabel = {
+                                        formatShutter(exposureFromSliderPosition(it, range.lower, maximum))
+                                    },
                                 )
                             }
                         }
@@ -3884,6 +3900,24 @@ private fun compactRulerLabel(value: Float): String = when {
     kotlin.math.abs(value) >= 100f -> value.roundToInt().toString()
     kotlin.math.abs(value) >= 10f -> value.format1().trimEnd('0').trimEnd('.')
     else -> value.format2().trimEnd('0').trimEnd('.')
+}
+
+internal fun exposureSliderPosition(exposureNs: Long, minimumNs: Long, maximumNs: Long): Float {
+    val minimum = minimumNs.coerceAtLeast(1L).toDouble()
+    val maximum = maximumNs.coerceAtLeast(minimumNs.coerceAtLeast(1L)).toDouble()
+    if (maximum <= minimum) return 0f
+    val exposure = exposureNs.coerceIn(minimum.toLong(), maximum.toLong()).toDouble()
+    return ((ln(exposure) - ln(minimum)) / (ln(maximum) - ln(minimum))).toFloat().coerceIn(0f, 1f)
+}
+
+internal fun exposureFromSliderPosition(position: Float, minimumNs: Long, maximumNs: Long): Long {
+    val minimum = minimumNs.coerceAtLeast(1L).toDouble()
+    val maximum = maximumNs.coerceAtLeast(minimumNs.coerceAtLeast(1L)).toDouble()
+    if (maximum <= minimum) return minimum.toLong()
+    val normalized = position.coerceIn(0f, 1f).toDouble()
+    return exp(ln(minimum) + normalized * (ln(maximum) - ln(minimum)))
+        .toLong()
+        .coerceIn(minimum.toLong(), maximum.toLong())
 }
 
 private fun rulerValueLabel(
@@ -4218,9 +4252,11 @@ private fun QuickCameraControls(
                                 }
                                 FullscreenControl.WB -> {
                                     val slidersAlreadyVisible = selected == FullscreenControl.WB
+                                    val adjustableManualWhiteBalance = config.manualWhiteBalance &&
+                                        config.colorCorrectionMode == ColorCorrectionMode.TRANSFORM_MATRIX
                                     selected = control
                                     onPresetControlChange(null)
-                                    whiteBalanceExpanded = !config.manualWhiteBalance || slidersAlreadyVisible
+                                    whiteBalanceExpanded = !adjustableManualWhiteBalance || slidersAlreadyVisible
                                 }
                                 FullscreenControl.APERTURE -> { selected = control; onPresetControlChange(null); apertureExpanded = true }
                                 FullscreenControl.FOCUS -> if (supportsManualFocus) {
@@ -4366,11 +4402,19 @@ private fun QuickCameraControls(
                 FullscreenControl.SHUTTER -> camera.exposureRange?.let { range ->
                     val maximum = minOf(range.upper, config.maximumExposureNs).coerceAtLeast(range.lower)
                     CompactValueSlider(
-                        value = (displayedExposureNs / 1_000f).coerceIn(range.lower / 1_000f, maximum / 1_000f),
-                        onValueChange = { onChange(config.copy(manualExposure = true, exposureNs = (it * 1_000).toLong(), unrestrictedExposure = false)) },
-                        valueRange = range.lower / 1_000f..maximum / 1_000f,
+                        value = exposureSliderPosition(displayedExposureNs, range.lower, maximum),
+                        onValueChange = {
+                            onChange(config.copy(
+                                manualExposure = true,
+                                exposureNs = exposureFromSliderPosition(it, range.lower, maximum),
+                                unrestrictedExposure = false,
+                            ))
+                        },
+                        valueRange = 0f..1f,
                         enabled = enabled && config.manualExposure,
-                        valueLabel = { formatShutter((it * 1_000).toLong()) },
+                        valueLabel = {
+                            formatShutter(exposureFromSliderPosition(it, range.lower, maximum))
+                        },
                         currentValueLabel = formatShutter(displayedExposureNs),
                     )
                 }

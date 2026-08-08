@@ -126,6 +126,26 @@ class RecordingConfigTest {
     }
 
     @Test
+    fun shutterSliderUsesLogarithmicExposureScale() {
+        val minimum = 100_000L
+        val maximum = 100_000_000L
+
+        assertEquals(0f, exposureSliderPosition(minimum, minimum, maximum), 0.0001f)
+        assertEquals(1f, exposureSliderPosition(maximum, minimum, maximum), 0.0001f)
+        assertEquals(
+            0.5f,
+            exposureSliderPosition(3_162_277L, minimum, maximum),
+            0.0001f,
+        )
+        val roundTrip = exposureFromSliderPosition(
+                exposureSliderPosition(10_000_000L, minimum, maximum),
+                minimum,
+                maximum,
+            )
+        assertTrue(kotlin.math.abs(roundTrip - 10_000_000L) <= 2L)
+    }
+
+    @Test
     fun shadowLiftCurvePreservesEndpointsMapsKneeAndRemainsMonotonic() {
         assertEquals(0f, rawShadowLiftValue(0f, 0.65f, 0.80f, 0.5f), 0.0001f)
         assertEquals(0.80f, rawShadowLiftValue(0.65f, 0.65f, 0.80f, 0.5f), 0.0001f)
