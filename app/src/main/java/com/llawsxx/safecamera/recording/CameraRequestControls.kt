@@ -13,6 +13,7 @@ import android.util.Range
 import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.sqrt
+import kotlin.math.roundToInt
 
 object CameraRequestControls {
     fun apply(
@@ -135,31 +136,44 @@ object CameraRequestControls {
         val supportsManualWhiteBalance = CaptureRequest.CONTROL_AWB_MODE_OFF in awbModes &&
             CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING in capabilities
         if (config.manualWhiteBalance && supportsManualWhiteBalance) {
-            val gains = if (config.advancedWhiteBalance) {
-                manualWhiteBalanceGains(
-                    red = config.whiteBalanceRedGain,
-                    greenEven = config.whiteBalanceGreenEvenGain,
-                    greenOdd = if (config.splitWhiteBalanceGreen) {
-                        config.whiteBalanceGreenOddGain
-                    } else {
-                        config.whiteBalanceGreenEvenGain
-                    },
-                    blue = config.whiteBalanceBlueGain,
-                )
-            } else {
-                manualWhiteBalanceGains(config.whiteBalanceTemperature, config.whiteBalanceTint)
-            }
             builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF)
             val transform = config.whiteBalanceColorTransform.toColorSpaceTransformOrNull()
-            if (transform != null) {
-                builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+            val requestedCorrectionMode = config.colorCorrectionMode.cameraValue.takeUnless {
+                it == CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX && transform == null
+            } ?: CaptureRequest.COLOR_CORRECTION_MODE_FAST
+            val correctionModes = characteristics.get(
+                CameraCharacteristics.COLOR_CORRECTION_AVAILABLE_MODES,
+            ) ?: intArrayOf()
+            val correctionMode = requestedCorrectionMode.takeIf(correctionModes::contains)
+                ?: CaptureRequest.COLOR_CORRECTION_MODE_FAST.takeIf(correctionModes::contains)
+                ?: correctionModes.firstOrNull()
+            if (correctionMode != null) {
+                builder.set(CaptureRequest.COLOR_CORRECTION_MODE, correctionMode)
+            }
+            if (correctionMode == CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX && transform != null) {
+                val gains = if (config.advancedWhiteBalance) {
+                    manualWhiteBalanceGains(
+                        red = config.whiteBalanceRedGain,
+                        greenEven = config.whiteBalanceGreenEvenGain,
+                        greenOdd = if (config.splitWhiteBalanceGreen) {
+                            config.whiteBalanceGreenOddGain
+                        } else {
+                            config.whiteBalanceGreenEvenGain
+                        },
+                        blue = config.whiteBalanceBlueGain,
+                    )
+                } else {
+                    manualWhiteBalanceGains(config.whiteBalanceTemperature, config.whiteBalanceTint)
+                }
                 builder.set(
                     CaptureRequest.COLOR_CORRECTION_GAINS,
                     RggbChannelVector(gains.red, gains.greenEven, gains.greenOdd, gains.blue),
                 )
-                builder.set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, transform)
-            } else {
-                builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
+                val selectedTransform = when (config.whiteBalanceTransformMode) {
+                    WhiteBalanceTransformMode.LATEST -> transform
+                    WhiteBalanceTransformMode.BT2020 -> transform.toBt2020ColorSpaceTransformOrNull() ?: transform
+                }
+                builder.set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, selectedTransform)
             }
         } else {
             builder.set(
@@ -410,6 +424,8 @@ internal fun RecordingConfig.cameraRequestControlsKey(): List<Any?> = listOf(
     whiteBalanceGreenOddGain,
     whiteBalanceBlueGain,
     whiteBalanceColorTransform,
+    colorCorrectionMode,
+    whiteBalanceTransformMode,
     focusMode,
     focusDistanceDiopters,
     unrestrictedFocus,
@@ -433,6 +449,35 @@ internal fun ColorSpaceTransform.toPackedIntList(): List<Int> = IntArray(18).als
 internal fun List<Int>.toColorSpaceTransformOrNull(): ColorSpaceTransform? = takeIf {
     it.size == 18 && (1 until 18 step 2).all { index -> it[index] != 0 }
 }?.let { ColorSpaceTransform(it.toIntArray()) }
+
+internal fun ColorSpaceTransform.toBt2020ColorSpaceTransformOrNull(): ColorSpaceTransform? {
+    val packed = IntArray(18)
+    copyElements(packed, 0)
+    val source = FloatArray(9)
+    for (index in 0 until 9) {
+        val numerator = packed[index * 2]
+        val denominator = packed[index * 2 + 1]
+        if (denominator == 0) return null
+        source[index] = numerator.toFloat() / denominator.toFloat()
+    }
+    val converted = FloatArray(9)
+    for (row in 0 until 3) {
+        for (column in 0 until 3) {
+            var value = 0f
+            for (inner in 0 until 3) {
+                value += LINEAR_BT709_TO_BT2020[row * 3 + inner] * source[inner * 3 + column]
+            }
+            converted[row * 3 + column] = value
+        }
+    }
+    val result = IntArray(18)
+    val denominator = 1_000_000
+    for (index in 0 until 9) {
+        result[index * 2] = (converted[index] * denominator).roundToInt()
+        result[index * 2 + 1] = denominator
+    }
+    return runCatching { ColorSpaceTransform(result) }.getOrNull()
+}
 
 internal fun createTonemapCurve(mode: CameraTonemapCurve, maximumPoints: Int): TonemapCurve {
     val points = maximumPoints.coerceIn(2, 256)

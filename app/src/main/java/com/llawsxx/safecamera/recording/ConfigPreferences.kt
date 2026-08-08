@@ -148,6 +148,11 @@ object ConfigPreferences {
             whiteBalanceGreenEvenGain = p.getFloat("whiteBalanceGreenEvenGain", 1f).coerceIn(1f, 8f),
             whiteBalanceGreenOddGain = p.getFloat("whiteBalanceGreenOddGain", 1f).coerceIn(1f, 8f),
             whiteBalanceBlueGain = p.getFloat("whiteBalanceBlueGain", 1f).coerceIn(1f, 8f),
+            colorCorrectionMode = enumValue(
+                p.getString("colorCorrectionMode", null),
+                ColorCorrectionMode.TRANSFORM_MATRIX,
+            ),
+            whiteBalanceTransformMode = enumValue(p.getString("whiteBalanceTransformMode", null), WhiteBalanceTransformMode.LATEST),
             focusMode = enumValue(p.getString("focusMode", null), FocusMode.CONTINUOUS),
             focusDistanceDiopters = p.getFloat("focusDistanceDiopters", 0f).coerceAtLeast(0f),
             touchFocusEnabled = p.getBoolean("touchFocusEnabled", false),
@@ -285,6 +290,8 @@ object ConfigPreferences {
             .putFloat("whiteBalanceGreenEvenGain", c.whiteBalanceGreenEvenGain)
             .putFloat("whiteBalanceGreenOddGain", c.whiteBalanceGreenOddGain)
             .putFloat("whiteBalanceBlueGain", c.whiteBalanceBlueGain)
+            .putString("colorCorrectionMode", c.colorCorrectionMode.name)
+            .putString("whiteBalanceTransformMode", c.whiteBalanceTransformMode.name)
             .putString("focusMode", c.focusMode.name)
             .putFloat("focusDistanceDiopters", c.focusDistanceDiopters)
             .putBoolean("touchFocusEnabled", c.touchFocusEnabled)

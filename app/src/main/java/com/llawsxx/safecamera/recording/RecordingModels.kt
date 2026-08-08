@@ -142,6 +142,17 @@ enum class CameraTonemapCurve(val label: String) : Serializable {
     HLG("HLG"),
 }
 
+enum class ColorCorrectionMode(val label: String, val cameraValue: Int) : Serializable {
+    FAST("FAST", CameraCharacteristics.COLOR_CORRECTION_MODE_FAST),
+    HIGH_QUALITY("HIGH_QUALITY", CameraCharacteristics.COLOR_CORRECTION_MODE_HIGH_QUALITY),
+    TRANSFORM_MATRIX("TRANSFORM_MATRIX", CameraCharacteristics.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX),
+}
+
+enum class WhiteBalanceTransformMode(val label: String) : Serializable {
+    LATEST("最新矩阵（原样）"),
+    BT2020("最新矩阵转换为 BT.2020"),
+}
+
 enum class OrientationMode(val label: String) : Serializable {
     FOLLOW_SENSOR("跟随设备"), LANDSCAPE("固定横屏"), PORTRAIT("固定竖屏")
 }
@@ -274,6 +285,8 @@ data class RecordingConfig(
     val whiteBalanceGreenOddGain: Float = 1f,
     val whiteBalanceBlueGain: Float = 1f,
     val whiteBalanceColorTransform: List<Int> = emptyList(),
+    val colorCorrectionMode: ColorCorrectionMode = ColorCorrectionMode.TRANSFORM_MATRIX,
+    val whiteBalanceTransformMode: WhiteBalanceTransformMode = WhiteBalanceTransformMode.LATEST,
     val focusMode: FocusMode = FocusMode.CONTINUOUS,
     val focusDistanceDiopters: Float = 0f,
     val touchFocusEnabled: Boolean = false,

@@ -141,6 +141,8 @@ import com.llawsxx.safecamera.recording.RawScalingQuality
 import com.llawsxx.safecamera.recording.RawSensorInfo
 import com.llawsxx.safecamera.recording.AudioAacProfile
 import com.llawsxx.safecamera.recording.AudioInputSource
+import com.llawsxx.safecamera.recording.ColorCorrectionMode
+import com.llawsxx.safecamera.recording.WhiteBalanceTransformMode
 import com.llawsxx.safecamera.recording.VideoBitrateMode
 import com.llawsxx.safecamera.recording.VideoCodec
 import com.llawsxx.safecamera.recording.VideoDynamicRange
@@ -568,6 +570,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.whiteBalanceGreenOddGain,
         config.whiteBalanceBlueGain,
         config.whiteBalanceColorTransform,
+        config.colorCorrectionMode,
+        config.whiteBalanceTransformMode,
         config.focusMode,
         config.focusDistanceDiopters,
         config.unrestrictedFocus,
@@ -655,6 +659,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.whiteBalanceGreenOddGain,
         config.whiteBalanceBlueGain,
         config.whiteBalanceColorTransform,
+        config.colorCorrectionMode,
+        config.whiteBalanceTransformMode,
         config.focusMode,
         config.focusDistanceDiopters,
         config.unrestrictedFocus,
@@ -1046,6 +1052,37 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             "Android 9 以下的系统 MediaRecorder 不能指定物理麦克风；精确帧率引擎仍可选择。",
                             style = MaterialTheme.typography.bodySmall,
                         )
+                    }
+                }
+                if (config.hasVideo) {
+                    Section("色彩校正") {
+                        Labeled("COLOR_CORRECTION_MODE") {
+                            ChoiceRow(
+                                ColorCorrectionMode.entries,
+                                config.colorCorrectionMode,
+                                { it.label },
+                                !recording,
+                            ) { config = config.copy(colorCorrectionMode = it) }
+                        }
+                        if (config.colorCorrectionMode == ColorCorrectionMode.TRANSFORM_MATRIX) {
+                            Labeled("TRANSFORM_MATRIX 来源") {
+                                ChoiceRow(
+                                    WhiteBalanceTransformMode.entries,
+                                    config.whiteBalanceTransformMode,
+                                    { it.label },
+                                    !recording,
+                                ) { config = config.copy(whiteBalanceTransformMode = it) }
+                            }
+                            Text(
+                                "原样使用最新自动白平衡矩阵，或将其转换为 BT.2020 色域矩阵。需要先关闭 AWB（启用手动白平衡）。",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        } else {
+                            Text(
+                                "仅在关闭 AWB（启用手动白平衡）时使用；当前模式由相机厂商实现。",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                     }
                 }
                 if (config.hasVideo) {
@@ -3205,7 +3242,14 @@ private fun CompactExposureControls(
         enabled && camera.supportsManualWhiteBalance,
     ) { onChange(config.copy(manualWhiteBalance = it)) }
     if (config.manualWhiteBalance && camera.supportsManualWhiteBalance) {
-        ManualWhiteBalanceControls(config, enabled, onChange)
+        if (config.colorCorrectionMode == ColorCorrectionMode.TRANSFORM_MATRIX) {
+            ManualWhiteBalanceControls(config, enabled, onChange)
+        } else {
+            Text(
+                "${config.colorCorrectionMode.label} 模式下白平衡增益由相机决定，只能开启或关闭 AWB。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
     } else if (!camera.supportsManualWhiteBalance) {
         Text("当前镜头不支持手动白平衡", style = MaterialTheme.typography.bodySmall)
     }
@@ -3351,7 +3395,8 @@ private fun LandscapeCameraControls(
         FullscreenControl.ISO -> camera.isoRange != null
         FullscreenControl.SHUTTER -> camera.exposureRange != null
         FullscreenControl.EV -> camera.exposureCompensationRange != null
-        FullscreenControl.WB -> config.manualWhiteBalance
+        FullscreenControl.WB -> config.manualWhiteBalance &&
+            config.colorCorrectionMode == ColorCorrectionMode.TRANSFORM_MATRIX
         FullscreenControl.FOCUS ->
             config.focusMode == FocusMode.MANUAL && supportsManualFocus && camera.minimumFocusDistance > 0f
         else -> false
@@ -3503,10 +3548,15 @@ private fun LandscapeCameraControls(
                                             FullscreenControl.SHUTTER -> formatShutter(displayedExposureNs)
                                             FullscreenControl.APERTURE -> displayedAperture?.let { "f/${it.format1()}" } ?: "光圈"
                                             FullscreenControl.EV -> exposureCompensationLabel(camera, config.exposureCompensation)
-                                            FullscreenControl.WB -> if (config.manualWhiteBalance) {
+                                            FullscreenControl.WB -> if (
+                                                config.manualWhiteBalance &&
+                                                config.colorCorrectionMode == ColorCorrectionMode.TRANSFORM_MATRIX
+                                            ) {
                                                 if (config.advancedWhiteBalance) {
                                                     if (config.splitWhiteBalanceGreen) "RGGB" else "RGB"
                                                 } else "${config.whiteBalanceTemperature}K"
+                                            } else if (config.manualWhiteBalance) {
+                                                "AWB 关闭"
                                             } else awbLabel(config.awbMode)
                                             FullscreenControl.FOCUS -> if (config.focusMode == FocusMode.MANUAL) "MF" else "AF"
                                         },
@@ -3518,7 +3568,14 @@ private fun LandscapeCameraControls(
                                 }
                                 if (control == FullscreenControl.WB) {
                                     DropdownMenu(expanded = whiteBalanceExpanded, onDismissRequest = { whiteBalanceExpanded = false }) {
-                                        if (camera.supportsManualWhiteBalance) {
+                                        if (camera.supportsManualWhiteBalance &&
+                                            config.colorCorrectionMode != ColorCorrectionMode.TRANSFORM_MATRIX
+                                        ) {
+                                            DropdownMenuItem(text = { Text("关闭 AWB") }, onClick = {
+                                                whiteBalanceExpanded = false
+                                                onChange(config.withManualWhiteBalanceFromLive(liveExposure, advanced = false))
+                                            })
+                                        } else if (camera.supportsManualWhiteBalance) {
                                             DropdownMenuItem(text = { Text("手动：色温 + Tint") }, onClick = {
                                                 whiteBalanceExpanded = false
                                                 onChange(config.withManualWhiteBalanceFromLive(liveExposure, advanced = false))
@@ -3857,6 +3914,14 @@ private fun LandscapeWhiteBalanceSliders(
         )
         return
     }
+    if (config.colorCorrectionMode != ColorCorrectionMode.TRANSFORM_MATRIX) {
+        Text(
+            "${config.colorCorrectionMode.label}：白平衡增益由相机决定",
+            color = if (lightText) Color.White else Color.Unspecified,
+            style = MaterialTheme.typography.labelSmall,
+        )
+        return
+    }
     LandscapeSliderColumns {
         if (config.advancedWhiteBalance) {
             val entries = buildList {
@@ -4080,6 +4145,7 @@ private fun QuickCameraControls(
     val adjustmentRows = when (selected) {
         FullscreenControl.WB -> when {
             !config.manualWhiteBalance -> 1
+            config.colorCorrectionMode != ColorCorrectionMode.TRANSFORM_MATRIX -> 1
             config.advancedWhiteBalance -> if (config.splitWhiteBalanceGreen) 4 else 3
             else -> 2
         }
@@ -4208,10 +4274,15 @@ private fun QuickCameraControls(
                                 FullscreenControl.SHUTTER -> formatShutter(displayedExposureNs)
                                 FullscreenControl.APERTURE -> displayedAperture?.let { "f/${it.format1()}" } ?: "光圈"
                                 FullscreenControl.EV -> exposureCompensationLabel(camera, config.exposureCompensation)
-                                FullscreenControl.WB -> if (config.manualWhiteBalance) {
+                                FullscreenControl.WB -> if (
+                                    config.manualWhiteBalance &&
+                                    config.colorCorrectionMode == ColorCorrectionMode.TRANSFORM_MATRIX
+                                ) {
                                     if (config.advancedWhiteBalance) {
                                         if (config.splitWhiteBalanceGreen) "RGGB" else "RGB"
                                     } else "${config.whiteBalanceTemperature}K ${tintLabel(config.whiteBalanceTint)}"
+                                } else if (config.manualWhiteBalance) {
+                                    "AWB 关闭"
                                 } else awbLabel(config.awbMode)
                                 FullscreenControl.FOCUS -> if (config.focusMode == FocusMode.MANUAL) "MF" else "AF"
                             },
@@ -4222,7 +4293,14 @@ private fun QuickCameraControls(
                     }
                     if (control == FullscreenControl.WB) {
                         DropdownMenu(expanded = whiteBalanceExpanded, onDismissRequest = { whiteBalanceExpanded = false }) {
-                            if (camera.supportsManualWhiteBalance) {
+                            if (camera.supportsManualWhiteBalance &&
+                                config.colorCorrectionMode != ColorCorrectionMode.TRANSFORM_MATRIX
+                            ) {
+                                DropdownMenuItem(text = { Text("关闭 AWB") }, onClick = {
+                                    whiteBalanceExpanded = false
+                                    onChange(config.withManualWhiteBalanceFromLive(liveExposure, advanced = false))
+                                })
+                            } else if (camera.supportsManualWhiteBalance) {
                                 DropdownMenuItem(text = { Text("手动：色温 + Tint") }, onClick = {
                                     whiteBalanceExpanded = false
                                     onChange(config.withManualWhiteBalanceFromLive(liveExposure, advanced = false))
@@ -4306,8 +4384,16 @@ private fun QuickCameraControls(
                         valueLabel = { exposureCompensationLabel(camera, it.toInt()) },
                     )
                 }
-                FullscreenControl.WB -> if (config.manualWhiteBalance && camera.supportsManualWhiteBalance) {
+                FullscreenControl.WB -> if (
+                    config.manualWhiteBalance && camera.supportsManualWhiteBalance &&
+                    config.colorCorrectionMode == ColorCorrectionMode.TRANSFORM_MATRIX
+                ) {
                     CompactManualWhiteBalanceControls(config, enabled, onChange)
+                } else if (config.manualWhiteBalance && camera.supportsManualWhiteBalance) {
+                    Text(
+                        "${config.colorCorrectionMode.label}：白平衡增益由相机决定",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
                 }
                 FullscreenControl.APERTURE -> Unit
                 FullscreenControl.FOCUS -> FocusControls(

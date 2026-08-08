@@ -18,6 +18,7 @@ import com.llawsxx.safecamera.recording.multiply3x3
 import com.llawsxx.safecamera.recording.mapTouchFocusPoint
 import com.llawsxx.safecamera.recording.rawShadowLiftValue
 import com.llawsxx.safecamera.recording.CameraTonemapCurve
+import com.llawsxx.safecamera.recording.ColorCorrectionMode
 import com.llawsxx.safecamera.recording.cameraTonemapValue
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -93,6 +94,7 @@ class RecordingConfigTest {
         assertEquals(0.80f, defaults.effectiveRawShadowLiftTarget, 0f)
         assertEquals(0.50f, defaults.effectiveRawShadowLiftSmoothness, 0f)
         assertEquals(CameraTonemapCurve.OFF, defaults.cameraTonemapCurve)
+        assertEquals(ColorCorrectionMode.TRANSFORM_MATRIX, defaults.colorCorrectionMode)
         assertEquals(android.hardware.camera2.CameraCharacteristics.HOT_PIXEL_MODE_FAST, defaults.hotPixelMode)
         assertEquals(
             android.hardware.camera2.CameraCharacteristics.COLOR_CORRECTION_ABERRATION_MODE_FAST,
