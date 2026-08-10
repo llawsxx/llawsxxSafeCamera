@@ -266,6 +266,17 @@ class RecordingConfigTest {
     }
 
     @Test
+    fun floatAudioSidecarRequestsMediaCodecEngineForVideoRecording() {
+        assertTrue(RecordingConfig(audioFloatSidecarEnabled = true).mediaCodecEngineRequested)
+        assertTrue(
+            !RecordingConfig(
+                mode = com.llawsxx.safecamera.recording.RecordingMode.AUDIO,
+                audioFloatSidecarEnabled = true,
+            ).mediaCodecEngineRequested,
+        )
+    }
+
+    @Test
     fun mpegTsUsesAacLcProfile() {
         val config = RecordingConfig(
             container = ContainerFormat.MPEG_TS,

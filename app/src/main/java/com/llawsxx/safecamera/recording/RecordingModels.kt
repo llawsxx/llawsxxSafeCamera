@@ -246,6 +246,7 @@ data class RecordingConfig(
     val audioDisableNoiseSuppressor: Boolean = false,
     val audioDisableEchoCanceler: Boolean = false,
     val audioInputSource: AudioInputSource = AudioInputSource.CAMCORDER,
+    val audioFloatSidecarEnabled: Boolean = false,
     val audioInputDeviceId: Int? = null,
     val videoCodec: VideoCodec = VideoCodec.H264,
     val dynamicRange: VideoDynamicRange = VideoDynamicRange.SDR,
@@ -376,7 +377,7 @@ data class RecordingConfig(
     val audioSessionEffectsRequested: Boolean get() =
         audioAutomaticGainControl || audioDisableNoiseSuppressor || audioDisableEchoCanceler
     val mediaCodecEngineRequested: Boolean get() = mediaCodecMode || customVideoEncoderParameters ||
-        (hasVideo && hasAudio && audioSessionEffectsRequested) ||
+        (hasVideo && hasAudio && (audioSessionEffectsRequested || audioFloatSidecarEnabled)) ||
         customColorMetadata || videoTransformEnabled || rawProcessingEnabled ||
         dynamicRange != VideoDynamicRange.SDR || manualSpsVuiRewriteEnabled
     val transformWidth: Int get() = if (cropEnabled) cropWidth else width

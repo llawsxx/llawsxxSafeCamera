@@ -90,6 +90,7 @@ object ConfigPreferences {
             audioDisableNoiseSuppressor = p.getBoolean("audioDisableNoiseSuppressor", false),
             audioDisableEchoCanceler = p.getBoolean("audioDisableEchoCanceler", false),
             audioInputSource = enumValue(p.getString("audioInputSource", null), AudioInputSource.CAMCORDER),
+            audioFloatSidecarEnabled = p.getBoolean("audioFloatSidecarEnabled", false),
             audioInputDeviceId = p.getInt("audioInputDeviceId", -1).takeIf { it >= 0 },
             videoCodec = enumValue(p.getString("videoCodec", null), VideoCodec.H264),
             dynamicRange = enumValue(p.getString("dynamicRange", null), VideoDynamicRange.SDR),
@@ -251,6 +252,7 @@ object ConfigPreferences {
             .putBoolean("audioDisableNoiseSuppressor", c.audioDisableNoiseSuppressor)
             .putBoolean("audioDisableEchoCanceler", c.audioDisableEchoCanceler)
             .putString("audioInputSource", c.audioInputSource.name)
+            .putBoolean("audioFloatSidecarEnabled", c.audioFloatSidecarEnabled)
             .putInt("audioInputDeviceId", c.audioInputDeviceId ?: -1)
             .putString("videoCodec", c.videoCodec.name)
             .putString("dynamicRange", c.dynamicRange.name)

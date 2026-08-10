@@ -116,6 +116,11 @@ class RecordingService : Service() {
                 return
             }
         }
+        if (config.audioFloatSidecarEnabled && (!config.hasAudio || config.highSpeedMode ||
+                (!config.hasVideo && config.container != ContainerFormat.MPEG_TS))) {
+            finishWithError("同步 32-bit Float WAV 仅支持视频 MediaCodec 或纯音频 MPEG-TS 录制")
+            return
+        }
         val outputStore = RecordingOutputStore(this, config.outputTreeUri)
         val generation = ++callbackGeneration
         val onStarted: (String) -> Unit = { path -> mainHandler.post {
