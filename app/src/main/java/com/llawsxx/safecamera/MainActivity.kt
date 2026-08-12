@@ -1150,6 +1150,28 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             !recording && !config.highSpeedMode,
                         ) { enabled -> config = config.copy(experimentalUnadvertisedFps = enabled) }
                         ToggleLine(
+                            "自定义自动曝光",
+                            config.customExposureEnabled,
+                            !recording && config.permanentPreviewSurface && !config.highSpeedMode &&
+                                selectedCamera?.manualSensorAvailable == true &&
+                                selectedCamera?.isoRange != null && selectedCamera?.exposureRange != null,
+                        ) { enabled -> config = config.copy(customExposureEnabled = enabled) }
+                        if (!config.permanentPreviewSurface) {
+                            Text(
+                                "自定义自动曝光需先开启“永久预览 Surface”",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        } else if (selectedCamera?.manualSensorAvailable != true ||
+                            selectedCamera?.isoRange == null || selectedCamera?.exposureRange == null
+                        ) {
+                            Text(
+                                "当前镜头不支持自定义自动曝光所需的手动传感器参数",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        ToggleLine(
                             "SENSOR_FRAME_DURATION 自动微调",
                             config.sensorFrameDurationAutoTune,
                             !recording && !config.highSpeedMode &&
@@ -3274,12 +3296,6 @@ private fun CompactExposureControls(
     onChange: (RecordingConfig) -> Unit,
 ) {
     ToggleLine(
-        "自定义自动曝光",
-        config.customExposureEnabled,
-        enabled && config.permanentPreviewSurface && !config.highSpeedMode && config.hasVideo && camera.manualSensorAvailable &&
-            camera.isoRange != null && camera.exposureRange != null,
-    ) { onChange(config.copy(customExposureEnabled = it)) }
-    ToggleLine(
         "手动曝光",
         config.manualExposure,
         enabled && (camera.isoRange != null || config.isoPresets.isNotEmpty() || config.shutterPresets.isNotEmpty()),
@@ -5005,20 +5021,6 @@ private fun CameraProcessingControls(
     enabled: Boolean,
     onChange: (RecordingConfig) -> Unit,
 ) {
-    ToggleLine(
-        "自定义自动曝光",
-        config.customExposureEnabled,
-        enabled && config.permanentPreviewSurface && !config.highSpeedMode && config.hasVideo && camera.manualSensorAvailable &&
-            camera.isoRange != null && camera.exposureRange != null,
-    ) { onChange(config.copy(customExposureEnabled = it)) }
-    if (!camera.manualSensorAvailable || camera.isoRange == null || camera.exposureRange == null) {
-        Text("当前镜头不支持自定义曝光所需的手动传感器参数", style = MaterialTheme.typography.bodySmall)
-    }
-    Text(
-        "需先开启“永久预览Surface”",
-        color = MaterialTheme.colorScheme.error,
-        style = MaterialTheme.typography.bodySmall,
-    )
     ToggleLine("光学防抖", config.opticalStabilization, enabled && camera.oisAvailable) {
         onChange(config.copy(opticalStabilization = it))
     }
