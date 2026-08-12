@@ -85,6 +85,7 @@ class MediaCodecRecorderEngine(
     @Volatile private var sensorFps = 0.0
     private var tunedSensorFrameDurationNs = initialConfig.targetFrameDurationNs
     private var droppedFrames = 0L
+    private val duplicatePtsDroppedFrames = AtomicLong(0L)
     @Volatile private var audioLevelDb = -60f
     private val encodedBytes = AtomicLong(0L)
     private val fpsWindow = EventRateWindow(FPS_STATS_WINDOW_US, 1_000_000L)
@@ -288,9 +289,11 @@ class MediaCodecRecorderEngine(
                 shadowLiftSmoothness = config.effectiveRawShadowLiftSmoothness,
                 outputColorStandard = config.effectiveRawColorStandard,
                 outputColorTransfer = config.effectiveRawColorTransfer,
+                targetPtsAligner = targetPtsAligner(),
+                onDuplicatePtsDropped = { duplicatePtsDroppedFrames.incrementAndGet() },
                 onError = ::fail,
             )
-        } else if (config.videoTransformEnabled) {
+        } else if (config.videoTransformEnabled || config.targetPtsCorrectionEnabled) {
             transformRenderer = GlVideoTransformRenderer(
                 encoderSurface = checkNotNull(encoderSurface),
                 inputWidth = config.width,
@@ -301,6 +304,8 @@ class MediaCodecRecorderEngine(
                 outputHeight = encodedOutputHeight,
                 scalingAlgorithm = config.scalingAlgorithm,
                 initialPixelRotationDegrees = pixelRotationDegrees,
+                targetPtsAligner = targetPtsAligner(),
+                onDuplicatePtsDropped = { duplicatePtsDroppedFrames.incrementAndGet() },
                 onFirstFrame = {},
             )
         }
@@ -483,6 +488,9 @@ class MediaCodecRecorderEngine(
 
     private fun realAudioPtsUs(sampleFrames: Long): Long =
         multiplyDivide(sampleFrames, 1_000_000L, config.audioSampleRate.toLong())
+
+    private fun targetPtsAligner(): TargetFramePtsAligner? =
+        if (config.targetPtsCorrectionEnabled) TargetFramePtsAligner(config.fps) else null
 
     @SuppressLint("MissingPermission")
     private fun openCamera() {
@@ -1140,6 +1148,7 @@ class MediaCodecRecorderEngine(
                         encodedBytes.get(),
                     ) * 8.0,
                     droppedFrames = droppedFrames,
+                    duplicatePtsDroppedFrames = duplicatePtsDroppedFrames.get(),
                     segment = segmentIndex,
                     outputPath = outputPath,
                     bytesStreamed = tsOutput?.bytesStreamed?.get() ?: 0L,

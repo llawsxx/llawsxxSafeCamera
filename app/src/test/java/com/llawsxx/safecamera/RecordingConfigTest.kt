@@ -56,6 +56,11 @@ class RecordingConfigTest {
     }
 
     @Test
+    fun targetPtsCorrectionRequestsMediaCodecEngine() {
+        assertTrue(RecordingConfig(targetPtsCorrectionEnabled = true).mediaCodecEngineRequested)
+    }
+
+    @Test
     fun centerCropAndResizeRequestMediaCodecEngineAndUseFinalRecordingSize() {
         val config = RecordingConfig(
             width = 4000,

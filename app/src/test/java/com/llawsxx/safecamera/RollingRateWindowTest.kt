@@ -2,12 +2,45 @@ package com.llawsxx.safecamera
 
 import com.llawsxx.safecamera.recording.CounterRateWindow
 import com.llawsxx.safecamera.recording.EventRateWindow
+import com.llawsxx.safecamera.recording.TargetFramePtsAligner
+import com.llawsxx.safecamera.recording.TargetFramePtsResult
 import com.llawsxx.safecamera.recording.timelineDroppedFrames
 import com.llawsxx.safecamera.recording.tuneSensorFrameDurationNs
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class RollingRateWindowTest {
+    @Test
+    fun targetPtsAlignerRoundsToNearestExpectedTimestamp() {
+        val aligner = TargetFramePtsAligner(60_000.0 / 1_001.0)
+
+        assertEquals(TargetFramePtsResult.Accepted(1_000_000_000L), aligner.align(1_000_000_000L))
+        assertEquals(
+            TargetFramePtsResult.Accepted(1_016_683_333L),
+            aligner.align(1_016_000_000L),
+        )
+    }
+
+    @Test
+    fun targetPtsAlignerDropsFramesMappedToAnAlreadyUsedTimestamp() {
+        val aligner = TargetFramePtsAligner(60_000.0 / 1_001.0)
+
+        assertEquals(TargetFramePtsResult.Accepted(0L), aligner.align(0L))
+        assertEquals(TargetFramePtsResult.Accepted(16_683_333L), aligner.align(16_000_000L))
+        assertEquals(TargetFramePtsResult.Duplicate, aligner.align(17_000_000L))
+        assertEquals(TargetFramePtsResult.Accepted(33_366_667L), aligner.align(33_000_000L))
+    }
+
+    @Test
+    fun targetPtsAlignerKeepsExpectedTimestampsStrictlyIncreasingAcrossGaps() {
+        val aligner = TargetFramePtsAligner(10.0)
+
+        assertEquals(TargetFramePtsResult.Accepted(1_000_000_000L), aligner.align(1_000_000_000L))
+        assertEquals(TargetFramePtsResult.Accepted(1_200_000_000L), aligner.align(1_151_000_000L))
+        assertEquals(TargetFramePtsResult.Duplicate, aligner.align(1_149_000_000L))
+        assertEquals(TargetFramePtsResult.Accepted(1_300_000_000L), aligner.align(1_251_000_000L))
+    }
+
     @Test
     fun timelineDropCountCanBePositiveOrNegative() {
         val firstTimestampNs = 100_000_000L

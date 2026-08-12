@@ -26,6 +26,8 @@ internal class GlVideoTransformRenderer(
     private val outputHeight: Int,
     private val scalingAlgorithm: VideoScalingAlgorithm,
     initialPixelRotationDegrees: Int,
+    private val targetPtsAligner: TargetFramePtsAligner? = null,
+    private val onDuplicatePtsDropped: () -> Unit = {},
     private val onFirstFrame: () -> Unit,
 ) {
     private val renderThread = HandlerThread("video-transform-render").apply { start() }
@@ -124,6 +126,15 @@ internal class GlVideoTransformRenderer(
         if (released.get()) return
         makeCurrent()
         runCatching { surfaceTexture.updateTexImage() }.getOrElse { return }
+        val presentationTimestampNs = when (val result = targetPtsAligner?.align(surfaceTexture.timestamp)) {
+            null -> surfaceTexture.timestamp
+            is TargetFramePtsResult.Accepted -> result.timestampNs
+            TargetFramePtsResult.Duplicate -> {
+                onDuplicatePtsDropped()
+                return
+            }
+            TargetFramePtsResult.OutsideWindow -> return
+        }
         if (!firstFrameDelivered) {
             firstFrameDelivered = true
             onFirstFrame()
@@ -153,7 +164,7 @@ internal class GlVideoTransformRenderer(
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-        EGLExt.eglPresentationTimeANDROID(display, eglSurface, surfaceTexture.timestamp)
+        EGLExt.eglPresentationTimeANDROID(display, eglSurface, presentationTimestampNs)
         check(EGL14.eglSwapBuffers(display, eglSurface)) { "编码帧交换失败" }
     }
 

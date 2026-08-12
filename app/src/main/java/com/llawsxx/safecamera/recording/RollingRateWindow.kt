@@ -1,7 +1,44 @@
 package com.llawsxx.safecamera.recording
 
 import java.util.ArrayDeque
+import kotlin.math.abs
 import kotlin.math.roundToLong
+
+internal sealed class TargetFramePtsResult {
+    data class Accepted(val timestampNs: Long) : TargetFramePtsResult()
+    object Duplicate : TargetFramePtsResult()
+    object OutsideWindow : TargetFramePtsResult()
+}
+
+internal class TargetFramePtsAligner(
+    targetFps: Double,
+    private val toleranceFrames: Double = 0.8,
+) {
+    private val frameDurationNs = 1_000_000_000.0 / targetFps
+    private var firstSensorTimestampNs: Long? = null
+    private var lastAcceptedFrameIndex = -1L
+
+    init {
+        require(targetFps.isFinite() && targetFps > 0.0) { "target FPS must be positive" }
+        require(toleranceFrames.isFinite() && toleranceFrames >= 0.0) { "tolerance must be non-negative" }
+    }
+
+    fun align(sensorTimestampNs: Long): TargetFramePtsResult {
+        val firstTimestamp = firstSensorTimestampNs ?: sensorTimestampNs.also {
+            firstSensorTimestampNs = it
+        }
+        val elapsedNs = sensorTimestampNs - firstTimestamp
+        if (elapsedNs < 0L) return TargetFramePtsResult.OutsideWindow
+        val frameIndex = (elapsedNs / frameDurationNs).roundToLong()
+        val expectedOffsetNs = (frameIndex * frameDurationNs).roundToLong()
+        if (abs(elapsedNs.toDouble() - expectedOffsetNs) > frameDurationNs * toleranceFrames) {
+            return TargetFramePtsResult.OutsideWindow
+        }
+        if (frameIndex <= lastAcceptedFrameIndex) return TargetFramePtsResult.Duplicate
+        lastAcceptedFrameIndex = frameIndex
+        return TargetFramePtsResult.Accepted(firstTimestamp + expectedOffsetNs)
+    }
+}
 
 internal fun timelineDroppedFrames(
     firstTimestampNs: Long,

@@ -481,6 +481,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 segmentMinutes = if (config.container == ContainerFormat.MP4) 0 else config.segmentMinutes,
                 highSpeedMode = false,
                 videoCodec = if (config.dynamicRange.is10Bit) VideoCodec.H265 else config.videoCodec,
+                targetPtsCorrectionEnabled = config.targetPtsCorrectionEnabled &&
+                    config.dynamicRange == VideoDynamicRange.SDR,
             )
             if (normalized != config) config = normalized
         }
@@ -489,6 +491,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         if (config.highSpeedMode) {
             config = config.copy(
                 mediaCodecMode = false,
+                targetPtsCorrectionEnabled = false,
                 videoBitrateMode = VideoBitrateMode.DEFAULT,
                 videoKeyFrameIntervalSeconds = 2,
                 videoMaxBFrames = 0,
@@ -1150,6 +1153,18 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             !recording && !config.highSpeedMode,
                         ) { enabled -> config = config.copy(experimentalUnadvertisedFps = enabled) }
                         ToggleLine(
+                            "按目标帧率校正视频 PTS",
+                            config.targetPtsCorrectionEnabled,
+                            !recording && !config.highSpeedMode &&
+                                config.dynamicRange == VideoDynamicRange.SDR &&
+                                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O,
+                        ) { enabled -> config = config.copy(targetPtsCorrectionEnabled = enabled) }
+                        Text(
+                            "将传感器时间戳映射到最近的目标帧率时间点；重复映射到已使用 PTS 的帧会在编码前丢弃。开启后强制使用 MediaCodec 和 GPU 中转，普通 HDR/10-bit 路径不可用。",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        ToggleLine(
                             "自定义自动曝光",
                             config.customExposureEnabled,
                             !recording && config.permanentPreviewSurface && !config.highSpeedMode &&
@@ -1182,7 +1197,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             style = MaterialTheme.typography.labelMedium,
                         )
                         Text(
-                            "通过微调SENSOR_FRAME_DURATION，校准传感器时钟偏差，实现“消除”丢帧的效果（需先开启“自定义自动曝光”）",
+                            "通过微调 SENSOR_FRAME_DURATION，校准传感器时钟偏差，实现“消除”丢帧的效果（需开启“手动曝光”或“自定义自动曝光”）",
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -1207,7 +1222,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     val mediaCodecEngineForced = config.dynamicRange != VideoDynamicRange.SDR ||
                         config.customVideoEncoderParameters || config.customColorMetadata ||
                         config.container == ContainerFormat.MPEG_TS || config.videoTransformEnabled ||
-                        config.rawProcessingEnabled || config.forceSpsVui && config.customRewriteColorMetadata
+                        config.rawProcessingEnabled || config.targetPtsCorrectionEnabled ||
+                        config.forceSpsVui && config.customRewriteColorMetadata
                     ToggleLine(
                         "MediaCodec 直录引擎",
                         config.mediaCodecEngineRequested,
@@ -1222,7 +1238,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                     }
                     if (!(mediaCodecEngineForced && config.container == ContainerFormat.MPEG_TS)) Text(
                         if (mediaCodecEngineForced) {
-                            "当前 HDR、编码器高级参数、自定义颜色元数据、SPS/VUI 重写、中心裁切或分辨率缩放要求使用 MediaCodec 直录引擎，开关保持开启。"
+                            "当前 HDR、编码器高级参数、自定义颜色元数据、SPS/VUI 重写、PTS 校正、中心裁切或分辨率缩放要求使用 MediaCodec 直录引擎，开关保持开启。"
                         } else {
                             "Camera2 直接连接 MediaCodec，收到的每帧都按原始时间戳输出，不主动丢帧或补帧；帧率可动态变化。MP4 仅支持单段，MPEG-TS 由内置 native muxer 封装。"
                         },
@@ -1469,6 +1485,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             val mode = camera.highSpeedModes.firstOrNull()
                             config = if (enabled && mode != null) config.copy(
                                 highSpeedMode = true,
+                                targetPtsCorrectionEnabled = false,
                                 width = mode.width,
                                 height = mode.height,
                                 fps = mode.maxFps.toDouble(),
@@ -3078,7 +3095,7 @@ private fun RecordingDashboard(state: RecorderState) {
                 Metric("平均 FPS", if (s.averageFps > 0) s.averageFps.format2() else "—")
                 Metric("SENSOR FPS", if (s.sensorFps > 0) s.sensorFps.format2() else "—")
                 Metric("实时码率", formatBitrate(s.averageBitrateBitsPerSecond))
-                Metric("估算丢帧", s.droppedFrames.toString())
+                Metric("丢帧", "${s.droppedFrames} / ${s.duplicatePtsDroppedFrames}")
                 Metric("分段", s.segment.toString())
             }
             s.outputPath?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
@@ -3125,7 +3142,12 @@ private fun CompactRecordingDashboard(
             Text(formatDuration(stats?.elapsedMs ?: 0L), color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
             Text("FPS ${stats?.averageFps?.takeIf { it > 0 }?.format2() ?: "—"} / ${stats?.sensorFps?.takeIf { it > 0 }?.format2() ?: "—"
             }", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
-            Text("丢帧 ${stats?.droppedFrames ?: 0}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            Text(
+                "丢帧 ${stats?.droppedFrames ?: 0} / ${stats?.duplicatePtsDroppedFrames ?: 0}",
+                color = color,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+            )
             if (stats?.rawFrameBufferCapacity ?: 0 > 0) {
                 Text("RAW缓存 ${stats?.rawFrameBufferUsed ?: 0}/${stats?.rawFrameBufferCapacity}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
             }

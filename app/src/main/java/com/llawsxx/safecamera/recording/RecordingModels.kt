@@ -218,6 +218,7 @@ data class RecordingConfig(
     val experimentalUnadvertisedFps: Boolean = false,
     val sensorFrameDurationAutoTune: Boolean = false,
     val sensorFrameDurationTuneStepNs: Long = 3_000L,
+    val targetPtsCorrectionEnabled: Boolean = false,
     val mediaCodecMode: Boolean = false,
     val rawProcessingEnabled: Boolean = false,
     val rawWidth: Int = 0,
@@ -395,7 +396,8 @@ data class RecordingConfig(
         if (container == ContainerFormat.MPEG_TS) AudioAacProfile.LC else audioAacProfile
     val audioSessionEffectsRequested: Boolean get() =
         audioAutomaticGainControl || audioDisableNoiseSuppressor || audioDisableEchoCanceler
-    val mediaCodecEngineRequested: Boolean get() = mediaCodecMode || customVideoEncoderParameters ||
+    val mediaCodecEngineRequested: Boolean get() = mediaCodecMode || targetPtsCorrectionEnabled ||
+        customVideoEncoderParameters ||
         (hasVideo && hasAudio && (audioSessionEffectsRequested || audioFloatSidecarEnabled)) ||
         customColorMetadata || videoTransformEnabled || rawProcessingEnabled ||
         dynamicRange != VideoDynamicRange.SDR || manualSpsVuiRewriteEnabled
@@ -495,6 +497,7 @@ data class RecordingStats(
     val sensorFps: Double = 0.0,
     val averageBitrateBitsPerSecond: Double = 0.0,
     val droppedFrames: Long = 0L,
+    val duplicatePtsDroppedFrames: Long = 0L,
     val segment: Int = 0,
     val outputPath: String? = null,
     val bytesStreamed: Long = 0L,

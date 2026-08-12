@@ -52,6 +52,8 @@ internal class GpuRawVideoRenderer(
     shadowLiftSmoothness: Float,
     outputColorStandard: VideoColorStandard,
     outputColorTransfer: VideoColorTransfer,
+    private val targetPtsAligner: TargetFramePtsAligner? = null,
+    private val onDuplicatePtsDropped: () -> Unit = {},
     private val onError: (String) -> Unit,
 ) {
     private val thread = HandlerThread("gpu-raw-video-render").apply { start() }
@@ -500,6 +502,15 @@ internal class GpuRawVideoRenderer(
 
     private fun render(image: Image, metadata: RawFrameMetadata, timestampNs: Long) {
         if (released.get()) return
+        val encoderTimestampNs = when (val result = targetPtsAligner?.align(timestampNs)) {
+            null -> timestampNs
+            is TargetFramePtsResult.Accepted -> result.timestampNs
+            TargetFramePtsResult.Duplicate -> {
+                onDuplicatePtsDropped()
+                null
+            }
+            TargetFramePtsResult.OutsideWindow -> null
+        }
         val plane = image.planes.singleOrNull() ?: error("RAW_SENSOR must have exactly one plane")
         require(plane.pixelStride == 2) { "GPU RAW processing requires 16-bit unpacked RAW_SENSOR" }
         require(plane.rowStride % plane.pixelStride == 0) { "Invalid RAW row stride" }
@@ -586,10 +597,10 @@ internal class GpuRawVideoRenderer(
         check(ispFence != 0L) { "Unable to synchronize GPU RAW outputs" }
         GLES30.glFlush()
 
-        if (hasEncoderOutput) {
+        if (hasEncoderOutput && encoderTimestampNs != null) {
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
             drawFinalOutput(outputWidth, outputHeight)
-            EGLExt.eglPresentationTimeANDROID(display, primarySurface, timestampNs)
+            EGLExt.eglPresentationTimeANDROID(display, primarySurface, encoderTimestampNs)
             check(EGL14.eglSwapBuffers(display, primarySurface)) { "Unable to submit GPU RAW encoder frame" }
         }
 
