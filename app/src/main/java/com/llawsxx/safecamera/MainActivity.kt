@@ -1158,7 +1158,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             style = MaterialTheme.typography.labelMedium,
                         )
                         Text(
-                            "通过微调SENSOR_FRAME_DURATION，校准传感器时钟偏差，实现“消除”丢帧的效果",
+                            "通过微调SENSOR_FRAME_DURATION，校准传感器时钟偏差，实现“消除”丢帧的效果（需先开启“自定义自动曝光”）",
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
                         )
