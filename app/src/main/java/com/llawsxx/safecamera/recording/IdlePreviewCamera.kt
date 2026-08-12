@@ -345,10 +345,7 @@ class IdlePreviewCamera(context: Context) {
             result: android.hardware.camera2.TotalCaptureResult,
         ) {
             if (session !== this@IdlePreviewCamera.session || camera == null) return
-            customExposureController?.onCaptureCompleted(
-                result.get(CaptureResult.SENSOR_SENSITIVITY),
-                result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
-            )
+            customExposureController?.onCaptureCompleted()
             val cameraId = activeCameraId ?: return
             val whiteBalanceGains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
             val whiteBalanceTransform = result.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)

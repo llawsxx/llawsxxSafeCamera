@@ -289,6 +289,8 @@ data class RecordingConfig(
     val customExposureDeadbandEv: Float = 0.04f,
     /** Zero adjusts after every completed capture; positive values are updates per second. */
     val customExposureUpdatesPerSecond: Int = 3,
+    /** Completed captures to wait after an exposure request in per-capture mode. */
+    val customExposureSettleFrames: Int = 3,
     val iso: Int = 400,
     val exposureNs: Long = 10_000_000L,
     val aperture: Float? = null,

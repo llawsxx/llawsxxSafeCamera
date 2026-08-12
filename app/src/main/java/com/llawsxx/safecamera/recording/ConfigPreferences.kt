@@ -146,6 +146,7 @@ object ConfigPreferences {
             customExposureSpeed = p.getFloat("customExposureSpeed", 0.25f).coerceIn(0.02f, 1f),
             customExposureDeadbandEv = p.getFloat("customExposureDeadbandEv", 0.04f).coerceIn(0f, 1f),
             customExposureUpdatesPerSecond = p.getInt("customExposureUpdatesPerSecond", 3).coerceIn(0, 10),
+            customExposureSettleFrames = p.getInt("customExposureSettleFrames", 3).coerceIn(1, 6),
             iso = p.getInt("iso", 400),
             exposureNs = p.getLong("exposureNs", 10_000_000L),
             aperture = p.getString("aperture", null)?.toFloatOrNull(),
@@ -304,6 +305,7 @@ object ConfigPreferences {
             .putFloat("customExposureSpeed", c.customExposureSpeed.coerceIn(0.02f, 1f))
             .putFloat("customExposureDeadbandEv", c.customExposureDeadbandEv.coerceIn(0f, 1f))
             .putInt("customExposureUpdatesPerSecond", c.customExposureUpdatesPerSecond.coerceIn(0, 10))
+            .putInt("customExposureSettleFrames", c.customExposureSettleFrames.coerceIn(1, 6))
             .putInt("iso", c.iso)
             .putLong("exposureNs", c.exposureNs)
             .putString("aperture", c.aperture?.toString())

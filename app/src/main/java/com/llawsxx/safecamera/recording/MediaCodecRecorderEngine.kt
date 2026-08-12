@@ -647,10 +647,7 @@ class MediaCodecRecorderEngine(
             result: android.hardware.camera2.TotalCaptureResult,
         ) {
             if (!running.get() || session !== this@MediaCodecRecorderEngine.session || camera == null) return
-            customExposureController?.onCaptureCompleted(
-                result.get(CaptureResult.SENSOR_SENSITIVITY),
-                result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
-            )
+            customExposureController?.onCaptureCompleted()
             result.get(CaptureResult.SENSOR_FRAME_DURATION)?.takeIf { it > 0L }?.let {
                 sensorFps = 1_000_000_000.0 / it
             }
@@ -812,6 +809,7 @@ class MediaCodecRecorderEngine(
                 customExposureSpeed = updated.customExposureSpeed,
                 customExposureDeadbandEv = updated.customExposureDeadbandEv,
                 customExposureUpdatesPerSecond = updated.customExposureUpdatesPerSecond,
+                customExposureSettleFrames = updated.customExposureSettleFrames,
                 iso = if (preserveCustomExposure) config.iso else updated.iso,
                 exposureNs = if (preserveCustomExposure) config.exposureNs else updated.exposureNs,
                 unrestrictedIso = updated.unrestrictedIso,

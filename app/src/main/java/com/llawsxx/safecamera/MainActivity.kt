@@ -577,6 +577,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.customExposureSpeed,
         config.customExposureDeadbandEv,
         config.customExposureUpdatesPerSecond,
+        config.customExposureSettleFrames,
         config.iso,
         config.exposureNs,
         config.unrestrictedIso,
@@ -678,6 +679,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.customExposureSpeed,
         config.customExposureDeadbandEv,
         config.customExposureUpdatesPerSecond,
+        config.customExposureSettleFrames,
         config.iso,
         config.exposureNs,
         config.unrestrictedIso,
@@ -4318,6 +4320,20 @@ private fun CustomExposureParameterPanel(
                 steps = 9,
                 enabled = enabled,
             )
+            Text(
+                "曝光请求等待 ${config.customExposureSettleFrames} 帧",
+                color = textColor,
+                style = MaterialTheme.typography.labelMedium,
+            )
+            Slider(
+                value = config.customExposureSettleFrames.toFloat(),
+                onValueChange = {
+                    onChange(config.copy(customExposureSettleFrames = it.roundToInt().coerceIn(1, 6)))
+                },
+                valueRange = 1f..6f,
+                steps = 4,
+                enabled = enabled && config.customExposureUpdatesPerSecond == 0,
+            )
         }
     }
 }
@@ -4998,6 +5014,11 @@ private fun CameraProcessingControls(
     if (!camera.manualSensorAvailable || camera.isoRange == null || camera.exposureRange == null) {
         Text("当前镜头不支持自定义曝光所需的手动传感器参数", style = MaterialTheme.typography.bodySmall)
     }
+    Text(
+        "需先开启“永久预览Surface”",
+        color = MaterialTheme.colorScheme.error,
+        style = MaterialTheme.typography.bodySmall,
+    )
     ToggleLine("光学防抖", config.opticalStabilization, enabled && camera.oisAvailable) {
         onChange(config.copy(opticalStabilization = it))
     }

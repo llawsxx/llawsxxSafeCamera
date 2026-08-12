@@ -19,8 +19,6 @@ internal class CustomExposureController(
     private val exposureRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
     private var lastUpdateNs = 0L
     private var latestLuminance: Float? = null
-    private var pendingIso: Int? = null
-    private var pendingExposureNs: Long? = null
     private var settleCapturesRemaining = 0
     private var currentIso = config.iso
     private var currentExposureNs = config.exposureNs
@@ -54,8 +52,6 @@ internal class CustomExposureController(
         currentIso = next.iso
         currentExposureNs = next.exposureNs
         lastUpdateNs = 0L
-        pendingIso = null
-        pendingExposureNs = null
         settleCapturesRemaining = 0
     }
 
@@ -72,26 +68,14 @@ internal class CustomExposureController(
         }
     }
 
-    fun onCaptureCompleted(actualIso: Int?, actualExposureNs: Long?) {
+    fun onCaptureCompleted() {
         if (!config.customExposureEnabled || config.manualExposure ||
             config.customExposureUpdatesPerSecond.coerceIn(0, 10) != 0
         ) return
-        val expectedIso = pendingIso
-        val expectedExposureNs = pendingExposureNs
-        if (expectedIso != null && expectedExposureNs != null) {
-            if (exposureMatches(actualIso, actualExposureNs, expectedIso, expectedExposureNs)) {
-                pendingIso = null
-                pendingExposureNs = null
-                settleCapturesRemaining = 1
-            }
-            return
-        }
         if (settleCapturesRemaining > 0) {
             settleCapturesRemaining--
-            return
+            if (settleCapturesRemaining > 0) return
         }
-        actualIso?.let { currentIso = it }
-        actualExposureNs?.let { currentExposureNs = it }
         latestLuminance?.let { adjustExposure(it, 0L) }
     }
 
@@ -143,24 +127,10 @@ internal class CustomExposureController(
             currentIso = nextIso
             currentExposureNs = nextExposureNs
             if (config.customExposureUpdatesPerSecond.coerceIn(0, 10) == 0) {
-                pendingIso = nextIso
-                pendingExposureNs = nextExposureNs
+                settleCapturesRemaining = config.customExposureSettleFrames.coerceIn(1, 6)
             }
             onExposure(currentIso, currentExposureNs)
         }
-    }
-
-    private fun exposureMatches(
-        actualIso: Int?,
-        actualExposureNs: Long?,
-        expectedIso: Int,
-        expectedExposureNs: Long,
-    ): Boolean {
-        if (actualIso == null || actualExposureNs == null) return false
-        val isoTolerance = maxOf(2, (expectedIso * 0.02).roundToInt())
-        val exposureToleranceNs = maxOf(10_000L, (expectedExposureNs * 0.02).roundToLong())
-        return abs(actualIso - expectedIso) <= isoTolerance &&
-            abs(actualExposureNs - expectedExposureNs) <= exposureToleranceNs
     }
 
 }
