@@ -573,6 +573,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.customExposureMinNs,
         config.customExposureMaxNs,
         config.customExposureSpeed,
+        config.customExposureDeadbandEv,
         config.customExposureUpdatesPerSecond,
         config.iso,
         config.exposureNs,
@@ -671,6 +672,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.customExposureMinNs,
         config.customExposureMaxNs,
         config.customExposureSpeed,
+        config.customExposureDeadbandEv,
         config.customExposureUpdatesPerSecond,
         config.iso,
         config.exposureNs,
@@ -4237,6 +4239,18 @@ private fun CustomExposureParameterPanel(
                 value = config.customExposureSpeed,
                 onValueChange = { onChange(config.copy(customExposureSpeed = it)) },
                 valueRange = 0.02f..1f,
+                enabled = enabled,
+            )
+            Text(
+                "曝光死区 ${config.customExposureDeadbandEv.format2()} EV",
+                color = textColor,
+                style = MaterialTheme.typography.labelMedium,
+            )
+            Slider(
+                value = config.customExposureDeadbandEv,
+                onValueChange = { onChange(config.copy(customExposureDeadbandEv = it)) },
+                valueRange = 0f..1f,
+                steps = 19,
                 enabled = enabled,
             )
             Text(

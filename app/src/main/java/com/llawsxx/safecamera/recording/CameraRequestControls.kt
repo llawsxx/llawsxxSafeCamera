@@ -428,6 +428,7 @@ internal fun RecordingConfig.cameraRequestControlsKey(): List<Any?> = listOf(
     customExposureMinNs,
     customExposureMaxNs,
     customExposureSpeed,
+    customExposureDeadbandEv,
     customExposureUpdatesPerSecond,
     iso,
     exposureNs,

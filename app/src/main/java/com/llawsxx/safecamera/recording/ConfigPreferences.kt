@@ -141,6 +141,7 @@ object ConfigPreferences {
             customExposureMinNs = p.getLong("customExposureMinNs", 100_000L).coerceAtLeast(1L),
             customExposureMaxNs = p.getLong("customExposureMaxNs", 33_333_333L).coerceAtLeast(1L),
             customExposureSpeed = p.getFloat("customExposureSpeed", 0.25f).coerceIn(0.02f, 1f),
+            customExposureDeadbandEv = p.getFloat("customExposureDeadbandEv", 0.04f).coerceIn(0f, 1f),
             customExposureUpdatesPerSecond = p.getInt("customExposureUpdatesPerSecond", 3).coerceIn(0, 10),
             iso = p.getInt("iso", 400),
             exposureNs = p.getLong("exposureNs", 10_000_000L),
@@ -296,6 +297,7 @@ object ConfigPreferences {
             .putLong("customExposureMinNs", c.customExposureMinNs.coerceAtLeast(1L))
             .putLong("customExposureMaxNs", c.customExposureMaxNs.coerceAtLeast(1L))
             .putFloat("customExposureSpeed", c.customExposureSpeed.coerceIn(0.02f, 1f))
+            .putFloat("customExposureDeadbandEv", c.customExposureDeadbandEv.coerceIn(0f, 1f))
             .putInt("customExposureUpdatesPerSecond", c.customExposureUpdatesPerSecond.coerceIn(0, 10))
             .putInt("iso", c.iso)
             .putLong("exposureNs", c.exposureNs)

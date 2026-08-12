@@ -101,8 +101,9 @@ internal class CustomExposureController(
         lastUpdateNs = now
         val measured = value.coerceIn(0.001f, 1f).toDouble()
         val errorEv = ln(config.customExposureTarget.coerceIn(0.02f, 0.95f) / measured) / ln(2.0)
-        if (abs(errorEv) <= EXPOSURE_DEADBAND_EV) return
-        val controlledErrorEv = sign(errorEv) * (abs(errorEv) - EXPOSURE_DEADBAND_EV)
+        val deadbandEv = config.customExposureDeadbandEv.coerceIn(0f, 1f).toDouble()
+        if (abs(errorEv) <= deadbandEv) return
+        val controlledErrorEv = sign(errorEv) * (abs(errorEv) - deadbandEv)
         val stepEv = controlledErrorEv.coerceIn(-0.5, 0.5) * config.customExposureSpeed.coerceIn(0.02f, 1f)
         val total = (currentIso * currentExposureNs).toDouble() * 2.0.pow(stepEv)
         val requestedMinExposure = minOf(config.customExposureMinNs, config.customExposureMaxNs)
@@ -162,7 +163,4 @@ internal class CustomExposureController(
             abs(actualExposureNs - expectedExposureNs) <= exposureToleranceNs
     }
 
-    private companion object {
-        const val EXPOSURE_DEADBAND_EV = 0.04
-    }
 }

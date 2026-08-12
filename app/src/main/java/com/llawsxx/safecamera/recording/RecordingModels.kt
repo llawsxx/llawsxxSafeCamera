@@ -284,6 +284,7 @@ data class RecordingConfig(
     val customExposureMinNs: Long = 100_000L,
     val customExposureMaxNs: Long = 33_333_333L,
     val customExposureSpeed: Float = 0.25f,
+    val customExposureDeadbandEv: Float = 0.04f,
     /** Zero adjusts after every completed capture; positive values are updates per second. */
     val customExposureUpdatesPerSecond: Int = 3,
     val iso: Int = 400,

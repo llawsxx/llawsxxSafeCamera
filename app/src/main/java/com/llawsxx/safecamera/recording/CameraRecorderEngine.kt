@@ -309,6 +309,7 @@ class CameraRecorderEngine(
             customExposureMinNs = updated.customExposureMinNs,
             customExposureMaxNs = updated.customExposureMaxNs,
             customExposureSpeed = updated.customExposureSpeed,
+            customExposureDeadbandEv = updated.customExposureDeadbandEv,
             customExposureUpdatesPerSecond = updated.customExposureUpdatesPerSecond,
             iso = if (preserveCustomExposure) config.iso else updated.iso,
             exposureNs = if (preserveCustomExposure) config.exposureNs else updated.exposureNs,
