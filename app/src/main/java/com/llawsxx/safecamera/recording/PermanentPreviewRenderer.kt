@@ -50,7 +50,6 @@ internal class PermanentPreviewRenderer(
     val inputSurface: Surface
     @Volatile private var luminanceListener: ((Float) -> Unit)? = null
     @Volatile private var meteringMode = CustomExposureMetering.CENTER
-    private var luminanceFrameCounter = 0
 
     init {
         check(display != EGL14.EGL_NO_DISPLAY) { "Unable to get EGL display" }
@@ -153,8 +152,7 @@ internal class PermanentPreviewRenderer(
         drawTexture(meterWidth, meterHeight)
         val pixel = ByteBuffer.allocateDirect(meterWidth * meterHeight * 4)
         GLES20.glReadPixels(0, 0, meterWidth, meterHeight, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, pixel)
-        luminanceFrameCounter++
-        if (luminanceFrameCounter % 6 == 0 && luminanceListener != null) {
+        if (luminanceListener != null) {
             var sum = 0.0
             var count = 0
             for (y in 0 until meterHeight) for (x in 0 until meterWidth) {

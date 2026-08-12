@@ -345,6 +345,10 @@ class IdlePreviewCamera(context: Context) {
             result: android.hardware.camera2.TotalCaptureResult,
         ) {
             if (session !== this@IdlePreviewCamera.session || camera == null) return
+            customExposureController?.onCaptureCompleted(
+                result.get(CaptureResult.SENSOR_SENSITIVITY),
+                result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
+            )
             val cameraId = activeCameraId ?: return
             val whiteBalanceGains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
             val whiteBalanceTransform = result.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
@@ -488,9 +492,8 @@ class IdlePreviewCamera(context: Context) {
         }
         customExposureController = runCatching {
             CustomExposureController(manager.getCameraCharacteristics(config.cameraId), handler, config) { iso, exposureNs ->
-                handler.post {
-                    val current = activeConfig ?: return@post
-                    if (!current.customExposureEnabled || current.manualExposure) return@post
+                val current = activeConfig
+                if (current != null && current.customExposureEnabled && !current.manualExposure) {
                     activeConfig = current.copy(iso = iso, exposureNs = exposureNs)
                     cameraRequestPending = true
                     activeSurface?.let { updateRepeatingRequest(activeConfig ?: current, it) }

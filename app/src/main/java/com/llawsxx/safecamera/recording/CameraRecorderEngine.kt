@@ -604,6 +604,10 @@ class CameraRecorderEngine(
             result: android.hardware.camera2.TotalCaptureResult,
         ) {
             if (stopped || session !== this@CameraRecorderEngine.session || camera == null) return
+            customExposureController?.onCaptureCompleted(
+                result.get(CaptureResult.SENSOR_SENSITIVITY),
+                result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
+            )
             val whiteBalanceGains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
             val whiteBalanceTransform = result.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
             updateTouchFocusResult(request, result)
@@ -756,9 +760,7 @@ class CameraRecorderEngine(
         if (customExposureController != null) return
         customExposureController = runCatching {
             CustomExposureController(manager.getCameraCharacteristics(config.cameraId), handler, config) { iso, exposureNs ->
-                handler.post {
-                    if (stopped || camera == null) return@post
-                    if (config.iso == iso && config.exposureNs == exposureNs) return@post
+                if (!stopped && camera != null && (config.iso != iso || config.exposureNs != exposureNs)) {
                     config = config.copy(iso = iso, exposureNs = exposureNs)
                     cameraControlsPending = true
                 }

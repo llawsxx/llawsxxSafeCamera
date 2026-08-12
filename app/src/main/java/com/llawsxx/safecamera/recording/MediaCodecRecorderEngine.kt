@@ -645,6 +645,10 @@ class MediaCodecRecorderEngine(
             result: android.hardware.camera2.TotalCaptureResult,
         ) {
             if (!running.get() || session !== this@MediaCodecRecorderEngine.session || camera == null) return
+            customExposureController?.onCaptureCompleted(
+                result.get(CaptureResult.SENSOR_SENSITIVITY),
+                result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
+            )
             val whiteBalanceGains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
             val whiteBalanceTransform = result.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
             updateTouchFocusResult(request, result)
@@ -1058,9 +1062,9 @@ class MediaCodecRecorderEngine(
         if (customExposureController != null) return
         customExposureController = runCatching {
             CustomExposureController(cameraManager.getCameraCharacteristics(config.cameraId), cameraHandler, config) { iso, exposureNs ->
-                cameraHandler.post {
-                    if (!running.get() || stopStarted.get() || camera == null) return@post
-                    if (config.iso == iso && config.exposureNs == exposureNs) return@post
+                if (running.get() && !stopStarted.get() && camera != null &&
+                    (config.iso != iso || config.exposureNs != exposureNs)
+                ) {
                     config = config.copy(iso = iso, exposureNs = exposureNs)
                     cameraControlsPending = true
                 }

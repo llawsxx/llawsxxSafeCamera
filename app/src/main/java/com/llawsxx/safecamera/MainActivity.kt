@@ -4240,17 +4240,18 @@ private fun CustomExposureParameterPanel(
                 enabled = enabled,
             )
             Text(
-                "每秒调节 ${config.customExposureUpdatesPerSecond} 次",
+                if (config.customExposureUpdatesPerSecond == 0) "Capture 每帧完成后调节" else
+                    "每秒调节 ${config.customExposureUpdatesPerSecond} 次",
                 color = textColor,
                 style = MaterialTheme.typography.labelMedium,
             )
             Slider(
                 value = config.customExposureUpdatesPerSecond.toFloat(),
                 onValueChange = {
-                    onChange(config.copy(customExposureUpdatesPerSecond = it.roundToInt().coerceIn(1, 10)))
+                    onChange(config.copy(customExposureUpdatesPerSecond = it.roundToInt().coerceIn(0, 10)))
                 },
-                valueRange = 1f..10f,
-                steps = 8,
+                valueRange = 0f..10f,
+                steps = 9,
                 enabled = enabled,
             )
         }
