@@ -488,6 +488,7 @@ data class CameraInfo(
 data class RecordingStats(
     val elapsedMs: Long = 0L,
     val averageFps: Double = 0.0,
+    val sensorFps: Double = 0.0,
     val averageBitrateBitsPerSecond: Double = 0.0,
     val droppedFrames: Long = 0L,
     val segment: Int = 0,

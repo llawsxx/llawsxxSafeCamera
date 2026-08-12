@@ -83,6 +83,7 @@ class MediaCodecRecorderEngine(
     private var firstSensorNs = 0L
     private var lastSensorNs = 0L
     private var capturedFrames = 0L
+    @Volatile private var sensorFps = 0.0
     private var droppedFrames = 0L
     @Volatile private var audioLevelDb = -60f
     private val encodedBytes = AtomicLong(0L)
@@ -649,6 +650,9 @@ class MediaCodecRecorderEngine(
                 result.get(CaptureResult.SENSOR_SENSITIVITY),
                 result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
             )
+            result.get(CaptureResult.SENSOR_FRAME_DURATION)?.takeIf { it > 0L }?.let {
+                sensorFps = 1_000_000_000.0 / it
+            }
             val whiteBalanceGains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
             val whiteBalanceTransform = result.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
             updateTouchFocusResult(request, result)
@@ -1119,6 +1123,7 @@ class MediaCodecRecorderEngine(
                 RecordingStats(
                     elapsedMs = elapsed,
                     averageFps = fpsWindow.rate(),
+                    sensorFps = sensorFps,
                     averageBitrateBitsPerSecond = bitrateWindow.ratePerSecond(
                         SystemClock.elapsedRealtime(),
                         encodedBytes.get(),

@@ -2196,7 +2196,7 @@ private fun MainRecorderScreen(
         } else {
             Spacer(Modifier.weight(1f))
         }
-        CompactRecordingDashboard(state, config)
+        CompactRecordingDashboard(state, config, secondaryMetricsOnSecondLine = true)
         if (config.hasAudio) AudioLevelMeter((state as? RecorderState.Recording)?.stats?.audioLevelDb ?: -60f)
         permissionError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
     }
@@ -2640,7 +2640,13 @@ private fun FullscreenRecorder(
                         Modifier.width(112.dp),
                     ) { onConfigChange(config.copy(orientation = it)) }
                 }
-                CompactRecordingDashboard(state, config, lightText = true, modifier = Modifier.fillMaxWidth())
+                CompactRecordingDashboard(
+                    state,
+                    config,
+                    lightText = true,
+                    secondaryMetricsOnSecondLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
         if (controlsVisible) camera?.let {
@@ -3015,6 +3021,7 @@ private fun RecordingDashboard(state: RecorderState) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Metric("时长", formatDuration(s.elapsedMs))
                 Metric("平均 FPS", if (s.averageFps > 0) s.averageFps.format2() else "—")
+                Metric("SENSOR FPS", if (s.sensorFps > 0) s.sensorFps.format2() else "—")
                 Metric("实时码率", formatBitrate(s.averageBitrateBitsPerSecond))
                 Metric("估算丢帧", s.droppedFrames.toString())
                 Metric("分段", s.segment.toString())
@@ -3031,6 +3038,7 @@ private fun CompactRecordingDashboard(
     config: RecordingConfig,
     lightText: Boolean = false,
     bitrateOnSameLine: Boolean = false,
+    secondaryMetricsOnSecondLine: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var availableBytes by remember(config.outputTreeUri) { mutableStateOf<Long?>(null) }
@@ -3060,18 +3068,29 @@ private fun CompactRecordingDashboard(
         ) {
             Text(status, color = if (state is RecorderState.Recording) Color(0xFFFF5252) else color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
             Text(formatDuration(stats?.elapsedMs ?: 0L), color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
-            Text("FPS ${stats?.averageFps?.takeIf { it > 0 }?.format2() ?: "—"}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            Text("FPS ${stats?.averageFps?.takeIf { it > 0 }?.format2() ?: "—"} / ${stats?.sensorFps?.takeIf { it > 0 }?.format2() ?: "—"
+            }", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
             Text("丢帧 ${stats?.droppedFrames ?: 0}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
             if (stats?.rawFrameBufferCapacity ?: 0 > 0) {
                 Text("RAW缓存 ${stats?.rawFrameBufferUsed ?: 0}/${stats?.rawFrameBufferCapacity}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
             }
-            Text("剩余 ${availableBytes?.let(::formatStorageBytes) ?: "—"}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
-            if (bitrateOnSameLine) {
+            if (!secondaryMetricsOnSecondLine) {
+                Text("剩余 ${availableBytes?.let(::formatStorageBytes) ?: "—"}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            }
+            if (bitrateOnSameLine && !secondaryMetricsOnSecondLine) {
                 Text(bitrateText, color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
             }
         }
-        if (!bitrateOnSameLine) {
-            Text(bitrateText, color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+        if (!bitrateOnSameLine || secondaryMetricsOnSecondLine) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(bitrateText, color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                if (secondaryMetricsOnSecondLine) {
+                    Text("剩余 ${availableBytes?.let(::formatStorageBytes) ?: "—"}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                }
+            }
         }
     }
 }

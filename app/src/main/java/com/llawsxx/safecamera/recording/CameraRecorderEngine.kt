@@ -53,6 +53,7 @@ class CameraRecorderEngine(
     @Volatile private var tsSink: StreamingTsSink? = null
     private var startedAtMs = 0L
     private var lastFrameNs = 0L
+    @Volatile private var sensorFps = 0.0
     private val fpsWindow = EventRateWindow(FPS_STATS_WINDOW_NS, 1_000_000_000L)
     private val bitrateWindow = CounterRateWindow(STATS_WINDOW_MS)
     private var completedOutputBytes = 0L
@@ -609,6 +610,9 @@ class CameraRecorderEngine(
                 result.get(CaptureResult.SENSOR_SENSITIVITY),
                 result.get(CaptureResult.SENSOR_EXPOSURE_TIME),
             )
+            result.get(CaptureResult.SENSOR_FRAME_DURATION)?.takeIf { it > 0L }?.let {
+                sensorFps = 1_000_000_000.0 / it
+            }
             val whiteBalanceGains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
             val whiteBalanceTransform = result.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
             updateTouchFocusResult(request, result)
@@ -722,6 +726,7 @@ class CameraRecorderEngine(
             RecordingStats(
                 elapsedMs = (now - startedAtMs).coerceAtLeast(0),
                 averageFps = fpsWindow.rate(),
+                sensorFps = sensorFps,
                 averageBitrateBitsPerSecond = bitrateWindow.ratePerSecond(now, totalBytes) * 8.0,
                 droppedFrames = droppedFrames,
                 segment = segmentIndex,
