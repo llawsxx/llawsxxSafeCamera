@@ -28,6 +28,8 @@ internal class PermanentPreviewRenderer(
     private val config: android.opengl.EGLConfig
     private val context: android.opengl.EGLContext
     private val pbufferSurface: android.opengl.EGLSurface
+    private val meterWidth = 32
+    private val meterHeight = 24
     private var windowSurface = EGL14.EGL_NO_SURFACE
     private var outputSurface: Surface? = null
     private var outputEnabled = false
@@ -46,6 +48,9 @@ internal class PermanentPreviewRenderer(
     private val textureMatrix = FloatArray(16)
     private val surfaceTexture: SurfaceTexture
     val inputSurface: Surface
+    @Volatile private var luminanceListener: ((Float) -> Unit)? = null
+    @Volatile private var meteringMode = CustomExposureMetering.CENTER
+    private var luminanceFrameCounter = 0
 
     init {
         check(display != EGL14.EGL_NO_DISPLAY) { "Unable to get EGL display" }
@@ -77,7 +82,7 @@ internal class PermanentPreviewRenderer(
         pbufferSurface = EGL14.eglCreatePbufferSurface(
             display,
             config,
-            intArrayOf(EGL14.EGL_WIDTH, 1, EGL14.EGL_HEIGHT, 1, EGL14.EGL_NONE),
+            intArrayOf(EGL14.EGL_WIDTH, meterWidth, EGL14.EGL_HEIGHT, meterHeight, EGL14.EGL_NONE),
             0,
         )
         check(pbufferSurface != EGL14.EGL_NO_SURFACE) { "Unable to create EGL pbuffer" }
@@ -127,22 +132,66 @@ internal class PermanentPreviewRenderer(
         }
     }
 
+    fun setLuminanceListener(listener: ((Float) -> Unit)?) {
+        luminanceListener = listener
+    }
+
+    fun setMeteringMode(mode: CustomExposureMetering) {
+        meteringMode = mode
+    }
+
     private fun renderFrame() {
         if (released.get()) return
-        val target = windowSurface.takeIf {
+        val outputTarget = windowSurface.takeIf {
             outputEnabled && outputSurface?.isValid == true && it != EGL14.EGL_NO_SURFACE
         } ?: pbufferSurface
-        if (!runCatching { makeCurrent(target) }.isSuccess) return
+        if (!runCatching { makeCurrent(pbufferSurface) }.isSuccess) return
         if (!runCatching { surfaceTexture.updateTexImage() }.isSuccess) return
-        if (target == pbufferSurface) return
         surfaceTexture.getTransformMatrix(textureMatrix)
         removeTextureRotation(textureMatrix)
         applyTextureRotation(textureMatrix, rotationDegrees)
+        drawTexture(meterWidth, meterHeight)
+        val pixel = ByteBuffer.allocateDirect(meterWidth * meterHeight * 4)
+        GLES20.glReadPixels(0, 0, meterWidth, meterHeight, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, pixel)
+        luminanceFrameCounter++
+        if (luminanceFrameCounter % 6 == 0 && luminanceListener != null) {
+            var sum = 0.0
+            var count = 0
+            for (y in 0 until meterHeight) for (x in 0 until meterWidth) {
+                val dx = kotlin.math.abs(x - meterWidth / 2)
+                val dy = kotlin.math.abs(y - meterHeight / 2)
+                val include = when (meteringMode) {
+                    CustomExposureMetering.AVERAGE -> true
+                    CustomExposureMetering.CENTER -> dx <= meterWidth / 4 && dy <= meterHeight / 4
+                    CustomExposureMetering.SPOT -> dx <= meterWidth / 10 && dy <= meterHeight / 10
+                }
+                if (!include) continue
+                val offset = (y * meterWidth + x) * 4
+                val r = pixel.get(offset).toInt() and 0xff
+                val g = pixel.get(offset + 1).toInt() and 0xff
+                val b = pixel.get(offset + 2).toInt() and 0xff
+                sum += (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
+                count++
+            }
+            if (count > 0) luminanceListener?.invoke((sum / count).toFloat())
+        }
+        if (outputTarget == pbufferSurface) return
+        if (!runCatching { makeCurrent(outputTarget) }.isSuccess) return
         val width = IntArray(1)
         val height = IntArray(1)
-        EGL14.eglQuerySurface(display, target, EGL14.EGL_WIDTH, width, 0)
-        EGL14.eglQuerySurface(display, target, EGL14.EGL_HEIGHT, height, 0)
-        GLES20.glViewport(0, 0, width[0], height[0])
+        EGL14.eglQuerySurface(display, outputTarget, EGL14.EGL_WIDTH, width, 0)
+        EGL14.eglQuerySurface(display, outputTarget, EGL14.EGL_HEIGHT, height, 0)
+        drawTexture(width[0], height[0])
+        if (!EGL14.eglSwapBuffers(display, outputTarget)) {
+            outputEnabled = false
+            outputSurface = null
+            makeCurrent(pbufferSurface)
+            destroyWindowSurface()
+        }
+    }
+
+    private fun drawTexture(width: Int, height: Int) {
+        GLES20.glViewport(0, 0, width.coerceAtLeast(1), height.coerceAtLeast(1))
         GLES20.glUseProgram(program)
         vertices.position(0)
         GLES20.glEnableVertexAttribArray(positionLocation)
@@ -154,12 +203,6 @@ internal class PermanentPreviewRenderer(
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-        if (!EGL14.eglSwapBuffers(display, target)) {
-            outputEnabled = false
-            outputSurface = null
-            makeCurrent(pbufferSurface)
-            destroyWindowSurface()
-        }
     }
 
     fun release() {

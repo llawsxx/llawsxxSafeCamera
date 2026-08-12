@@ -42,6 +42,7 @@ class CameraRecorderEngine(
     @Volatile private var camera: CameraDevice? = null
     @Volatile private var session: CameraCaptureSession? = null
     private var recorderSurface: Surface? = null
+    private var customExposureController: CustomExposureController? = null
     private var previewSurface: Surface? = null
     private var previewEnabled = false
     @Volatile private var permanentPreviewRenderer: PermanentPreviewRenderer? = null
@@ -89,7 +90,11 @@ class CameraRecorderEngine(
                     config.previewWidth.takeIf { it > 0 && !config.highSpeedMode } ?: config.width,
                     config.previewHeight.takeIf { it > 0 && !config.highSpeedMode } ?: config.height,
                     previewRotationDegrees,
-                ).also { it.setOutput(previewSurface, this.previewEnabled, previewRotationDegrees) }
+                ).also {
+                    it.setOutput(previewSurface, this.previewEnabled, previewRotationDegrees)
+                    it.setMeteringMode(config.customExposureMetering)
+                    it.setLuminanceListener { value -> customExposureController?.submitLuminance(value) }
+                }
             }
             prepareRecorder()
         }
@@ -292,10 +297,21 @@ class CameraRecorderEngine(
         ) {
             touchFocusLockedDistance = null
         }
+        val preserveCustomExposure = config.customExposureEnabled && !config.manualExposure &&
+            updated.customExposureEnabled && !updated.manualExposure
         config = config.copy(
             manualExposure = updated.manualExposure,
-            iso = updated.iso,
-            exposureNs = updated.exposureNs,
+            customExposureEnabled = updated.customExposureEnabled,
+            customExposureMetering = updated.customExposureMetering,
+            customExposureTarget = updated.customExposureTarget,
+            customExposureMinIso = updated.customExposureMinIso,
+            customExposureMaxIso = updated.customExposureMaxIso,
+            customExposureMinNs = updated.customExposureMinNs,
+            customExposureMaxNs = updated.customExposureMaxNs,
+            customExposureSpeed = updated.customExposureSpeed,
+            customExposureUpdatesPerSecond = updated.customExposureUpdatesPerSecond,
+            iso = if (preserveCustomExposure) config.iso else updated.iso,
+            exposureNs = if (preserveCustomExposure) config.exposureNs else updated.exposureNs,
             unrestrictedIso = updated.unrestrictedIso,
             unrestrictedExposure = updated.unrestrictedExposure,
             aperture = updated.aperture,
@@ -332,6 +348,8 @@ class CameraRecorderEngine(
             aberrationCorrectionMode = updated.aberrationCorrectionMode,
             distortionCorrectionMode = updated.distortionCorrectionMode,
         )
+        customExposureController?.updateConfig(config)
+        permanentPreviewRenderer?.setMeteringMode(config.customExposureMetering)
         if (previousConfig.cameraRequestControlsKey() != config.cameraRequestControlsKey()) {
             cameraControlsPending = config.cameraRequestControlsKey() != submittedCameraControlsKey
         }
@@ -522,6 +540,7 @@ class CameraRecorderEngine(
         val device = camera ?: return
         val recordSurface = recorderSurface ?: return
         val previewAtCreation = sessionPreviewSurface()
+        prepareCustomExposureController()
         val currentGeneration = ++sessionGeneration
         runCatching { session?.close() }
         val surfaces = mutableListOf(recordSurface)
@@ -719,11 +738,33 @@ class CameraRecorderEngine(
         session = null
         runCatching { camera?.close() }
         camera = null
+        runCatching { customExposureController?.close() }
+        customExposureController = null
     }
 
     private fun sessionPreviewSurface(): Surface? =
         permanentPreviewRenderer?.inputSurface?.takeIf { it.isValid }
             ?: previewSurface?.takeIf { it.isValid }
+
+    private fun prepareCustomExposureController() {
+        if (!config.customExposureEnabled || !config.permanentPreviewSurface || config.highSpeedMode) {
+            runCatching { customExposureController?.close() }
+            customExposureController = null
+            return
+        }
+        customExposureController?.updateConfig(config)
+        if (customExposureController != null) return
+        customExposureController = runCatching {
+            CustomExposureController(manager.getCameraCharacteristics(config.cameraId), handler, config) { iso, exposureNs ->
+                handler.post {
+                    if (stopped || camera == null) return@post
+                    if (config.iso == iso && config.exposureNs == exposureNs) return@post
+                    config = config.copy(iso = iso, exposureNs = exposureNs)
+                    cameraControlsPending = true
+                }
+            }
+        }.onFailure { onNotice("自定义曝光测光流不可用：${it.message}") }.getOrNull()
+    }
 
     private fun requestPreviewSurface(): Surface? = if (previewEnabled) {
         permanentPreviewRenderer?.inputSurface?.takeIf { it.isValid }

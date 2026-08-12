@@ -58,6 +58,7 @@ class MediaCodecRecorderEngine(
     @Volatile private var transformRenderer: GlVideoTransformRenderer? = null
     @Volatile private var rawRenderer: GpuRawVideoRenderer? = null
     @Volatile private var rawThreeAAuxiliaryStream: RawThreeAAuxiliaryStream? = null
+    @Volatile private var customExposureController: CustomExposureController? = null
     private var rawThreeAAuxiliaryFallback = false
     private var cameraControlsPending = false
     private var submittedCameraControlsKey: List<Any?>? = null
@@ -117,7 +118,11 @@ class MediaCodecRecorderEngine(
                         if (config.rawProcessingEnabled) encodedOutputWidth else config.previewWidth.takeIf { it > 0 } ?: config.width,
                         if (config.rawProcessingEnabled) encodedOutputHeight else config.previewHeight.takeIf { it > 0 } ?: config.height,
                         previewRotationDegrees,
-                    ).also { it.setOutput(previewSurface, this.previewEnabled, previewRotationDegrees) }
+                    ).also {
+                        it.setOutput(previewSurface, this.previewEnabled, previewRotationDegrees)
+                        it.setMeteringMode(config.customExposureMetering)
+                        it.setLuminanceListener { value -> customExposureController?.submitLuminance(value) }
+                    }
                 }
                 prepare()
             }.onFailure { fail("无法启动 MediaCodec 录制: ${it.message}") }
@@ -509,6 +514,7 @@ class MediaCodecRecorderEngine(
         val device = camera ?: return
         val recordSurface = cameraInputSurface() ?: return
         val preview = sessionPreviewSurface()
+        prepareCustomExposureController()
         prepareRawThreeAAuxiliaryStream()
         val auxiliarySurface = rawThreeAAuxiliaryStream?.surface?.takeIf { it.isValid }
         val generation = ++sessionGeneration
@@ -778,10 +784,21 @@ class MediaCodecRecorderEngine(
             ) {
                 touchFocusLockedDistance = null
             }
+            val preserveCustomExposure = config.customExposureEnabled && !config.manualExposure &&
+                updated.customExposureEnabled && !updated.manualExposure
             config = config.copy(
                 manualExposure = updated.manualExposure,
-                iso = updated.iso,
-                exposureNs = updated.exposureNs,
+                customExposureEnabled = updated.customExposureEnabled,
+                customExposureMetering = updated.customExposureMetering,
+                customExposureTarget = updated.customExposureTarget,
+                customExposureMinIso = updated.customExposureMinIso,
+                customExposureMaxIso = updated.customExposureMaxIso,
+                customExposureMinNs = updated.customExposureMinNs,
+                customExposureMaxNs = updated.customExposureMaxNs,
+                customExposureSpeed = updated.customExposureSpeed,
+                customExposureUpdatesPerSecond = updated.customExposureUpdatesPerSecond,
+                iso = if (preserveCustomExposure) config.iso else updated.iso,
+                exposureNs = if (preserveCustomExposure) config.exposureNs else updated.exposureNs,
                 unrestrictedIso = updated.unrestrictedIso,
                 unrestrictedExposure = updated.unrestrictedExposure,
                 aperture = updated.aperture,
@@ -828,6 +845,7 @@ class MediaCodecRecorderEngine(
                 rawShadowLiftTarget = updated.rawShadowLiftTarget,
                 rawShadowLiftSmoothness = updated.rawShadowLiftSmoothness,
             )
+            customExposureController?.updateConfig(config)
             rawRenderer?.updateProcessingParameters(
                 lensShadingCorrectionEnabled = config.rawLensShadingCorrectionEnabled,
                 demosaicAlgorithm = config.rawDemosaicAlgorithm,
@@ -1029,6 +1047,27 @@ class MediaCodecRecorderEngine(
             ?: previewSurface?.takeIf { it.isValid }
     }
 
+    private fun prepareCustomExposureController() {
+        if (!config.customExposureEnabled || !config.permanentPreviewSurface || config.highSpeedMode) {
+            runCatching { customExposureController?.close() }
+            customExposureController = null
+            return
+        }
+        customExposureController?.updateConfig(config)
+        permanentPreviewRenderer?.setMeteringMode(config.customExposureMetering)
+        if (customExposureController != null) return
+        customExposureController = runCatching {
+            CustomExposureController(cameraManager.getCameraCharacteristics(config.cameraId), cameraHandler, config) { iso, exposureNs ->
+                cameraHandler.post {
+                    if (!running.get() || stopStarted.get() || camera == null) return@post
+                    if (config.iso == iso && config.exposureNs == exposureNs) return@post
+                    config = config.copy(iso = iso, exposureNs = exposureNs)
+                    cameraControlsPending = true
+                }
+            }
+        }.onFailure { onNotice("自定义曝光测光流不可用：${it.message}") }.getOrNull()
+    }
+
     private fun requestPreviewSurface(): Surface? = if (previewEnabled && !config.rawProcessingEnabled) {
         permanentPreviewRenderer?.inputSurface?.takeIf { it.isValid }
             ?: previewSurface?.takeIf { it.isValid }
@@ -1148,6 +1187,8 @@ class MediaCodecRecorderEngine(
         runCatching { session?.close() }; session = null
         runCatching { camera?.close() }; camera = null
         releaseRawThreeAAuxiliaryStream()
+        runCatching { customExposureController?.close() }
+        customExposureController = null
         rawThreeAAuxiliaryFallback = false
     }
 

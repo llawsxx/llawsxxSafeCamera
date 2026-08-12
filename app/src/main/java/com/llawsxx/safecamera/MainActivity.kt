@@ -142,6 +142,7 @@ import com.llawsxx.safecamera.recording.RawSensorInfo
 import com.llawsxx.safecamera.recording.AudioAacProfile
 import com.llawsxx.safecamera.recording.AudioInputSource
 import com.llawsxx.safecamera.recording.ColorCorrectionMode
+import com.llawsxx.safecamera.recording.CustomExposureMetering
 import com.llawsxx.safecamera.recording.WhiteBalanceTransformMode
 import com.llawsxx.safecamera.recording.VideoBitrateMode
 import com.llawsxx.safecamera.recording.VideoCodec
@@ -564,6 +565,15 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
     LaunchedEffect(
         state is RecorderState.Recording,
         config.manualExposure,
+        config.customExposureEnabled,
+        config.customExposureMetering,
+        config.customExposureTarget,
+        config.customExposureMinIso,
+        config.customExposureMaxIso,
+        config.customExposureMinNs,
+        config.customExposureMaxNs,
+        config.customExposureSpeed,
+        config.customExposureUpdatesPerSecond,
         config.iso,
         config.exposureNs,
         config.unrestrictedIso,
@@ -653,6 +663,15 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.scalingAlgorithm,
         config.fps,
         config.manualExposure,
+        config.customExposureEnabled,
+        config.customExposureMetering,
+        config.customExposureTarget,
+        config.customExposureMinIso,
+        config.customExposureMaxIso,
+        config.customExposureMinNs,
+        config.customExposureMaxNs,
+        config.customExposureSpeed,
+        config.customExposureUpdatesPerSecond,
         config.iso,
         config.exposureNs,
         config.unrestrictedIso,
@@ -1171,7 +1190,6 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                         cropEnabled = false,
                                         resizeEnabled = false,
                                         rotateImagePixels = false,
-                                        permanentPreviewSurface = false,
                                     )
                                 } else config.copy(rawProcessingEnabled = false)
                             }
@@ -2340,7 +2358,7 @@ private fun RemainingSpacePreview(
         )
         if (showZoomControls) {
             Row(
-                Modifier.align(Alignment.TopEnd).padding(6.dp),
+                Modifier.align(Alignment.TopStart).padding(6.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 ZoomButton("−", config.mfAssistMagnification > 1) {
@@ -2349,13 +2367,18 @@ private fun RemainingSpacePreview(
                 ZoomButton("+", true) {
                     onConfigChange(assistConfigAtMagnification(config, nextMagnification(config)))
                 }
-                TouchFocusToggleButton(config, camera, onConfigChange)
-            }
-        } else {
-            Box(Modifier.align(Alignment.TopEnd).padding(6.dp)) {
-                TouchFocusToggleButton(config, camera, onConfigChange)
             }
         }
+        TouchFocusButtons(
+            config = config,
+            camera = camera,
+            onChange = onConfigChange,
+            controlsVisible = false,
+            onControlsVisibleChange = {},
+            showParametersButton = false,
+            overlay = true,
+            modifier = Modifier.align(Alignment.TopEnd).padding(6.dp),
+        )
         if (config.mfAssistMagnification > 1) {
             val overviewCenter = config.mfAssistCenterX to config.mfAssistCenterY
             Box(
@@ -3196,6 +3219,12 @@ private fun CompactExposureControls(
     enabled: Boolean,
     onChange: (RecordingConfig) -> Unit,
 ) {
+    ToggleLine(
+        "自定义自动曝光",
+        config.customExposureEnabled,
+        enabled && config.permanentPreviewSurface && !config.highSpeedMode && config.hasVideo && camera.manualSensorAvailable &&
+            camera.isoRange != null && camera.exposureRange != null,
+    ) { onChange(config.copy(customExposureEnabled = it)) }
     ToggleLine(
         "手动曝光",
         config.manualExposure,
@@ -4115,12 +4144,35 @@ private fun TouchFocusButtons(
     overlay: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    var customExposureParametersVisible by remember { mutableStateOf(false) }
     Column(
         modifier,
         verticalArrangement = Arrangement.spacedBy(6.dp),
         horizontalAlignment = Alignment.End,
     ) {
         TouchFocusToggleButton(config, camera, onChange, overlay)
+        if (config.customExposureEnabled && !config.manualExposure && !config.highSpeedMode && config.hasVideo) {
+            OutlinedButton(
+                onClick = { customExposureParametersVisible = !customExposureParametersVisible },
+                modifier = Modifier.height(36.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+            ) {
+                Text(
+                    "自定义曝光 ${if (customExposureParametersVisible) "收起" else "参数"}",
+                    color = if (overlay) Color.White else Color.Unspecified,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                )
+            }
+            if (customExposureParametersVisible) {
+                CustomExposureParameterPanel(
+                    config = config,
+                    enabled = !config.highSpeedMode,
+                    overlay = overlay,
+                    onChange = onChange,
+                )
+            }
+        }
         if (showParametersButton) {
             OutlinedButton(
                 onClick = { onControlsVisibleChange(!controlsVisible) },
@@ -4134,6 +4186,73 @@ private fun TouchFocusButtons(
                     maxLines = 1,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun CustomExposureParameterPanel(
+    config: RecordingConfig,
+    enabled: Boolean,
+    overlay: Boolean,
+    onChange: (RecordingConfig) -> Unit,
+) {
+    val textColor = if (overlay) Color.White else Color.Unspecified
+    Card(
+        modifier = Modifier.width(280.dp).heightIn(max = 280.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xCC111416)),
+    ) {
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text("自定义曝光参数", color = textColor, style = MaterialTheme.typography.titleSmall)
+            Labeled("测光模式") {
+                ChoiceRow(
+                    CustomExposureMetering.entries,
+                    config.customExposureMetering,
+                    { it.label },
+                    enabled,
+                ) { onChange(config.copy(customExposureMetering = it)) }
+            }
+            Text("目标亮度 ${(config.customExposureTarget * 100f).format0()}%", color = textColor, style = MaterialTheme.typography.labelMedium)
+            Slider(
+                value = config.customExposureTarget,
+                onValueChange = { onChange(config.copy(customExposureTarget = it)) },
+                valueRange = 0.02f..0.95f,
+                enabled = enabled,
+            )
+            Text("ISO 范围 ${config.customExposureMinIso} - ${config.customExposureMaxIso}", color = textColor, style = MaterialTheme.typography.labelMedium)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                DeferredIntField(config.customExposureMinIso, { onChange(config.copy(customExposureMinIso = it)) }, { Text("最低 ISO") }, enabled, minimum = 1, maximum = 204800, evenOnly = false, modifier = Modifier.weight(1f))
+                DeferredIntField(config.customExposureMaxIso, { onChange(config.copy(customExposureMaxIso = it)) }, { Text("最高 ISO") }, enabled, minimum = 1, maximum = 204800, evenOnly = false, modifier = Modifier.weight(1f))
+            }
+            Text("快门范围 ${formatShutter(config.customExposureMinNs)} - ${formatShutter(config.customExposureMaxNs)}", color = textColor, style = MaterialTheme.typography.labelMedium)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                DeferredLongField(config.customExposureMinNs, { onChange(config.copy(customExposureMinNs = it)) }, { Text("最短快门 ns") }, enabled, minimum = 1_000L, maximum = 1_000_000_000L, modifier = Modifier.weight(1f))
+                DeferredLongField(config.customExposureMaxNs, { onChange(config.copy(customExposureMaxNs = it)) }, { Text("最长快门 ns") }, enabled, minimum = 1_000L, maximum = 1_000_000_000L, modifier = Modifier.weight(1f))
+            }
+            Text("调节速度 ${(config.customExposureSpeed * 100f).format0()}%", color = textColor, style = MaterialTheme.typography.labelMedium)
+            Slider(
+                value = config.customExposureSpeed,
+                onValueChange = { onChange(config.copy(customExposureSpeed = it)) },
+                valueRange = 0.02f..1f,
+                enabled = enabled,
+            )
+            Text(
+                "每秒调节 ${config.customExposureUpdatesPerSecond} 次",
+                color = textColor,
+                style = MaterialTheme.typography.labelMedium,
+            )
+            Slider(
+                value = config.customExposureUpdatesPerSecond.toFloat(),
+                onValueChange = {
+                    onChange(config.copy(customExposureUpdatesPerSecond = it.roundToInt().coerceIn(1, 10)))
+                },
+                valueRange = 1f..10f,
+                steps = 8,
+                enabled = enabled,
+            )
         }
     }
 }
@@ -4805,6 +4924,15 @@ private fun CameraProcessingControls(
     enabled: Boolean,
     onChange: (RecordingConfig) -> Unit,
 ) {
+    ToggleLine(
+        "自定义自动曝光",
+        config.customExposureEnabled,
+        enabled && config.permanentPreviewSurface && !config.highSpeedMode && config.hasVideo && camera.manualSensorAvailable &&
+            camera.isoRange != null && camera.exposureRange != null,
+    ) { onChange(config.copy(customExposureEnabled = it)) }
+    if (!camera.manualSensorAvailable || camera.isoRange == null || camera.exposureRange == null) {
+        Text("当前镜头不支持自定义曝光所需的手动传感器参数", style = MaterialTheme.typography.bodySmall)
+    }
     ToggleLine("光学防抖", config.opticalStabilization, enabled && camera.oisAvailable) {
         onChange(config.copy(opticalStabilization = it))
     }
@@ -5239,6 +5367,37 @@ private fun DeferredFloatField(
             if (focused && !state.isFocused) {
                 val committed = (text.toDoubleOrNull() ?: value).coerceIn(minimum, maximum)
                 text = committed.fpsLabel()
+                onCommit(committed)
+            }
+            focused = state.isFocused
+        },
+    )
+}
+
+@Composable
+private fun DeferredLongField(
+    value: Long,
+    onCommit: (Long) -> Unit,
+    label: @Composable (() -> Unit),
+    enabled: Boolean,
+    minimum: Long,
+    maximum: Long,
+    modifier: Modifier = Modifier,
+) {
+    var text by remember { mutableStateOf(value.toString()) }
+    var focused by remember { mutableStateOf(false) }
+    LaunchedEffect(value, focused) { if (!focused) text = value.toString() }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { updated -> if (updated.all(Char::isDigit)) text = updated },
+        label = label,
+        singleLine = true,
+        enabled = enabled,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        modifier = modifier.onFocusChanged { state ->
+            if (focused && !state.isFocused) {
+                val committed = (text.toLongOrNull() ?: value).coerceIn(minimum, maximum)
+                text = committed.toString()
                 onCommit(committed)
             }
             focused = state.isFocused

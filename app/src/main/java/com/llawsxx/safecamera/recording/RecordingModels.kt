@@ -176,6 +176,10 @@ enum class FocusMode(val label: String) : Serializable {
     CONTINUOUS("连续自动"), MANUAL("手动")
 }
 
+enum class CustomExposureMetering(val label: String) : Serializable {
+    AVERAGE("平均测光"), CENTER("中央重点"), SPOT("点测光"),
+}
+
 enum class TouchFocusState : Serializable {
     FOCUSING, SUCCESS, FAILED
 }
@@ -272,6 +276,15 @@ data class RecordingConfig(
     val photoFormat: PhotoFormat = PhotoFormat.JPEG,
     val photoJpegQuality: Int = 95,
     val manualExposure: Boolean = false,
+    val customExposureEnabled: Boolean = false,
+    val customExposureMetering: CustomExposureMetering = CustomExposureMetering.CENTER,
+    val customExposureTarget: Float = 0.18f,
+    val customExposureMinIso: Int = 100,
+    val customExposureMaxIso: Int = 1600,
+    val customExposureMinNs: Long = 100_000L,
+    val customExposureMaxNs: Long = 33_333_333L,
+    val customExposureSpeed: Float = 0.25f,
+    val customExposureUpdatesPerSecond: Int = 3,
     val iso: Int = 400,
     val exposureNs: Long = 10_000_000L,
     val aperture: Float? = null,
@@ -440,6 +453,7 @@ data class CameraInfo(
     val fpsRanges: List<Range<Int>>,
     val estimatedMaxFpsBySize: Map<String, Int>,
     val experimentalCandidate: Boolean,
+    val manualSensorAvailable: Boolean,
     val isoRange: Range<Int>?,
     val exposureRange: Range<Long>?,
     val apertures: List<Float>,

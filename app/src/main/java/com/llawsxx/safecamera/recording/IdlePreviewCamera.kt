@@ -25,6 +25,7 @@ class IdlePreviewCamera(context: Context) {
     private var permanentPreviewRenderer: PermanentPreviewRenderer? = null
     private var rawRenderer: GpuRawVideoRenderer? = null
     private var rawThreeAAuxiliaryStream: RawThreeAAuxiliaryStream? = null
+    private var customExposureController: CustomExposureController? = null
     private var rawThreeAAuxiliaryFallback = false
     private var opening = false
     private var configuring = false
@@ -44,7 +45,8 @@ class IdlePreviewCamera(context: Context) {
         if (closeCallbacks.isNotEmpty()) return@post
         if (!surface.isValid || !config.hasVideo) return@post
         val sameTarget = activeCameraId == config.cameraId && activeSurface === surface &&
-            activeConfig?.rawProcessingEnabled == config.rawProcessingEnabled
+            activeConfig?.rawProcessingEnabled == config.rawProcessingEnabled &&
+            activeConfig?.permanentPreviewSurface == config.permanentPreviewSurface
         val previousConfig = activeConfig
         if (config.focusMode != FocusMode.MANUAL ||
             (config.touchFocusRequestId == previousConfig?.touchFocusRequestId &&
@@ -57,6 +59,7 @@ class IdlePreviewCamera(context: Context) {
         activeConfig = config
         if (sameTarget) {
             permanentPreviewRenderer?.setOutput(surface, true, rotationDegrees)
+            permanentPreviewRenderer?.setMeteringMode(config.customExposureMetering)
             rawRenderer?.updateProcessingParameters(
                 lensShadingCorrectionEnabled = config.rawLensShadingCorrectionEnabled,
                 demosaicAlgorithm = config.rawDemosaicAlgorithm,
@@ -79,9 +82,15 @@ class IdlePreviewCamera(context: Context) {
                     preparePreviewPipeline(config, surface, rotationDegrees)
                     open(config.cameraId, surface)
                 }
-                camera != null && session != null && previousConfig?.previewBufferKey() != config.previewBufferKey() ->
+                camera != null && session != null && (
+                    previousConfig?.previewBufferKey() != config.previewBufferKey() ||
+                        previousConfig?.customExposureEnabled != config.customExposureEnabled
+                    ) ->
                     createSession(config, surface)
-                camera != null && session != null -> queueRepeatingRequest(previousConfig, config)
+                camera != null && session != null -> {
+                    prepareCustomExposureController(config)
+                    queueRepeatingRequest(previousConfig, config)
+                }
                 opening || configuring -> Unit
                 camera != null -> createSession(config, surface)
                 else -> open(config.cameraId, surface)
@@ -173,6 +182,7 @@ class IdlePreviewCamera(context: Context) {
         val cameraSurface = cameraOutputSurface(config, surface) ?: return
         prepareRawThreeAAuxiliaryStream(config)
         val auxiliarySurface = rawThreeAAuxiliaryStream?.surface?.takeIf { it.isValid }
+        prepareCustomExposureController(config)
         val currentGeneration = ++generation
         runCatching { session?.close() }
         session = null
@@ -316,6 +326,8 @@ class IdlePreviewCamera(context: Context) {
         runCatching { rawRenderer?.release() }
         rawRenderer = null
         releaseRawThreeAAuxiliaryStream()
+        runCatching { customExposureController?.close() }
+        customExposureController = null
         runCatching { permanentPreviewRenderer?.release() }
         permanentPreviewRenderer = null
         activeSurface = null
@@ -463,17 +475,48 @@ class IdlePreviewCamera(context: Context) {
         }.getOrNull()
     }
 
+    private fun prepareCustomExposureController(config: RecordingConfig) {
+        if (!config.customExposureEnabled || !config.permanentPreviewSurface || config.highSpeedMode) {
+            runCatching { customExposureController?.close() }
+            customExposureController = null
+            return
+        }
+        customExposureController?.updateConfig(config)
+        if (customExposureController != null) {
+            activeConfig = customExposureController?.withCurrentExposure(config)
+            return
+        }
+        customExposureController = runCatching {
+            CustomExposureController(manager.getCameraCharacteristics(config.cameraId), handler, config) { iso, exposureNs ->
+                handler.post {
+                    val current = activeConfig ?: return@post
+                    if (!current.customExposureEnabled || current.manualExposure) return@post
+                    activeConfig = current.copy(iso = iso, exposureNs = exposureNs)
+                    cameraRequestPending = true
+                    activeSurface?.let { updateRepeatingRequest(activeConfig ?: current, it) }
+                }
+            }
+        }.onFailure { Log.w(TAG, "Unable to create custom exposure metering stream", it) }.getOrNull()
+        activeConfig = customExposureController?.withCurrentExposure(config) ?: activeConfig
+    }
+
     private fun releaseRawThreeAAuxiliaryStream() {
         runCatching { rawThreeAAuxiliaryStream?.close() }
         rawThreeAAuxiliaryStream = null
     }
 
     private fun preparePreviewPipeline(config: RecordingConfig, surface: Surface, rotationDegrees: Int) {
-        if (!config.rawProcessingEnabled) return
+        if (!config.rawProcessingEnabled && !config.permanentPreviewSurface) return
         val processingWidth = config.previewWidth.takeIf { it > 0 } ?: config.width
         val processingHeight = config.previewHeight.takeIf { it > 0 } ?: config.height
         val bridge = PermanentPreviewRenderer(processingWidth, processingHeight, rotationDegrees).also {
             it.setOutput(surface, true, rotationDegrees)
+            it.setMeteringMode(config.customExposureMetering)
+            it.setLuminanceListener { value -> customExposureController?.submitLuminance(value) }
+        }
+        if (!config.rawProcessingEnabled) {
+            permanentPreviewRenderer = bridge
+            return
         }
         runCatching {
             GpuRawVideoRenderer(
@@ -512,8 +555,11 @@ class IdlePreviewCamera(context: Context) {
     }
 
     private fun cameraOutputSurface(config: RecordingConfig, surface: Surface): Surface? =
-        if (config.rawProcessingEnabled) rawRenderer?.inputSurface?.takeIf { it.isValid }
-        else surface.takeIf { it.isValid }
+        when {
+            config.rawProcessingEnabled -> rawRenderer?.inputSurface?.takeIf { it.isValid }
+            config.permanentPreviewSurface -> permanentPreviewRenderer?.inputSurface?.takeIf { it.isValid }
+            else -> surface.takeIf { it.isValid }
+        }
 
     private companion object {
         const val TAG = "IdlePreviewCamera"

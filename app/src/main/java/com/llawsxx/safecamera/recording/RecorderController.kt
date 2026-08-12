@@ -41,9 +41,21 @@ object RecorderController {
 
     fun start(context: Context, config: RecordingConfig) {
         mutableState.value = RecorderState.Starting()
+        val liveExposure = mutableExposure.value?.takeIf { exposure ->
+            config.customExposureEnabled && !config.manualExposure && exposure.cameraId == config.cameraId &&
+                exposure.iso != null && exposure.exposureNs != null
+        }
+        val startupConfig = if (liveExposure != null) {
+            config.copy(
+                iso = checkNotNull(liveExposure.iso),
+                exposureNs = checkNotNull(liveExposure.exposureNs),
+            )
+        } else {
+            config
+        }
         val intent = Intent(context, RecordingService::class.java)
             .setAction(RecordingService.ACTION_START)
-            .putExtra(RecordingService.EXTRA_CONFIG, config)
+            .putExtra(RecordingService.EXTRA_CONFIG, startupConfig)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent)
         } else {

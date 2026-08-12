@@ -178,6 +178,7 @@ object CameraCapabilities {
                     fpsRanges = fps,
                     estimatedMaxFpsBySize = estimatedMaxFpsBySize,
                     experimentalCandidate = experimentalCandidate,
+                    manualSensorAvailable = CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR in capabilities,
                     isoRange = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE),
                     exposureRange = c.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE),
                     apertures = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)?.toList().orEmpty(),

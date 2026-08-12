@@ -107,7 +107,13 @@ object CameraRequestControls {
             builder.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, it)
         }
 
-        if (config.manualExposure) {
+        val requestCapabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+            ?: intArrayOf()
+        val customExposureAvailable = config.customExposureEnabled &&
+            CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR in requestCapabilities &&
+            characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) != null &&
+            characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE) != null
+        if (config.manualExposure || customExposureAvailable) {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
             val sensitivityRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
             val requestedIso = if (config.unrestrictedIso) config.iso else sensitivityRange?.let {
@@ -414,6 +420,15 @@ internal fun RecordingConfig.cameraRequestControlsKey(): List<Any?> = listOf(
     aberrationCorrectionMode,
     distortionCorrectionMode,
     manualExposure,
+    customExposureEnabled,
+    customExposureMetering,
+    customExposureTarget,
+    customExposureMinIso,
+    customExposureMaxIso,
+    customExposureMinNs,
+    customExposureMaxNs,
+    customExposureSpeed,
+    customExposureUpdatesPerSecond,
     iso,
     exposureNs,
     unrestrictedIso,

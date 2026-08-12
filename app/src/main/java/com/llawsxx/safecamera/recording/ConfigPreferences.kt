@@ -133,6 +133,15 @@ object ConfigPreferences {
             photoFormat = enumValue(p.getString("photoFormat", null), PhotoFormat.JPEG),
             photoJpegQuality = p.getInt("photoJpegQuality", 95).coerceIn(1, 100),
             manualExposure = p.getBoolean("manualExposure", false),
+            customExposureEnabled = p.getBoolean("customExposureEnabled", false),
+            customExposureMetering = enumValue(p.getString("customExposureMetering", null), CustomExposureMetering.CENTER),
+            customExposureTarget = p.getFloat("customExposureTarget", 0.18f).coerceIn(0.02f, 0.95f),
+            customExposureMinIso = p.getInt("customExposureMinIso", 100).coerceAtLeast(1),
+            customExposureMaxIso = p.getInt("customExposureMaxIso", 1600).coerceAtLeast(1),
+            customExposureMinNs = p.getLong("customExposureMinNs", 100_000L).coerceAtLeast(1L),
+            customExposureMaxNs = p.getLong("customExposureMaxNs", 33_333_333L).coerceAtLeast(1L),
+            customExposureSpeed = p.getFloat("customExposureSpeed", 0.25f).coerceIn(0.02f, 1f),
+            customExposureUpdatesPerSecond = p.getInt("customExposureUpdatesPerSecond", 3).coerceIn(1, 10),
             iso = p.getInt("iso", 400),
             exposureNs = p.getLong("exposureNs", 10_000_000L),
             aperture = p.getString("aperture", null)?.toFloatOrNull(),
@@ -279,6 +288,15 @@ object ConfigPreferences {
             .putString("photoFormat", c.photoFormat.name)
             .putInt("photoJpegQuality", c.photoJpegQuality.coerceIn(1, 100))
             .putBoolean("manualExposure", c.manualExposure)
+            .putBoolean("customExposureEnabled", c.customExposureEnabled)
+            .putString("customExposureMetering", c.customExposureMetering.name)
+            .putFloat("customExposureTarget", c.customExposureTarget.coerceIn(0.02f, 0.95f))
+            .putInt("customExposureMinIso", c.customExposureMinIso.coerceAtLeast(1))
+            .putInt("customExposureMaxIso", c.customExposureMaxIso.coerceAtLeast(1))
+            .putLong("customExposureMinNs", c.customExposureMinNs.coerceAtLeast(1L))
+            .putLong("customExposureMaxNs", c.customExposureMaxNs.coerceAtLeast(1L))
+            .putFloat("customExposureSpeed", c.customExposureSpeed.coerceIn(0.02f, 1f))
+            .putInt("customExposureUpdatesPerSecond", c.customExposureUpdatesPerSecond.coerceIn(1, 10))
             .putInt("iso", c.iso)
             .putLong("exposureNs", c.exposureNs)
             .putString("aperture", c.aperture?.toString())
