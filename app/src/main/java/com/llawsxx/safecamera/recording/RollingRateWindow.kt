@@ -1,6 +1,37 @@
 package com.llawsxx.safecamera.recording
 
 import java.util.ArrayDeque
+import kotlin.math.roundToLong
+
+internal fun timelineDroppedFrames(
+    firstTimestampNs: Long,
+    currentTimestampNs: Long,
+    capturedFrames: Long,
+    targetFps: Double,
+): Long {
+    if (firstTimestampNs <= 0L || currentTimestampNs < firstTimestampNs ||
+        capturedFrames <= 0L || !targetFps.isFinite() || targetFps <= 0.0
+    ) return 0L
+    val elapsedAfterFirstNs = currentTimestampNs - firstTimestampNs
+    val expectedFrames = 1L + (elapsedAfterFirstNs * targetFps / 1_000_000_000.0).roundToLong()
+    return expectedFrames - capturedFrames
+}
+
+internal fun tuneSensorFrameDurationNs(
+    targetDurationNs: Long,
+    droppedFrames: Long,
+    stepNs: Long,
+): Long {
+    if (targetDurationNs <= 0L) return targetDurationNs
+    val safeStepNs = stepNs.coerceIn(1_000L, 30_000L)
+    return if (droppedFrames > 0L) {
+        (targetDurationNs - safeStepNs).coerceAtLeast(1L)
+    } else if (droppedFrames < 0L) {
+        targetDurationNs + safeStepNs
+    } else {
+        targetDurationNs
+    }
+}
 
 internal class EventRateWindow(
     private val windowDuration: Long,

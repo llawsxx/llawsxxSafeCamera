@@ -289,6 +289,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.height,
         config.fps,
         config.experimentalUnadvertisedFps,
+        config.sensorFrameDurationAutoTune,
+        config.sensorFrameDurationTuneStepNs,
         config.highSpeedMode,
         recording,
         restoreCameraModeAfterRecording,
@@ -663,6 +665,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.recordHeight,
         config.scalingAlgorithm,
         config.fps,
+        config.sensorFrameDurationAutoTune,
+        config.sensorFrameDurationTuneStepNs,
         config.manualExposure,
         config.customExposureEnabled,
         config.customExposureMetering,
@@ -1143,6 +1147,33 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             config.experimentalUnadvertisedFps,
                             !recording && !config.highSpeedMode,
                         ) { enabled -> config = config.copy(experimentalUnadvertisedFps = enabled) }
+                        ToggleLine(
+                            "SENSOR_FRAME_DURATION 自动微调",
+                            config.sensorFrameDurationAutoTune,
+                            !recording && !config.highSpeedMode &&
+                                (config.manualExposure || config.customExposureEnabled),
+                        ) { enabled -> config = config.copy(sensorFrameDurationAutoTune = enabled) }
+                        Text(
+                            "微调幅度 ${config.sensorFrameDurationTuneStepNs} ns",
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                        Text(
+                            "通过微调SENSOR_FRAME_DURATION，校准传感器时钟偏差，实现“消除”丢帧的效果",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Slider(
+                            value = config.sensorFrameDurationTuneStepNs.toFloat(),
+                            onValueChange = {
+                                config = config.copy(
+                                    sensorFrameDurationTuneStepNs = (it / 1_000f).roundToInt()
+                                        .coerceIn(1, 30) * 1_000L,
+                                )
+                            },
+                            valueRange = 1_000f..30_000f,
+                            steps = 28,
+                            enabled = !recording && config.sensorFrameDurationAutoTune,
+                        )
                         Text(
                             "实验镜头来自逻辑相机声明的物理 ID，以及可成功查询特征但未出现在 cameraIdList 的候选 ID。厂商仍可在打开阶段拒绝。未声明 FPS 会提交精确 Camera2 目标值，实际是否生效以录制平均 FPS 为准。",
                             color = MaterialTheme.colorScheme.error,

@@ -33,6 +33,9 @@ object ConfigPreferences {
                     .getOrElse { p.getInt("fps", 30).toDouble() }).coerceIn(1.0, 240.0),
             experimentalCameraAccess = p.getBoolean("experimentalCameraAccess", false),
             experimentalUnadvertisedFps = p.getBoolean("experimentalUnadvertisedFps", false),
+            sensorFrameDurationAutoTune = p.getBoolean("sensorFrameDurationAutoTune", false),
+            sensorFrameDurationTuneStepNs = p.getLong("sensorFrameDurationTuneStepNs", 3_000L)
+                .coerceIn(1_000L, 30_000L),
             mediaCodecMode = p.getBoolean("mediaCodecMode", false),
             rawProcessingEnabled = p.getBoolean("rawProcessingEnabled", false),
             rawWidth = p.getInt("rawWidth", 0).coerceAtLeast(0),
@@ -227,6 +230,8 @@ object ConfigPreferences {
             .putString("fpsExact", c.fps.coerceIn(1.0, 240.0).toString())
             .putBoolean("experimentalCameraAccess", c.experimentalCameraAccess)
             .putBoolean("experimentalUnadvertisedFps", c.experimentalUnadvertisedFps)
+            .putBoolean("sensorFrameDurationAutoTune", c.sensorFrameDurationAutoTune)
+            .putLong("sensorFrameDurationTuneStepNs", c.sensorFrameDurationTuneStepNs.coerceIn(1_000L, 30_000L))
             .putBoolean("mediaCodecMode", c.mediaCodecMode)
             .putBoolean("rawProcessingEnabled", c.rawProcessingEnabled)
             .putInt("rawWidth", c.rawWidth)

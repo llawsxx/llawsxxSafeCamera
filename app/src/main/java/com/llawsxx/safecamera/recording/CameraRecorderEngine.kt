@@ -52,8 +52,10 @@ class CameraRecorderEngine(
     private var baseName = ""
     @Volatile private var tsSink: StreamingTsSink? = null
     private var startedAtMs = 0L
-    private var lastFrameNs = 0L
+    private var firstFrameNs = 0L
+    private var capturedFrames = 0L
     @Volatile private var sensorFps = 0.0
+    private var tunedSensorFrameDurationNs = initialConfig.targetFrameDurationNs
     private val fpsWindow = EventRateWindow(FPS_STATS_WINDOW_NS, 1_000_000_000L)
     private val bitrateWindow = CounterRateWindow(STATS_WINDOW_MS)
     private var completedOutputBytes = 0L
@@ -349,7 +351,10 @@ class CameraRecorderEngine(
             hotPixelMode = updated.hotPixelMode,
             aberrationCorrectionMode = updated.aberrationCorrectionMode,
             distortionCorrectionMode = updated.distortionCorrectionMode,
+            sensorFrameDurationAutoTune = updated.sensorFrameDurationAutoTune,
+            sensorFrameDurationTuneStepNs = updated.sensorFrameDurationTuneStepNs,
         )
+        if (!config.sensorFrameDurationAutoTune) tunedSensorFrameDurationNs = config.targetFrameDurationNs
         customExposureController?.updateConfig(config)
         permanentPreviewRenderer?.setMeteringMode(config.customExposureMetering)
         if (previousConfig.cameraRequestControlsKey() != config.cameraRequestControlsKey()) {
@@ -369,6 +374,7 @@ class CameraRecorderEngine(
                     manager, config.cameraId, config, this,
                     touchFocusCompleted = config.touchFocusRequestId == completedTouchFocusRequestId,
                     touchFocusLocked = touchFocusLockedDistance != null,
+                    sensorFrameDurationNs = tunedSensorFrameDurationNs,
                 )
                 highSpeedFpsRange()?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
             }.build()
@@ -396,7 +402,10 @@ class CameraRecorderEngine(
         fun triggerRequest(trigger: Int) = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
             addTarget(recordSurface)
             requestPreviewSurface()?.let(::addTarget)
-            CameraRequestControls.apply(manager, config.cameraId, config, this)
+            CameraRequestControls.apply(
+                manager, config.cameraId, config, this,
+                sensorFrameDurationNs = tunedSensorFrameDurationNs,
+            )
             set(CaptureRequest.CONTROL_AF_TRIGGER, trigger)
         }.build()
         touchFocusState = TouchFocusState.FOCUSING
@@ -562,6 +571,7 @@ class CameraRecorderEngine(
                             manager, config.cameraId, config, this,
                             touchFocusCompleted = config.touchFocusRequestId == completedTouchFocusRequestId,
                             touchFocusLocked = touchFocusLockedDistance != null,
+                            sensorFrameDurationNs = tunedSensorFrameDurationNs,
                         )
                         highSpeedFpsRange()?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                     }.build()
@@ -634,12 +644,22 @@ class CameraRecorderEngine(
                 touchFocusState = touchFocusState,
             )
             val timestamp = result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP) ?: return
-            if (lastFrameNs > 0L) {
-                val expected = 1_000_000_000.0 / config.fps
-                val interval = timestamp - lastFrameNs
-                if (interval > expected * 1.5) droppedFrames += max(0, (interval / expected).toLong() - 1L)
+            if (firstFrameNs == 0L) firstFrameNs = timestamp
+            capturedFrames++
+            droppedFrames = timelineDroppedFrames(firstFrameNs, timestamp, capturedFrames, config.fps)
+            if (config.sensorFrameDurationAutoTune &&
+                (config.manualExposure || config.customExposureEnabled)
+            ) {
+                val nextDuration = tuneSensorFrameDurationNs(
+                    config.targetFrameDurationNs,
+                    droppedFrames,
+                    config.sensorFrameDurationTuneStepNs,
+                )
+                if (nextDuration != tunedSensorFrameDurationNs) {
+                    tunedSensorFrameDurationNs = nextDuration
+                    cameraControlsPending = true
+                }
             }
-            lastFrameNs = timestamp
             fpsWindow.add(timestamp)
             emitStats()
             if (session === this@CameraRecorderEngine.session && cameraControlsPending) {

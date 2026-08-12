@@ -216,6 +216,8 @@ data class RecordingConfig(
     val fps: Double = 30.0,
     val experimentalCameraAccess: Boolean = false,
     val experimentalUnadvertisedFps: Boolean = false,
+    val sensorFrameDurationAutoTune: Boolean = false,
+    val sensorFrameDurationTuneStepNs: Long = 3_000L,
     val mediaCodecMode: Boolean = false,
     val rawProcessingEnabled: Boolean = false,
     val rawWidth: Int = 0,

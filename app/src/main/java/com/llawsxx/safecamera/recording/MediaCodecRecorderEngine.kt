@@ -81,9 +81,9 @@ class MediaCodecRecorderEngine(
     private var sessionGeneration = 0
     private var startedAtMs = 0L
     private var firstSensorNs = 0L
-    private var lastSensorNs = 0L
     private var capturedFrames = 0L
     @Volatile private var sensorFps = 0.0
+    private var tunedSensorFrameDurationNs = initialConfig.targetFrameDurationNs
     private var droppedFrames = 0L
     @Volatile private var audioLevelDb = -60f
     private val encodedBytes = AtomicLong(0L)
@@ -537,6 +537,7 @@ class MediaCodecRecorderEngine(
                             cameraManager, config.cameraId, config, this,
                             touchFocusCompleted = config.touchFocusRequestId == completedTouchFocusRequestId,
                             touchFocusLocked = touchFocusLockedDistance != null,
+                            sensorFrameDurationNs = tunedSensorFrameDurationNs,
                         )
                         dynamicFpsRange(config.cameraId)?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                     }.build()
@@ -700,15 +701,21 @@ class MediaCodecRecorderEngine(
                 touchFocusState = touchFocusState,
             )
             if (firstSensorNs == 0L) firstSensorNs = timestamp
-            if (lastSensorNs > 0L) {
-                val expected = 1_000_000_000.0 / config.fps
-                val interval = timestamp - lastSensorNs
-                if (interval > expected * 1.5) {
-                    droppedFrames += max(0L, (interval / expected).toLong() - 1L)
+            capturedFrames++
+            droppedFrames = timelineDroppedFrames(firstSensorNs, timestamp, capturedFrames, config.fps)
+            if (config.sensorFrameDurationAutoTune &&
+                (config.manualExposure || config.customExposureEnabled)
+            ) {
+                val nextDuration = tuneSensorFrameDurationNs(
+                    config.targetFrameDurationNs,
+                    droppedFrames,
+                    config.sensorFrameDurationTuneStepNs,
+                )
+                if (nextDuration != tunedSensorFrameDurationNs) {
+                    tunedSensorFrameDurationNs = nextDuration
+                    cameraControlsPending = true
                 }
             }
-            lastSensorNs = timestamp
-            capturedFrames++
             if (session === this@MediaCodecRecorderEngine.session && cameraControlsPending) {
                 submitRepeatingRequest("实时参数更新失败")
             }
@@ -770,7 +777,6 @@ class MediaCodecRecorderEngine(
                 pixelRotationDegrees = it
                 transformRenderer?.setPixelRotationDegrees(it)
             }
-            lastSensorNs = 0L
             config = config.copy(cameraId = cameraId, touchFocusX = null, touchFocusY = null)
             triggeredTouchFocusRequestId = 0L
             completedTouchFocusRequestId = 0L
@@ -842,6 +848,8 @@ class MediaCodecRecorderEngine(
                 hotPixelMode = updated.hotPixelMode,
                 aberrationCorrectionMode = updated.aberrationCorrectionMode,
                 distortionCorrectionMode = updated.distortionCorrectionMode,
+                sensorFrameDurationAutoTune = updated.sensorFrameDurationAutoTune,
+                sensorFrameDurationTuneStepNs = updated.sensorFrameDurationTuneStepNs,
                 rawLensShadingCorrectionEnabled = updated.rawLensShadingCorrectionEnabled,
                 rawDemosaicAlgorithm = updated.rawDemosaicAlgorithm,
                 cameraShadingMode = updated.cameraShadingMode,
@@ -854,6 +862,7 @@ class MediaCodecRecorderEngine(
                 rawShadowLiftTarget = updated.rawShadowLiftTarget,
                 rawShadowLiftSmoothness = updated.rawShadowLiftSmoothness,
             )
+            if (!config.sensorFrameDurationAutoTune) tunedSensorFrameDurationNs = config.targetFrameDurationNs
             customExposureController?.updateConfig(config)
             rawRenderer?.updateProcessingParameters(
                 lensShadingCorrectionEnabled = config.rawLensShadingCorrectionEnabled,
@@ -886,6 +895,7 @@ class MediaCodecRecorderEngine(
                     cameraManager, config.cameraId, config, this,
                     touchFocusCompleted = config.touchFocusRequestId == completedTouchFocusRequestId,
                     touchFocusLocked = touchFocusLockedDistance != null,
+                    sensorFrameDurationNs = tunedSensorFrameDurationNs,
                 )
                 dynamicFpsRange(config.cameraId)?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
             }.build()
@@ -912,7 +922,10 @@ class MediaCodecRecorderEngine(
             addTarget(recordSurface)
             requestPreviewSurface()?.let(::addTarget)
             rawThreeAAuxiliaryStream?.surface?.takeIf { it.isValid }?.let(::addTarget)
-            CameraRequestControls.apply(cameraManager, config.cameraId, config, this)
+            CameraRequestControls.apply(
+                cameraManager, config.cameraId, config, this,
+                sensorFrameDurationNs = tunedSensorFrameDurationNs,
+            )
             dynamicFpsRange(config.cameraId)?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
             set(CaptureRequest.CONTROL_AF_TRIGGER, trigger)
         }.build()

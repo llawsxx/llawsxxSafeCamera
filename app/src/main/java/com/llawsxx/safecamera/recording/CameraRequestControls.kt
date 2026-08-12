@@ -24,6 +24,7 @@ object CameraRequestControls {
         builder: CaptureRequest.Builder,
         touchFocusCompleted: Boolean = false,
         touchFocusLocked: Boolean = false,
+        sensorFrameDurationNs: Long? = null,
     ) {
         val characteristics = manager.getCameraCharacteristics(cameraId)
         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
@@ -129,9 +130,12 @@ object CameraRequestControls {
                 builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, it)
                 builder.set(
                     CaptureRequest.SENSOR_FRAME_DURATION,
-                    maxOf(config.targetFrameDurationNs, it),
+                    maxOf(sensorFrameDurationNs ?: config.targetFrameDurationNs, it),
                 )
-            } ?: builder.set(CaptureRequest.SENSOR_FRAME_DURATION, config.targetFrameDurationNs)
+            } ?: builder.set(
+                CaptureRequest.SENSOR_FRAME_DURATION,
+                sensorFrameDurationNs ?: config.targetFrameDurationNs,
+            )
             val apertures = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES) ?: floatArrayOf()
             config.aperture?.takeIf { aperture -> apertures.any { it == aperture } }
                 ?.let { builder.set(CaptureRequest.LENS_APERTURE, it) }
@@ -411,6 +415,8 @@ internal fun RecordingConfig.cameraRequestControlsKey(): List<Any?> = listOf(
     height,
     fps,
     experimentalUnadvertisedFps,
+    sensorFrameDurationAutoTune,
+    sensorFrameDurationTuneStepNs,
     highSpeedMode,
     rawProcessingEnabled,
     rawLensShadingCorrectionEnabled,
