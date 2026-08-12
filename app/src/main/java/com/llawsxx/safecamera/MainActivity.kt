@@ -261,13 +261,13 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 camera.fpsRanges.any { it.lower <= saved.fps && it.upper >= saved.fps }
             )
         val highSpeedUsable = saved?.highSpeedMode == true && camera.highSpeedModes.any {
-            it.width == size.first && it.height == size.second && saved.fps in it.minFps..it.maxFps
+            it.width == size.first && it.height == size.second && saved.fps in it.minFps.toDouble()..it.maxFps.toDouble()
         }
         return config.copy(
             cameraId = camera.id,
             width = size.first,
             height = size.second,
-            fps = if (savedFpsUsable || highSpeedUsable) saved!!.fps else preferredFps(camera),
+            fps = if (savedFpsUsable || highSpeedUsable) saved!!.fps else preferredFps(camera).toDouble(),
             experimentalUnadvertisedFps = savedFpsUsable && saved!!.experimentalUnadvertisedFps,
             highSpeedMode = highSpeedUsable,
             rawProcessingEnabled = config.rawProcessingEnabled && camera.rawSizes.isNotEmpty(),
@@ -377,7 +377,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 cameraId = camera.id,
                 width = size.first,
                 height = size.second,
-                fps = if (savedFpsSupported) config.fps else preferredFps(camera),
+                fps = if (savedFpsSupported) config.fps else preferredFps(camera).toDouble(),
                 rawProcessingEnabled = config.rawProcessingEnabled && camera.rawSizes.isNotEmpty(),
                 rawWidth = camera.rawSizes.firstOrNull {
                     it.width == config.rawWidth && it.height == config.rawHeight
@@ -397,7 +397,8 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                 } ?: 0,
                 antibandingMode = supportedAntibandingMode(camera, config.antibandingMode),
                 highSpeedMode = config.highSpeedMode && camera.highSpeedModes.any {
-                    it.width == size.first && it.height == size.second && config.fps in it.minFps..it.maxFps
+                    it.width == size.first && it.height == size.second &&
+                        config.fps in it.minFps.toDouble()..it.maxFps.toDouble()
                 },
             )
         }
@@ -1395,7 +1396,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 highSpeedMode = true,
                                 width = mode.width,
                                 height = mode.height,
-                                fps = mode.maxFps,
+                                fps = mode.maxFps.toDouble(),
                                 mediaCodecMode = false,
                                 videoBitrateMode = VideoBitrateMode.DEFAULT,
                                 videoKeyFrameIntervalSeconds = 2,
@@ -1409,14 +1410,14 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             val modes = camera.highSpeedModes
                             val selectedMode = modes.firstOrNull {
                                 it.width == config.width && it.height == config.height &&
-                                    config.fps in it.minFps..it.maxFps
+                                    config.fps in it.minFps.toDouble()..it.maxFps.toDouble()
                             }
                             Labeled("高速组合") {
                                 ChoiceRow(modes, selectedMode, { it.label }, !recording) { mode ->
                                     config = config.copy(
                                         width = mode.width,
                                         height = mode.height,
-                                        fps = mode.maxFps,
+                                        fps = mode.maxFps.toDouble(),
                                     )
                                 }
                             }
@@ -1625,7 +1626,11 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 .filter { it > 0 }
                                 .distinct()
                                 .sorted()
-                            val unadvertisedFpsValues = listOf(5, 10, 15, 24, 25, 30, 50, 60, 120, 240)
+                            val unadvertisedFpsValues = listOf(
+                                5.0, 10.0, 15.0, 24_000.0 / 1_001.0, 24.0, 25.0,
+                                30_000.0 / 1_001.0, 30.0, 48_000.0 / 1_001.0, 50.0,
+                                60_000.0 / 1_001.0, 60.0, 120_000.0 / 1_001.0, 120.0, 240.0,
+                            )
                             Row(
                                 Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1634,11 +1639,11 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                     Text("声明帧率", style = MaterialTheme.typography.labelMedium)
                                     ChoiceRow(
                                         fpsValues,
-                                        config.fps.takeUnless { config.experimentalUnadvertisedFps },
+                                        config.fps.roundToInt().takeUnless { config.experimentalUnadvertisedFps },
                                         { "$it fps" },
                                         !recording && !config.highSpeedMode,
                                     ) {
-                                        config = config.copy(fps = it, experimentalUnadvertisedFps = false)
+                                        config = config.copy(fps = it.toDouble(), experimentalUnadvertisedFps = false)
                                     }
                                 }
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1648,7 +1653,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                         config.fps.takeIf {
                                             config.experimentalUnadvertisedFps && it in unadvertisedFpsValues
                                         },
-                                        { "$it fps" },
+                                        { "${it.fpsLabel()} fps" },
                                         !recording && !config.highSpeedMode,
                                     ) {
                                         config = config.copy(fps = it, experimentalUnadvertisedFps = true)
@@ -1656,14 +1661,19 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 }
                             }
                         }
-                        DeferredIntField(
+                        DeferredFloatField(
                             value = config.fps,
-                            onCommit = { config = config.copy(fps = it) },
-                            label = { Text("自定义整数 FPS") },
+                            onCommit = {
+                                config = config.copy(
+                                    fps = it,
+                                    experimentalUnadvertisedFps =
+                                        config.experimentalUnadvertisedFps || it % 1.0 != 0.0,
+                                )
+                            },
+                            label = { Text("自定义 FPS（支持小数）") },
                             enabled = !recording && !config.highSpeedMode,
-                            minimum = 1,
-                            maximum = 240,
-                            evenOnly = false,
+                            minimum = 1.0,
+                            maximum = 240.0,
                         )
                         Text(
                             "镜头声明范围：" + camera.fpsRanges.joinToString("、") {
@@ -1689,9 +1699,9 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                         }
                         Text(
                             (if (config.mediaCodecEngineRequested) {
-                                "Camera2 采集目标约 ${config.fps} fps；MediaCodec 直录实际收到的动态帧率"
+                                "Camera2 采集目标约 ${config.fps.fpsLabel()} fps；MediaCodec 直录实际收到的动态帧率"
                             } else {
-                                "Camera2 / MediaRecorder 提交 ${config.fps} fps"
+                                "Camera2 / MediaRecorder 提交 ${config.fps.fpsLabel()} fps"
                             }) + when {
                                 fpsSupported -> ""
                                 config.experimentalUnadvertisedFps -> "（实验提交，等待实测）"
@@ -1700,6 +1710,13 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                             color = if (fpsSupported || config.experimentalUnadvertisedFps) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
                         )
+                        if (config.fps % 1.0 != 0.0) {
+                            Text(
+                                "精确帧周期约 ${config.targetFrameDurationNs} ns；请配合手动曝光使用 SENSOR_FRAME_DURATION，自动曝光时由 HAL 决定最终帧率。",
+                                color = MaterialTheme.colorScheme.secondary,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                         Text("视频码率 ${(config.videoBitrate / 1_000_000f).format1()} Mbps")
                         Slider(
                             value = config.videoBitrate / 1_000_000f,
@@ -2972,7 +2989,7 @@ private fun RecordingDashboard(state: RecorderState) {
             val s = state.stats
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Metric("时长", formatDuration(s.elapsedMs))
-                Metric("平均 FPS", if (s.averageFps > 0) s.averageFps.format1() else "—")
+                Metric("平均 FPS", if (s.averageFps > 0) s.averageFps.format2() else "—")
                 Metric("实时码率", formatBitrate(s.averageBitrateBitsPerSecond))
                 Metric("估算丢帧", s.droppedFrames.toString())
                 Metric("分段", s.segment.toString())
@@ -3018,7 +3035,7 @@ private fun CompactRecordingDashboard(
         ) {
             Text(status, color = if (state is RecorderState.Recording) Color(0xFFFF5252) else color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
             Text(formatDuration(stats?.elapsedMs ?: 0L), color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
-            Text("FPS ${stats?.averageFps?.takeIf { it > 0 }?.format1() ?: "—"}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            Text("FPS ${stats?.averageFps?.takeIf { it > 0 }?.format2() ?: "—"}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
             Text("丢帧 ${stats?.droppedFrames ?: 0}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
             if (stats?.rawFrameBufferCapacity ?: 0 > 0) {
                 Text("RAW缓存 ${stats?.rawFrameBufferUsed ?: 0}/${stats?.rawFrameBufferCapacity}", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
@@ -5196,6 +5213,40 @@ private fun suggestedResizeSize(sourceWidth: Int, sourceHeight: Int, preferredWi
 }
 
 @Composable
+private fun DeferredFloatField(
+    value: Double,
+    onCommit: (Double) -> Unit,
+    label: @Composable (() -> Unit),
+    enabled: Boolean,
+    minimum: Double,
+    maximum: Double,
+) {
+    var text by remember { mutableStateOf(value.fpsLabel()) }
+    var focused by remember { mutableStateOf(false) }
+    LaunchedEffect(value, focused) {
+        if (!focused) text = value.fpsLabel()
+    }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { updated ->
+            if (updated.count { it == '.' } <= 1 && updated.all { it.isDigit() || it == '.' }) text = updated
+        },
+        label = label,
+        singleLine = true,
+        enabled = enabled,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = Modifier.onFocusChanged { state ->
+            if (focused && !state.isFocused) {
+                val committed = (text.toDoubleOrNull() ?: value).coerceIn(minimum, maximum)
+                text = committed.fpsLabel()
+                onCommit(committed)
+            }
+            focused = state.isFocused
+        },
+    )
+}
+
+@Composable
 private fun DeferredIntField(
     value: Int,
     onCommit: (Int) -> Unit,
@@ -5237,7 +5288,10 @@ private data class MicrophoneChoice(val id: Int?, val label: String)
 private fun Float.format1(): String = String.format(Locale.US, "%.1f", this)
 private fun Float.format2(): String = String.format(Locale.US, "%.2f", this)
 private fun Float.format0(): String = String.format(Locale.US, "%.0f", this)
+private fun Float.fpsLabel(): String = String.format(Locale.US, "%.3f", this).trimEnd('0').trimEnd('.')
+private fun Double.fpsLabel(): String = String.format(Locale.US, "%.8f", this).trimEnd('0').trimEnd('.')
 private fun Double.format1(): String = String.format(Locale.US, "%.1f", this)
+private fun Double.format2(): String = String.format(Locale.US, "%.2f", this)
 
 private fun rawCfaLabel(cfa: Int?): String = when (cfa) {
     CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB -> "RGGB"

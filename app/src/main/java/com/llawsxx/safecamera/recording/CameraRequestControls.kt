@@ -14,6 +14,7 @@ import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.sqrt
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 
 object CameraRequestControls {
     fun apply(
@@ -88,13 +89,14 @@ object CameraRequestControls {
             builder.set(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, it)
         }
         val targetFps = config.fps
+        val targetFpsInt = targetFps.roundToInt().coerceAtLeast(1)
         val availableFps = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
         val declaredRange = availableFps
-            .filter { it.lower <= targetFps && it.upper >= targetFps }
-            .minByOrNull { (it.upper - it.lower) + (it.upper - targetFps) }
+            .filter { it.lower <= targetFpsInt && it.upper >= targetFpsInt }
+            .minByOrNull { (it.upper - it.lower) + (it.upper - targetFpsInt) }
         val fpsRange = declaredRange
-            ?: Range(targetFps, targetFps).takeIf { config.experimentalUnadvertisedFps && !config.highSpeedMode }
-            ?: availableFps.minByOrNull { kotlin.math.abs(it.upper - targetFps) }
+            ?: Range(targetFpsInt, targetFpsInt).takeIf { config.experimentalUnadvertisedFps && !config.highSpeedMode }
+            ?: availableFps.minByOrNull { kotlin.math.abs(it.upper - targetFpsInt) }
         fpsRange?.let { builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
         val antibandingModes = characteristics.get(
             CameraCharacteristics.CONTROL_AE_AVAILABLE_ANTIBANDING_MODES,
@@ -117,7 +119,13 @@ object CameraRequestControls {
                 val maximum = minOf(it.upper, config.maximumExposureNs).coerceAtLeast(it.lower)
                 config.exposureNs.coerceIn(it.lower, maximum)
             }
-            requestedExposure?.let { builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, it) }
+            requestedExposure?.let {
+                builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, it)
+                builder.set(
+                    CaptureRequest.SENSOR_FRAME_DURATION,
+                    maxOf(config.targetFrameDurationNs, it),
+                )
+            } ?: builder.set(CaptureRequest.SENSOR_FRAME_DURATION, config.targetFrameDurationNs)
             val apertures = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES) ?: floatArrayOf()
             config.aperture?.takeIf { aperture -> apertures.any { it == aperture } }
                 ?.let { builder.set(CaptureRequest.LENS_APERTURE, it) }

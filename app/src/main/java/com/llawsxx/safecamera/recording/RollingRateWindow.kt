@@ -80,5 +80,6 @@ internal class CounterRateWindow(
 }
 
 internal const val STATS_WINDOW_MS = 10_000L
-internal const val STATS_WINDOW_NS = STATS_WINDOW_MS * 1_000_000L
-internal const val STATS_WINDOW_US = STATS_WINDOW_MS * 1_000L
+internal const val FPS_STATS_WINDOW_MS = 60_000L
+internal const val FPS_STATS_WINDOW_NS = FPS_STATS_WINDOW_MS * 1_000_000L
+internal const val FPS_STATS_WINDOW_US = FPS_STATS_WINDOW_MS * 1_000L

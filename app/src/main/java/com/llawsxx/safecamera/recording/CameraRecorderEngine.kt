@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.log10
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 class CameraRecorderEngine(
     private val context: Context,
@@ -51,7 +52,7 @@ class CameraRecorderEngine(
     @Volatile private var tsSink: StreamingTsSink? = null
     private var startedAtMs = 0L
     private var lastFrameNs = 0L
-    private val fpsWindow = EventRateWindow(STATS_WINDOW_NS, 1_000_000_000L)
+    private val fpsWindow = EventRateWindow(FPS_STATS_WINDOW_NS, 1_000_000_000L)
     private val bitrateWindow = CounterRateWindow(STATS_WINDOW_MS)
     private var completedOutputBytes = 0L
     private var droppedFrames = 0L
@@ -259,7 +260,9 @@ class CameraRecorderEngine(
                 characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
                     ?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_CONSTRAINED_HIGH_SPEED_VIDEO) == true &&
                     map?.highSpeedVideoSizes?.firstOrNull { it.width == config.width && it.height == config.height }
-                        ?.let { size -> map.getHighSpeedVideoFpsRangesFor(size).any { config.fps in it.lower..it.upper } } == true
+                        ?.let { size -> map.getHighSpeedVideoFpsRangesFor(size).any {
+                            config.fps in it.lower.toFloat()..it.upper.toFloat()
+                        } } == true
             } else {
                 map?.getOutputSizes(MediaRecorder::class.java)
                     ?.any { it.width == config.width && it.height == config.height } == true
@@ -416,7 +419,7 @@ class CameraRecorderEngine(
         if (config.hasVideo) {
             activeRecorder.setVideoEncoder(config.videoCodec.mediaRecorderValue)
             activeRecorder.setVideoSize(config.width, config.height)
-            activeRecorder.setVideoFrameRate(config.fps)
+            activeRecorder.setVideoFrameRate(config.fps.roundToInt().coerceAtLeast(1))
             activeRecorder.setVideoEncodingBitRate(config.videoBitrate)
             activeRecorder.setOrientationHint(recordingOrientationHint(context, config.cameraId, config.orientation))
         }

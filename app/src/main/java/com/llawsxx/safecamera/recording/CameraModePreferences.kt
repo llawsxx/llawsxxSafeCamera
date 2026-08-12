@@ -5,7 +5,7 @@ import android.content.Context
 data class CameraModePreference(
     val width: Int,
     val height: Int,
-    val fps: Int,
+    val fps: Double,
     val experimentalUnadvertisedFps: Boolean,
     val highSpeedMode: Boolean,
 )
@@ -21,7 +21,10 @@ object CameraModePreferences {
         return CameraModePreference(
             width = preferences.getInt(prefix + "width", 1920),
             height = preferences.getInt(prefix + "height", 1080),
-            fps = preferences.getInt(prefix + "fps", 30).coerceIn(1, 240),
+            fps = runCatching { preferences.getString(prefix + "fpsExact", null)?.toDoubleOrNull() }
+                .getOrNull()
+                ?: runCatching { preferences.getFloat(prefix + "fps", 30f).toDouble() }
+                    .getOrElse { preferences.getInt(prefix + "fps", 30).toDouble() },
             experimentalUnadvertisedFps = preferences.getBoolean(prefix + "experimentalUnadvertisedFps", false),
             highSpeedMode = preferences.getBoolean(prefix + "highSpeedMode", false),
         )
@@ -33,7 +36,7 @@ object CameraModePreferences {
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE).edit()
             .putInt(prefix + "width", config.width)
             .putInt(prefix + "height", config.height)
-            .putInt(prefix + "fps", config.fps)
+            .putString(prefix + "fpsExact", config.fps.coerceIn(1.0, 240.0).toString())
             .putBoolean(prefix + "experimentalUnadvertisedFps", config.experimentalUnadvertisedFps)
             .putBoolean(prefix + "highSpeedMode", config.highSpeedMode)
             .apply()

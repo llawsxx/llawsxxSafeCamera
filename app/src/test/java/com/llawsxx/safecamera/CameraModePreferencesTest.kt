@@ -12,18 +12,18 @@ class CameraModePreferencesTest {
             cameraId = "0",
             width = 3840,
             height = 2160,
-            fps = 24,
+            fps = 24.0,
             experimentalUnadvertisedFps = true,
         )
-        val second = first.copy(cameraId = "1", width = 1920, height = 1080, fps = 60)
+        val second = first.copy(cameraId = "1", width = 1920, height = 1080, fps = 60.0)
 
         assertEquals("0", first.cameraId)
         assertEquals(3840, first.width)
-        assertEquals(24, first.fps)
+        assertEquals(24.0, first.fps, 0.0)
         assertTrue(first.experimentalUnadvertisedFps)
         assertEquals("1", second.cameraId)
         assertEquals(1920, second.width)
-        assertEquals(60, second.fps)
+        assertEquals(60.0, second.fps, 0.0)
         assertTrue(second.experimentalUnadvertisedFps)
     }
 }

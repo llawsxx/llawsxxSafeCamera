@@ -85,7 +85,7 @@ class MediaCodecRecorderEngine(
     private var droppedFrames = 0L
     @Volatile private var audioLevelDb = -60f
     private val encodedBytes = AtomicLong(0L)
-    private val fpsWindow = EventRateWindow(STATS_WINDOW_US, 1_000_000L)
+    private val fpsWindow = EventRateWindow(FPS_STATS_WINDOW_US, 1_000_000L)
     private val bitrateWindow = CounterRateWindow(STATS_WINDOW_MS)
     private val running = AtomicBoolean(false)
     private val stopStarted = AtomicBoolean(false)
@@ -220,7 +220,7 @@ class MediaCodecRecorderEngine(
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, config.videoBitrate)
             config.videoBitrateMode.mediaFormatValue?.let { setInteger(MediaFormat.KEY_BITRATE_MODE, it) }
-            setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
+            setInteger(MediaFormat.KEY_FRAME_RATE, config.fps.roundToInt().coerceAtLeast(1))
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, config.videoKeyFrameIntervalSeconds)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 setInteger(MediaFormat.KEY_MAX_B_FRAMES, config.videoMaxBFrames)
@@ -1135,7 +1135,8 @@ class MediaCodecRecorderEngine(
             .orEmpty()
             .filter { it.lower <= config.fps && it.upper >= config.fps }
             .maxByOrNull { it.upper - it.lower }
-        return declared ?: android.util.Range(config.fps, config.fps)
+        val roundedFps = config.fps.roundToInt().coerceAtLeast(1)
+        return declared ?: android.util.Range(roundedFps, roundedFps)
             .takeIf { config.rawProcessingEnabled || config.experimentalUnadvertisedFps }
     }
 

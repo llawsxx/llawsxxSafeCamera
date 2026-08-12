@@ -28,7 +28,9 @@ object ConfigPreferences {
                 p.getString("scalingAlgorithm", null),
                 VideoScalingAlgorithm.BILINEAR,
             ),
-            fps = p.getInt("fps", 30).coerceAtLeast(1),
+            fps = (p.getString("fpsExact", null)?.toDoubleOrNull()
+                ?: runCatching { p.getFloat("fps", 30f).toDouble() }
+                    .getOrElse { p.getInt("fps", 30).toDouble() }).coerceIn(1.0, 240.0),
             experimentalCameraAccess = p.getBoolean("experimentalCameraAccess", false),
             experimentalUnadvertisedFps = p.getBoolean("experimentalUnadvertisedFps", false),
             mediaCodecMode = p.getBoolean("mediaCodecMode", false),
@@ -212,7 +214,7 @@ object ConfigPreferences {
             .putInt("recordWidth", c.recordWidth)
             .putInt("recordHeight", c.recordHeight)
             .putString("scalingAlgorithm", c.scalingAlgorithm.name)
-            .putInt("fps", c.fps)
+            .putString("fpsExact", c.fps.coerceIn(1.0, 240.0).toString())
             .putBoolean("experimentalCameraAccess", c.experimentalCameraAccess)
             .putBoolean("experimentalUnadvertisedFps", c.experimentalUnadvertisedFps)
             .putBoolean("mediaCodecMode", c.mediaCodecMode)

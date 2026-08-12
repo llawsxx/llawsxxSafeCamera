@@ -209,7 +209,7 @@ data class RecordingConfig(
     val recordWidth: Int = 1920,
     val recordHeight: Int = 1080,
     val scalingAlgorithm: VideoScalingAlgorithm = VideoScalingAlgorithm.BILINEAR,
-    val fps: Int = 30,
+    val fps: Double = 30.0,
     val experimentalCameraAccess: Boolean = false,
     val experimentalUnadvertisedFps: Boolean = false,
     val mediaCodecMode: Boolean = false,
@@ -394,8 +394,10 @@ data class RecordingConfig(
     )
     val maximumExposureNs: Long get() = minOf(
         1_000_000_000L,
-        2_000_000_000L / fps.coerceAtLeast(1),
+        (2_000_000_000.0 / fps.coerceAtLeast(1.0)).toLong().coerceAtMost(1_000_000_000L),
     )
+    val targetFrameDurationNs: Long get() =
+        kotlin.math.round(1_000_000_000.0 / fps.coerceAtLeast(1.0)).toLong().coerceAtLeast(1L)
 }
 
 data class HighSpeedVideoMode(

@@ -52,7 +52,7 @@ class RecordingConfigTest {
     }
     @Test
     fun mediaCodecEngineCanBeRequestedExplicitly() {
-        assertTrue(RecordingConfig(fps = 30, mediaCodecMode = true).mediaCodecEngineRequested)
+        assertTrue(RecordingConfig(fps = 30.0, mediaCodecMode = true).mediaCodecEngineRequested)
     }
 
     @Test
@@ -340,13 +340,19 @@ class RecordingConfigTest {
 
     @Test
     fun exposureCannotExceedTwoFrameIntervals() {
-        assertEquals(66_666_666L, RecordingConfig(fps = 30).maximumExposureNs)
-        assertEquals(33_333_333L, RecordingConfig(fps = 60).maximumExposureNs)
+        assertEquals(66_666_666L, RecordingConfig(fps = 30.0).maximumExposureNs)
+        assertEquals(33_333_333L, RecordingConfig(fps = 60.0).maximumExposureNs)
     }
 
     @Test
     fun exposureHasOneSecondCapAtVeryLowFrameRates() {
-        assertEquals(1_000_000_000L, RecordingConfig(fps = 1).maximumExposureNs)
+        assertEquals(1_000_000_000L, RecordingConfig(fps = 1.0).maximumExposureNs)
+    }
+
+    @Test
+    fun fractionalFpsUsesRoundedSensorFrameDuration() {
+        val config = RecordingConfig(fps = 60_000.0 / 1_001.0)
+        assertEquals(16_683_333L, config.targetFrameDurationNs)
     }
 
     @Test
