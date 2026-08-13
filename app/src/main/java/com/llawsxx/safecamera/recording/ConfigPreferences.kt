@@ -37,6 +37,8 @@ object ConfigPreferences {
             sensorFrameDurationTuneStepNs = p.getLong("sensorFrameDurationTuneStepNs", 3_000L)
                 .coerceIn(1_000L, 30_000L),
             targetPtsCorrectionEnabled = p.getBoolean("targetPtsCorrectionEnabled", false),
+            targetPtsCorrectionMaxFrameDelta = p.getFloat("targetPtsCorrectionMaxFrameDelta", 0.8f)
+                .coerceIn(0.6f, 5f),
             mediaCodecMode = p.getBoolean("mediaCodecMode", false),
             rawProcessingEnabled = p.getBoolean("rawProcessingEnabled", false),
             rawWidth = p.getInt("rawWidth", 0).coerceAtLeast(0),
@@ -235,6 +237,7 @@ object ConfigPreferences {
             .putBoolean("sensorFrameDurationAutoTune", c.sensorFrameDurationAutoTune)
             .putLong("sensorFrameDurationTuneStepNs", c.sensorFrameDurationTuneStepNs.coerceIn(1_000L, 30_000L))
             .putBoolean("targetPtsCorrectionEnabled", c.targetPtsCorrectionEnabled)
+            .putFloat("targetPtsCorrectionMaxFrameDelta", c.targetPtsCorrectionMaxFrameDelta.coerceIn(0.6f, 5f))
             .putBoolean("mediaCodecMode", c.mediaCodecMode)
             .putBoolean("rawProcessingEnabled", c.rawProcessingEnabled)
             .putInt("rawWidth", c.rawWidth)

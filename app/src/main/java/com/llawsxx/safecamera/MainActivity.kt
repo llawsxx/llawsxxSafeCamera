@@ -671,6 +671,7 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
         config.fps,
         config.sensorFrameDurationAutoTune,
         config.sensorFrameDurationTuneStepNs,
+        config.targetPtsCorrectionMaxFrameDelta,
         config.manualExposure,
         config.customExposureEnabled,
         config.customExposureMetering,
@@ -1160,9 +1161,25 @@ private fun RecorderApp(onOrientation: (OrientationMode) -> Unit) {
                                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.O,
                         ) { enabled -> config = config.copy(targetPtsCorrectionEnabled = enabled) }
                         Text(
-                            "将传感器时间戳映射到最近的目标帧率时间点；重复映射到已使用 PTS 的帧会在编码前丢弃。开启后强制使用 MediaCodec 和 GPU 中转，普通 HDR/10-bit 路径不可用。",
+                            "每帧优先写入下一个目标 PTS；只有 PTS 步进领先传感器超过允许偏差时才丢弃输入帧，传感器领先超过允许偏差时重新定位。开启后强制使用 MediaCodec 和 GPU 中转，普通 HDR/10-bit 路径不可用。",
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            "PTS 最大允许偏差 ${config.targetPtsCorrectionMaxFrameDelta.format1()} 帧",
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                        Slider(
+                            value = config.targetPtsCorrectionMaxFrameDelta,
+                            onValueChange = {
+                                config = config.copy(
+                                    targetPtsCorrectionMaxFrameDelta = (it * 10f).roundToInt()
+                                        .coerceIn(6, 50) / 10f,
+                                )
+                            },
+                            valueRange = 0.6f..5f,
+                            steps = 43,
+                            enabled = !recording && config.targetPtsCorrectionEnabled,
                         )
                         ToggleLine(
                             "自定义自动曝光",
@@ -3095,7 +3112,7 @@ private fun RecordingDashboard(state: RecorderState) {
                 Metric("平均 FPS", if (s.averageFps > 0) s.averageFps.format2() else "—")
                 Metric("SENSOR FPS", if (s.sensorFps > 0) s.sensorFps.format2() else "—")
                 Metric("实时码率", formatBitrate(s.averageBitrateBitsPerSecond))
-                Metric("丢帧", "${s.droppedFrames} / ${s.duplicatePtsDroppedFrames}")
+                Metric("丢帧", "${s.droppedFrames} / ${s.ptsCorrectionDroppedFrames}")
                 Metric("分段", s.segment.toString())
             }
             s.outputPath?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
@@ -3143,7 +3160,7 @@ private fun CompactRecordingDashboard(
             Text("FPS ${stats?.averageFps?.takeIf { it > 0 }?.format2() ?: "—"} / ${stats?.sensorFps?.takeIf { it > 0 }?.format2() ?: "—"
             }", color = color, style = MaterialTheme.typography.labelMedium, maxLines = 1)
             Text(
-                "丢帧 ${stats?.droppedFrames ?: 0} / ${stats?.duplicatePtsDroppedFrames ?: 0}",
+                "丢帧 ${stats?.droppedFrames ?: 0} / ${stats?.ptsCorrectionDroppedFrames ?: 0}",
                 color = color,
                 style = MaterialTheme.typography.labelMedium,
                 maxLines = 1,

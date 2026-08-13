@@ -354,6 +354,7 @@ class CameraRecorderEngine(
             distortionCorrectionMode = updated.distortionCorrectionMode,
             sensorFrameDurationAutoTune = updated.sensorFrameDurationAutoTune,
             sensorFrameDurationTuneStepNs = updated.sensorFrameDurationTuneStepNs,
+            targetPtsCorrectionMaxFrameDelta = updated.targetPtsCorrectionMaxFrameDelta,
         )
         if (!config.sensorFrameDurationAutoTune) tunedSensorFrameDurationNs = config.targetFrameDurationNs
         customExposureController?.updateConfig(config)

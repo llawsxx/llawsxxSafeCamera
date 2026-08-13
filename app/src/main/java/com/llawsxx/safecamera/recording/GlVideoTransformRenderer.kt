@@ -27,7 +27,7 @@ internal class GlVideoTransformRenderer(
     private val scalingAlgorithm: VideoScalingAlgorithm,
     initialPixelRotationDegrees: Int,
     private val targetPtsAligner: TargetFramePtsAligner? = null,
-    private val onDuplicatePtsDropped: () -> Unit = {},
+    private val onPtsCorrectionDropped: () -> Unit = {},
     private val onFirstFrame: () -> Unit,
 ) {
     private val renderThread = HandlerThread("video-transform-render").apply { start() }
@@ -129,11 +129,10 @@ internal class GlVideoTransformRenderer(
         val presentationTimestampNs = when (val result = targetPtsAligner?.align(surfaceTexture.timestamp)) {
             null -> surfaceTexture.timestamp
             is TargetFramePtsResult.Accepted -> result.timestampNs
-            TargetFramePtsResult.Duplicate -> {
-                onDuplicatePtsDropped()
+            TargetFramePtsResult.Dropped -> {
+                onPtsCorrectionDropped()
                 return
             }
-            TargetFramePtsResult.OutsideWindow -> return
         }
         if (!firstFrameDelivered) {
             firstFrameDelivered = true

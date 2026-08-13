@@ -53,7 +53,7 @@ internal class GpuRawVideoRenderer(
     outputColorStandard: VideoColorStandard,
     outputColorTransfer: VideoColorTransfer,
     private val targetPtsAligner: TargetFramePtsAligner? = null,
-    private val onDuplicatePtsDropped: () -> Unit = {},
+    private val onPtsCorrectionDropped: () -> Unit = {},
     private val onError: (String) -> Unit,
 ) {
     private val thread = HandlerThread("gpu-raw-video-render").apply { start() }
@@ -505,11 +505,10 @@ internal class GpuRawVideoRenderer(
         val encoderTimestampNs = when (val result = targetPtsAligner?.align(timestampNs)) {
             null -> timestampNs
             is TargetFramePtsResult.Accepted -> result.timestampNs
-            TargetFramePtsResult.Duplicate -> {
-                onDuplicatePtsDropped()
+            TargetFramePtsResult.Dropped -> {
+                onPtsCorrectionDropped()
                 null
             }
-            TargetFramePtsResult.OutsideWindow -> null
         }
         val plane = image.planes.singleOrNull() ?: error("RAW_SENSOR must have exactly one plane")
         require(plane.pixelStride == 2) { "GPU RAW processing requires 16-bit unpacked RAW_SENSOR" }
